@@ -9,6 +9,7 @@ from getMetadata import get_filtered_data, parse_uri, SpotifyInvalidUrlException
 from tidalDL import TidalDownloader
 from deezerDL import DeezerDownloader
 from qobuzDL import QobuzDownloader
+from amazonDL import AmazonDownloader
 
 @dataclass
 class Config:
@@ -342,6 +343,8 @@ class DownloadWorker:
                         downloader = DeezerDownloader()
                     elif svc == "qobuz":
                         downloader = QobuzDownloader()
+                    elif svc == "amazon":
+                        downloader = AmazonDownloader()
                     else:
                         downloader = TidalDownloader()
 
@@ -406,6 +409,26 @@ class DownloadWorker:
                                 output_dir=track_outpath,
                                 quality="LOSSLESS",
                                 filename_format=qb_format,
+                                include_track_number=self.use_track_numbers,
+                                position=track.track_number or i + 1,
+                                spotify_track_name=track.title,
+                                spotify_artist_name=track.artists,
+                                spotify_album_name=track.album,
+                                use_album_track_number=self.use_track_numbers,
+                            )
+
+                        elif svc == "amazon":
+                            update_progress(f"Downloading from Amazon Music for track ID: {track.id}")
+                            format_map = {
+                                "title_artist": "title-artist",
+                                "artist_title": "artist-title",
+                                "title_only": "title",
+                            }
+                            amz_format = format_map.get(self.filename_format, self.filename_format.replace("_", "-"))
+                            downloaded_file = downloader.download_by_spotify_id(
+                                spotify_track_id=track.id,
+                                output_dir=track_outpath,
+                                filename_format=amz_format,
                                 include_track_number=self.use_track_numbers,
                                 position=track.track_number or i + 1,
                                 spotify_track_name=track.title,
@@ -479,10 +502,10 @@ def parse_args():
     parser.add_argument("output_dir", help="Output directory")
     parser.add_argument(
         "--service",
-        choices=["tidal", "deezer", "qobuz"],
+        choices=["tidal", "deezer", "qobuz", "amazon"],
         nargs="+",
         default=["tidal"],
-        help="One or more services to try in order (e.g. --service tidal deezer qobuz)",
+        help="One or more services to try in order (e.g. --service tidal deezer qobuz amazon)",
     )
     parser.add_argument("--filename-format", choices=["title_artist","artist_title","title_only"], default="title_artist")
     parser.add_argument("--use-track-numbers", action="store_true")
