@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from getMetadata import get_filtered_data, parse_uri, SpotifyInvalidUrlException
 from tidalDL import TidalDownloader
 from deezerDL import DeezerDownloader
+from qobuzDL import QobuzDownloader
 
 @dataclass
 class Config:
@@ -339,6 +340,8 @@ class DownloadWorker:
                         downloader = TidalDownloader()
                     elif svc == "deezer":
                         downloader = DeezerDownloader()
+                    elif svc == "qobuz":
+                        downloader = QobuzDownloader()
                     else:
                         downloader = TidalDownloader()
 
@@ -389,6 +392,27 @@ class DownloadWorker:
                                 raise Exception("No FLAC file found after Deezer download")
 
                             downloaded_file = max(flac_files, key=os.path.getctime)
+
+                        elif svc == "qobuz":
+                            update_progress(f"Downloading from Qobuz with ISRC: {track.isrc}")
+                            format_map = {
+                                "title_artist": "title-artist",
+                                "artist_title": "artist-title",
+                                "title_only": "title",
+                            }
+                            qb_format = format_map.get(self.filename_format, self.filename_format.replace("_", "-"))
+                            downloaded_file = downloader.download_by_isrc(
+                                isrc=track.isrc,
+                                output_dir=track_outpath,
+                                quality="LOSSLESS",
+                                filename_format=qb_format,
+                                include_track_number=self.use_track_numbers,
+                                position=track.track_number or i + 1,
+                                spotify_track_name=track.title,
+                                spotify_artist_name=track.artists,
+                                spotify_album_name=track.album,
+                                use_album_track_number=self.use_track_numbers,
+                            )
 
                         else:
                             track_id = track.id
@@ -453,7 +477,13 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("url", help="Spotify URL")
     parser.add_argument("output_dir", help="Output directory")
-    parser.add_argument("--service", choices=["tidal", "deezer"], nargs="+", default=["tidal"], help="One or more services to try in order (e.g. --service tidal deezer)")
+    parser.add_argument(
+        "--service",
+        choices=["tidal", "deezer", "qobuz"],
+        nargs="+",
+        default=["tidal"],
+        help="One or more services to try in order (e.g. --service tidal deezer qobuz)",
+    )
     parser.add_argument("--filename-format", choices=["title_artist","artist_title","title_only"], default="title_artist")
     parser.add_argument("--use-track-numbers", action="store_true")
     parser.add_argument("--use-artist-subfolders", action="store_true")
