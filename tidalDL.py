@@ -1,14 +1,111 @@
+import base64
+import concurrent.futures
+import json
 import os
 import re
+import subprocess
 import time
-import base64
+import xml.etree.ElementTree as ET
+from typing import Callable, Dict, List, Optional, Tuple
+from urllib.parse import quote, urlparse
+
 import requests
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import PictureType
 
 
+def _contains_japanese(text: str) -> bool:
+    if not text:
+        return False
+    return bool(re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]", text))
+
+
+def _japanese_to_romaji(text: str) -> str:
+    # Minimal placeholder: keep text as-is; real romaji conversion would need
+    # an external library which we avoid adding here.
+    return text or ""
+
+
+def _clean_to_ascii(text: str) -> str:
+    return (text or "").encode("ascii", "ignore").decode().strip()
+
+
+def _set_download_speed(_mbps: float) -> None:
+    # Hook for UI progress; no-op in CLI mode
+    return None
+
+
+def _set_download_progress(_mb_downloaded: float) -> None:
+    # Hook for UI progress; no-op in CLI mode
+    return None
+
+
+def _sanitize_filename(value: str, fallback: str = "Unknown") -> str:
+    if not value:
+        return fallback
+    cleaned = re.sub(r'[\\/*?:"<>|]', "", value)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned or fallback
+
+
+def _build_tidal_filename(
+    title: str,
+    artist: str,
+    track_number: int,
+    format_string: str,
+    include_track_number: bool,
+    position: int,
+    use_album_track_number: bool,
+) -> str:
+    number_to_use = position
+    if use_album_track_number and track_number:
+        number_to_use = track_number
+
+    if "{" in format_string:
+        filename = (
+            format_string.replace("{title}", title)
+            .replace("{artist}", artist)
+        )
+
+        if number_to_use:
+            filename = filename.replace("{track}", f"{number_to_use:02d}")
+        else:
+            filename = re.sub(r"\{track\}\.\s*", "", filename)
+            filename = re.sub(r"\{track\}\s*-\s*", "", filename)
+            filename = filename.replace("{track}", "")
+    else:
+        if format_string == "artist-title":
+            filename = f"{artist} - {title}"
+        elif format_string == "title":
+            filename = title
+        else:
+            filename = f"{title} - {artist}"
+
+        if include_track_number and number_to_use:
+            filename = f"{number_to_use:02d}. {filename}"
+
+    return f"{filename}.flac"
+
+
+def _check_isrc_exists(directory: str, isrc: str) -> Tuple[Optional[str], bool]:
+    if not isrc or not os.path.isdir(directory):
+        return None, False
+
+    for entry in os.listdir(directory):
+        if not entry.lower().endswith(".flac"):
+            continue
+        path = os.path.join(directory, entry)
+        try:
+            audio = FLAC(path)
+            if "ISRC" in audio and audio["ISRC"] and audio["ISRC"][0] == isrc:
+                return path, True
+        except Exception:
+            continue
+    return None, False
+
+
 class ProgressCallback:
-    def __call__(self, current, total):
+    def __call__(self, current: int, total: int) -> None:
         if total > 0:
             percent = (current / total) * 100
             print(f"\r{percent:.2f}% ({current}/{total})", end="")
@@ -17,422 +114,508 @@ class ProgressCallback:
 
 
 class TidalDownloader:
-    def __init__(self, timeout=30, max_retries=3, api_url=None):
+    def __init__(self, api_url: Optional[str] = None, timeout: float = 5.0, max_retries: int = 3):
         self.timeout = timeout
         self.max_retries = max_retries
-        self.download_chunk_size = 256 * 1024
-        self.progress_callback = ProgressCallback()
+        self.progress_callback: Callable[[int, int], None] = ProgressCallback()
         self.client_id = base64.b64decode("NkJEU1JkcEs5aHFFQlRnVQ==").decode()
         self.client_secret = base64.b64decode("eGV1UG1ZN25icFo5SUliTEFjUTkzc2hrYTFWTmhlVUFxTjZJY3N6alRHOD0=").decode()
-        self.api_url = api_url or TidalDownloader.get_available_apis()
 
-    @staticmethod
-    def get_available_apis():
-        url = "https://raw.githubusercontent.com/afkarxyz/SpotiFLAC/refs/heads/main/tidal.json"
+        apis = self.get_available_apis()
+        if api_url:
+            self.api_url = api_url
+        elif apis:
+            self.api_url = apis[0]
+        else:
+            self.api_url = ""
+        self.api_list = apis
 
-        try:
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-
-            raw_list = response.json()  # ["sddas.qqfddl.aa", "ma2aus.qqdl.dd"]
-
-            # Convert array of strings into structured "API instances"
-            api_instances = []
-            for item in raw_list:
-                api_instances.append({
-                    "url": f"https://{item}"
-                })
-
-            # Sort like in the original function
-            api_instances.sort(key=lambda x: x.get("avg_response_time", 9999))
-
-            return api_instances
-
-        except Exception as e:
-            print(f"Error: {e}")
-            return []
-   
-    def set_progress_callback(self, callback):
+    def set_progress_callback(self, callback: Callable[[int, int], None]) -> None:
         self.progress_callback = callback
 
-    def sanitize_filename(self, filename):
-        if not filename:
-            return "Unknown Track"
-        sanitized = re.sub(r'[\\/*?:"<>|]', "", str(filename))
-        return re.sub(r'\s+', ' ', sanitized).strip() or "Unnamed Track"
-
-    def get_access_token(self):
-        refresh_url = "https://auth.tidal.com/v1/oauth2/token"
-
-        payload = {
-            "client_id": self.client_id,
-            "grant_type": "client_credentials",
-        }
-
+    @staticmethod
+    def get_available_apis() -> List[str]:
         try:
-            response = requests.post(
-                url=refresh_url,
-                data=payload,
-                auth=(self.client_id, self.client_secret),
-                timeout=self.timeout
-            )
+            
+            url = "https://raw.githubusercontent.com/afkarxyz/SpotiFLAC/refs/heads/main/tidal.json"
 
-            if response.status_code == 200:
-                token_data = response.json()
-                return token_data.get("access_token")
-            else:
-                return None
-
-        except:
-            return None
-
-    def search_tracks(self, query):
-        try:
-            tidal_token = self.get_access_token()
-            if not tidal_token:
-                raise Exception("Failed to get access token")
-
-            search_url = f"https://api.tidal.com/v1/search/tracks?query={query}&limit=25&offset=0&countryCode=US"
-            header = {"authorization": f"Bearer {tidal_token}"}
-
-            search_data = requests.get(url=search_url, headers=header, timeout=self.timeout)
-            response_data = search_data.json()
-
-            filtered_items = [{
-                "id": item.get("id"),
-                "title": item.get("title"),
-                "url": item.get("url"),
-                "isrc": item.get("isrc"),
-                "audioQuality": item.get("audioQuality"),
-                "mediaMetadata": item.get("mediaMetadata"),
-                "album": item.get("album", {}),
-                "artists": item.get("artists", []),
-                "artist": item.get("artist", {}),
-                "trackNumber": item.get("trackNumber"),
-                "volumeNumber": item.get("volumeNumber"),
-                "duration": item.get("duration"),
-                "copyright": item.get("copyright"),
-                "explicit": item.get("explicit")
-            } for item in response_data.get("items", [])]
-
-            return {
-                "limit": response_data.get("limit"),
-                "offset": response_data.get("offset"),
-                "totalNumberOfItems": response_data.get("totalNumberOfItems"),
-                "items": filtered_items
+            headers = {
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
             }
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            api_list = response.json()
+            return [f"https://{api}" for api in api_list]
+        except Exception as exc:
+            print(f"Failed to fetch API list: {exc}")
+            return []
 
-        except Exception as e:
-            raise Exception(f"Search error: {str(e)}")
-
-    def get_track_info(self, query, isrc=None):
-        print(f"Fetching: {query}" + (f" (ISRC: {isrc})" if isrc else ""))
-
+    def get_access_token(self) -> Optional[str]:
+        data = f"client_id={self.client_id}&grant_type=client_credentials"
+        auth_url = base64.b64decode("aHR0cHM6Ly9hdXRoLnRpZGFsLmNvbS92MS9vYXV0aDIvdG9rZW4=").decode()
         try:
-            result = self.search_tracks(query)
-
-            if not result or not result.get("items"):
-                raise Exception(f"No tracks found for query: {query}")
-
-            selected_track = None
-            if isrc:
-                isrc_items = [item for item in result["items"] if item.get("isrc") == isrc]
-
-                if len(isrc_items) > 1:
-                    hires_items = []
-                    for item in isrc_items:
-                        media_metadata = item.get("mediaMetadata", {})
-                        tags = media_metadata.get("tags", []) if media_metadata else []
-                        if "HIRES_LOSSLESS" in tags:
-                            hires_items.append(item)
-
-                    if hires_items:
-                        selected_track = hires_items[0]
-                    else:
-                        selected_track = isrc_items[0]
-                elif len(isrc_items) == 1:
-                    selected_track = isrc_items[0]
-                else:
-                    selected_track = result["items"][0]
-            else:
-                selected_track = result["items"][0]
-
-            if not selected_track:
-                raise Exception(f"Track not found: {query}" + (f" (ISRC: {isrc})" if isrc else ""))
-
-            title = selected_track.get('title', 'Unknown')
-            quality = selected_track.get('audioQuality', 'Unknown')
-            print(f"Found: {title} ({quality})")
-            return selected_track
-
-        except Exception as e:
-            raise Exception(f"Error getting track info: {str(e)}")
-
-    def get_download_url(self, track_id, quality="LOSSLESS"):
-        print("Fetching URL...")
-
-        for api_instance in self.api_url:
-            download_api_url = f"{api_instance['url']}/track/?id={track_id}&quality={quality}"
-
-            try:
-                response = requests.get(download_api_url, timeout=self.timeout)
-
-                if response.status_code == 200:
-                    data = response.json()
-
-                    for item in data:
-                        if "OriginalTrackUrl" in item:
-                            print("URL found")
-                            return {
-                                "download_url": item["OriginalTrackUrl"],
-                                "track_info": data[0] if data else {}
-                            }
-
-                    raise Exception("Download URL not found in response")
-                else:
-                    raise Exception(f"API returned status code: {response.status_code}")
-
-            except Exception as e:
-                raise Exception(f"Error getting download URL: {str(e)}")
-
-    def download_album_art(self, album_id, size="1280x1280"):
-        try:
-            art_url = f"https://resources.tidal.com/images/{album_id.replace('-', '/')}/{size}.jpg"
-
-            response = requests.get(art_url, timeout=self.timeout)
-
-            if response.status_code == 200:
-                return response.content
-            else:
-                print(f"Failed to download album art: HTTP {response.status_code}")
+            resp = requests.post(
+                auth_url,
+                data=data,
+                auth=(self.client_id, self.client_secret),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=self.timeout,
+            )
+            if resp.status_code != 200:
                 return None
-
-        except Exception as e:
-            print(f"Error downloading album art: {str(e)}")
+            return resp.json().get("access_token")
+        except Exception:
             return None
 
-    def download_file(self, url, filepath, is_paused_callback=None, is_stopped_callback=None):
-        file_dir = os.path.dirname(filepath)
-        if file_dir and not os.path.exists(file_dir):
-            os.makedirs(file_dir, exist_ok=True)
+    def search_tracks_with_limit(self, query: str, limit: int = 50) -> Dict:
+        token = self.get_access_token()
+        if not token:
+            raise Exception("Failed to get access token")
 
-        temp_filepath = filepath + ".part"
-        retry_count = 0
+        search_base = base64.b64decode(
+            "aHR0cHM6Ly9hcGkudGlkYWwuY29tL3YxL3NlYXJjaC90cmFja3M/cXVlcnk9"
+        ).decode()
+        search_url = f"{search_base}{quote(query)}&limit={limit}&offset=0&countryCode=US"
+        resp = requests.get(search_url, headers={"Authorization": f"Bearer {token}"}, timeout=self.timeout)
+        if resp.status_code != 200:
+            raise Exception(f"search failed: HTTP {resp.status_code} - {resp.text}")
+        return resp.json()
 
-        while retry_count <= self.max_retries:
+    def search_tracks(self, query: str) -> Dict:
+        return self.search_tracks_with_limit(query, 50)
+
+    def _collect_search_queries(self, track_name: str, artist_name: str) -> List[str]:
+        queries: List[str] = []
+        if artist_name and track_name:
+            queries.append(f"{artist_name} {track_name}")
+        if track_name:
+            queries.append(track_name)
+
+        if _contains_japanese(track_name) or _contains_japanese(artist_name):
+            romaji_track = _japanese_to_romaji(track_name)
+            romaji_artist = _japanese_to_romaji(artist_name)
+            clean_track = _clean_to_ascii(romaji_track)
+            clean_artist = _clean_to_ascii(romaji_artist)
+
+            if clean_artist and clean_track:
+                queries.append(f"{clean_artist} {clean_track}")
+            if clean_track and clean_track != track_name:
+                queries.append(clean_track)
+            if artist_name and clean_track:
+                queries.append(f"{artist_name} {clean_track}")
+
+        if artist_name:
+            artist_only = _clean_to_ascii(_japanese_to_romaji(artist_name))
+            if artist_only:
+                queries.append(artist_only)
+
+        uniq = []
+        seen = set()
+        for q in queries:
+            q = q.strip()
+            if q and q not in seen:
+                uniq.append(q)
+                seen.add(q)
+        return uniq
+
+    def search_track_by_metadata_with_isrc(
+        self, track_name: str, artist_name: str, spotify_isrc: str, expected_duration: int
+    ) -> Dict:
+        queries = self._collect_search_queries(track_name, artist_name)
+        all_tracks: List[Dict] = []
+        for query in queries:
+            print(f"Searching Tidal for: {query}")
             try:
-                response = requests.get(url, timeout=60.0)
-                if response.status_code != 200:
-                    raise Exception(f"HTTP {response.status_code}")
+                result = self.search_tracks_with_limit(query, 100)
+                items = result.get("items", [])
+                if items:
+                    print(f"Found {len(items)} results for '{query}'")
+                    all_tracks.extend(items)
+            except Exception as exc:
+                print(f"Search error for '{query}': {exc}")
 
-                if is_stopped_callback and is_stopped_callback():
-                    raise Exception("Download stopped")
+        if not all_tracks:
+            raise Exception("no tracks found for any search query")
 
-                while is_paused_callback and is_paused_callback():
-                    time.sleep(0.1)
-                    if is_stopped_callback and is_stopped_callback():
-                        raise Exception("Download stopped")
+        if spotify_isrc:
+            print(f"Looking for ISRC match: {spotify_isrc}")
+            for track in all_tracks:
+                if track.get("isrc") == spotify_isrc:
+                    print(
+                        f"✓ ISRC match found: {track.get('artist', {}).get('name','?')} - "
+                        f"{track.get('title','?')} (ISRC: {spotify_isrc})"
+                    )
+                    return track
+            raise Exception(f"ISRC mismatch: no track found with ISRC {spotify_isrc} on Tidal")
 
-                with open(temp_filepath, 'wb') as f:
-                    f.write(response.content)
+        best_match: Optional[Dict] = None
+        if expected_duration:
+            tolerance = 3
+            matches = []
+            for track in all_tracks:
+                duration = track.get("duration") or 0
+                if abs(duration - expected_duration) <= tolerance:
+                    matches.append(track)
+            if matches:
+                best_match = matches[0]
+                for track in matches:
+                    tags = (track.get("mediaMetadata") or {}).get("tags") or []
+                    if "HIRES_LOSSLESS" in tags:
+                        best_match = track
+                        break
+                return best_match
 
-                downloaded_size = len(response.content)
+        best_match = all_tracks[0]
+        for track in all_tracks:
+            tags = (track.get("mediaMetadata") or {}).get("tags") or []
+            if "HIRES_LOSSLESS" in tags:
+                best_match = track
+                break
+        return best_match
 
-                if self.progress_callback:
-                    self.progress_callback(downloaded_size, downloaded_size)
+    def get_tidal_url_from_spotify(self, spotify_track_id: str) -> str:
+        spotify_base = base64.b64decode("aHR0cHM6Ly9vcGVuLnNwb3RpZnkuY29tL3RyYWNrLw==").decode()
+        spotify_url = f"{spotify_base}{spotify_track_id}"
+        api_base = base64.b64decode("aHR0cHM6Ly9hcGkuc29uZy5saW5rL3YxLWFscGhhLjEvbGlua3M/dXJsPQ==").decode()
+        api_url = f"{api_base}{quote(spotify_url)}"
+        resp = requests.get(api_url, timeout=self.timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        tidal_link = data.get("linksByPlatform", {}).get("tidal", {}).get("url")
+        if not tidal_link:
+            raise Exception("tidal link not found")
+        print(f"Found Tidal URL: {tidal_link}")
+        return tidal_link
 
-                os.rename(temp_filepath, filepath)
-                print("Download complete")
-                return {"success": True, "size": downloaded_size}
-
-            except Exception as e:
-                retry_count += 1
-                if retry_count > self.max_retries:
-                    if os.path.exists(temp_filepath):
-                        try:
-                            os.remove(temp_filepath)
-                        except:
-                            pass
-                    raise Exception(f"Download error after {self.max_retries} retries: {str(e)}")
-
-                print(f"Download error (attempt {retry_count}/{self.max_retries}): {str(e)}")
-                print(f"Retrying in {retry_count * 2} seconds...")
-                time.sleep(retry_count * 2)
-
-    def embed_metadata(self, filepath, track_info, search_info=None):
+    @staticmethod
+    def get_track_id_from_url(tidal_url: str) -> int:
+        parts = tidal_url.split("/track/")
+        if len(parts) < 2:
+            raise Exception("invalid tidal URL format")
+        track_part = parts[1].split("?")[0].strip()
         try:
-            print("Embedding metadata...")
+            return int(track_part)
+        except ValueError as exc:
+            raise Exception(f"failed to parse track ID: {exc}") from exc
+
+    def get_track_info_by_id(self, track_id: int) -> Dict:
+        token = self.get_access_token()
+        if not token:
+            raise Exception("failed to get access token")
+        track_base = base64.b64decode("aHR0cHM6Ly9hcGkudGlkYWwuY29tL3YxL3RyYWNrcy8=").decode()
+        track_url = f"{track_base}{track_id}?countryCode=US"
+        resp = requests.get(track_url, headers={"Authorization": f"Bearer {token}"}, timeout=self.timeout)
+        if resp.status_code != 200:
+            raise Exception(f"failed to get track info: HTTP {resp.status_code} - {resp.text}")
+        info = resp.json()
+        print(f"Found: {info.get('title','?')} ({info.get('audioQuality','?')})")
+        return info
+
+    def _request_download_url(self, api_url: str, track_id: int, quality: str) -> Optional[str]:
+        url = f"{api_url}/track/?id={track_id}&quality={quality}"
+        resp = requests.get(url, timeout=self.timeout)
+        if resp.status_code != 200:
+            return None
+        body = resp.text
+        try:
+            v2 = resp.json()
+        except Exception:
+            return None
+
+        if isinstance(v2, dict) and v2.get("data", {}).get("manifest"):
+            return "MANIFEST:" + v2["data"]["manifest"]
+        if isinstance(v2, list):
+            for item in v2:
+                if item.get("OriginalTrackUrl"):
+                    return item["OriginalTrackUrl"]
+        return None
+
+    def get_download_url(self, track_id: int, quality: str = "LOSSLESS") -> str:
+        if not self.api_url:
+            raise Exception("No API URL configured")
+        print("Fetching URL...")
+        url = self._request_download_url(self.api_url, track_id, quality)
+        if not url:
+            raise Exception("download URL not found in response")
+        return url
+
+    def _get_download_url_parallel(self, apis: List[str], track_id: int, quality: str) -> Tuple[str, str]:
+        if not apis:
+            raise Exception("no APIs available")
+
+        def worker(api: str) -> Tuple[str, Optional[str], Optional[str]]:
+            try:
+                res = self._request_download_url(api, track_id, quality)
+                if res:
+                    return api, res, None
+                return api, None, "no download URL"
+            except Exception as exc:
+                return api, None, str(exc)
+
+        errors = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(apis))) as pool:
+            for api, result, err in pool.map(worker, apis):
+                if result:
+                    print(f"✓ Got response from: {api}")
+                    return api, result
+                errors.append(f"{api}: {err}")
+        raise Exception(f"all {len(apis)} APIs failed. Errors: {errors[:3]}")
+
+    @staticmethod
+    def download_album_art(album_id: str, size: str = "1280x1280") -> Optional[bytes]:
+        art_url = f"https://resources.tidal.com/images/{album_id.replace('-', '/')}/{size}.jpg"
+        resp = requests.get(art_url, timeout=15)
+        if resp.status_code != 200:
+            return None
+        return resp.content
+
+    def _stream_download(self, url: str, file_obj, show_progress: bool = True) -> None:
+        with requests.get(url, stream=True, timeout=120) as resp:
+            resp.raise_for_status()
+            total = int(resp.headers.get("Content-Length") or 0)
+            downloaded = 0
+            chunk_size = 256 * 1024
+            for chunk in resp.iter_content(chunk_size=chunk_size):
+                if not chunk:
+                    continue
+                file_obj.write(chunk)
+                downloaded += len(chunk)
+                if show_progress and self.progress_callback:
+                    self.progress_callback(downloaded, total)
+
+    def download_file(self, url: str, filepath: str) -> None:
+        if url.startswith("MANIFEST:"):
+            manifest = url.replace("MANIFEST:", "", 1)
+            self.download_from_manifest(manifest, filepath)
+            return
+
+        os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
+        temp_path = filepath + ".part"
+        try:
+            with open(temp_path, "wb") as f:
+                self._stream_download(url, f)
+            os.replace(temp_path, filepath)
+            print("\nDownload complete")
+        finally:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+
+    def download_from_manifest(self, manifest_b64: str, output_path: str) -> None:
+        direct_url, init_url, media_urls = parse_manifest(manifest_b64)
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+        if direct_url:
+            print("Downloading file...")
+            with open(output_path, "wb") as f:
+                self._stream_download(direct_url, f)
+            print("\nDownload complete")
+            return
+
+        temp_path = output_path + ".m4a.tmp"
+        with open(temp_path, "wb") as f:
+            print("Downloading init segment...")
+            self._stream_download(init_url, f, show_progress=False)
+
+            total_bytes = 0
+            last_time = time.time()
+            last_bytes = 0
+            total_segments = len(media_urls)
+            for idx, media_url in enumerate(media_urls, start=1):
+                self._stream_download(media_url, f, show_progress=False)
+                total_bytes = f.tell()
+                now = time.time()
+                if now - last_time > 0.1:
+                    speed = (total_bytes - last_bytes) / (1024 * 1024) / (now - last_time)
+                    _set_download_speed(speed)
+                    last_bytes = total_bytes
+                    last_time = now
+                _set_download_progress(total_bytes / (1024 * 1024))
+                print(f"\rDownloading: {total_bytes / (1024 * 1024):.2f} MB ({idx}/{total_segments})", end="")
+
+        print()
+        print("Converting to FLAC...")
+        cmd = ["ffmpeg", "-y", "-i", temp_path, "-vn", "-c:a", "flac", output_path]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise Exception(f"ffmpeg conversion failed: {result.stderr}")
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+        print("Download complete")
+
+    def embed_metadata(self, filepath: str, metadata: Dict, search_info: Optional[Dict] = None) -> bool:
+        try:
             audio = FLAC(filepath)
             audio.clear()
             audio.clear_pictures()
 
-            if track_info.get("title"):
-                audio["TITLE"] = track_info["title"]
+            if metadata.get("Title"):
+                audio["TITLE"] = metadata["Title"]
+            if metadata.get("Artist"):
+                audio["ARTIST"] = metadata["Artist"]
+                audio["ALBUMARTIST"] = metadata["Artist"]
+            if metadata.get("Album"):
+                audio["ALBUM"] = metadata["Album"]
+            if metadata.get("Date"):
+                audio["DATE"] = metadata["Date"]
+            if metadata.get("TrackNumber"):
+                audio["TRACKNUMBER"] = str(metadata["TrackNumber"])
+            if metadata.get("DiscNumber"):
+                audio["DISCNUMBER"] = str(metadata["DiscNumber"])
+            if metadata.get("ISRC"):
+                audio["ISRC"] = metadata["ISRC"]
 
-            artists_list = []
-            if search_info and search_info.get("artists"):
-                for artist in search_info["artists"]:
-                    if artist.get("name"):
-                        artists_list.append(artist["name"])
-            elif search_info and search_info.get("artist") and search_info["artist"].get("name"):
-                artists_list.append(search_info["artist"]["name"])
-            elif track_info.get("artists"):
-                for artist in track_info["artists"]:
-                    if artist.get("name"):
-                        artists_list.append(artist["name"])
-            elif track_info.get("artist") and track_info["artist"].get("name"):
-                artists_list.append(track_info["artist"]["name"])
-
-            if artists_list:
-                audio["ARTIST"] = artists_list[0]
-                if len(artists_list) > 1:
-                    audio["ALBUMARTIST"] = "; ".join(artists_list)
-                else:
-                    audio["ALBUMARTIST"] = artists_list[0]
-
-            album_info = search_info.get("album", {}) if search_info else track_info.get("album", {})
-            if album_info.get("title"):
-                audio["ALBUM"] = album_info["title"]
-
-            if search_info and search_info.get("trackNumber"):
-                audio["TRACKNUMBER"] = str(search_info["trackNumber"])
-            elif track_info.get("trackNumber"):
-                audio["TRACKNUMBER"] = str(track_info["trackNumber"])
-
-            if search_info and search_info.get("volumeNumber"):
-                audio["DISCNUMBER"] = str(search_info["volumeNumber"])
-            elif track_info.get("volumeNumber"):
-                audio["DISCNUMBER"] = str(track_info["volumeNumber"])
-
-            duration = search_info.get("duration") if search_info else track_info.get("duration")
-            if duration:
-                audio["LENGTH"] = str(duration)
-
-            isrc = search_info.get("isrc") if search_info else track_info.get("isrc")
-            if isrc:
-                audio["ISRC"] = isrc
-
-            copyright_info = search_info.get("copyright") if search_info else track_info.get("copyright")
-            if copyright_info:
-                audio["COPYRIGHT"] = copyright_info
-
-            if album_info.get("releaseDate"):
-                audio["DATE"] = album_info["releaseDate"][:4]
-                try:
-                    audio["YEAR"] = album_info["releaseDate"][:4]
-                except:
-                    pass
-
-            if track_info.get("genre"):
-                audio["GENRE"] = track_info["genre"]
-
-            if track_info.get("audioQuality"):
-                audio["COMMENT"] = f"Tidal {track_info['audioQuality']}"
-
-            if album_info.get("cover"):
-                album_art = self.download_album_art(album_info["cover"])
-                if album_art:
+            cover = metadata.get("CoverPath")
+            if cover and os.path.exists(cover):
+                with open(cover, "rb") as img:
                     picture = Picture()
-                    picture.data = album_art
+                    picture.data = img.read()
                     picture.type = PictureType.COVER_FRONT
                     picture.mime = "image/jpeg"
                     picture.desc = "Cover"
                     audio.add_picture(picture)
-                    print("Album art embedded")
 
             audio.save()
-            print(f"Metadata embedded successfully for: {track_info.get('title', 'Unknown')}")
             return True
-
-        except Exception as e:
-            print(f"Error embedding metadata: {str(e)}")
+        except Exception as exc:
+            print(f"Error embedding metadata: {exc}")
             return False
 
-    def download(self, query, isrc=None, output_dir=".", quality="LOSSLESS", is_paused_callback=None,
-                 is_stopped_callback=None, auto_fallback=False):
-        if output_dir != ".":
-            try:
-                os.makedirs(output_dir, exist_ok=True)
-            except OSError as e:
-                raise Exception(f"Directory error: {e}")
+    def download(
+        self,
+        query: str,
+        isrc: Optional[str] = None,
+        output_dir: str = ".",
+        quality: str = "LOSSLESS",
+        is_paused_callback=None,
+        is_stopped_callback=None,
+        auto_fallback: bool = False,
+        filename_format: str = "title-artist",
+        include_track_number: bool = False,
+        position: int = 0,
+        use_album_track_number: bool = False,
+    ):
+        os.makedirs(output_dir, exist_ok=True)
 
-        if auto_fallback:
-            apis = self.get_available_apis()
-            if not apis:
-                print("No APIs available for fallback, using current API")
-                return self._download_single(query, isrc, output_dir, quality, is_paused_callback, is_stopped_callback)
-
-            last_error = None
-            for i, api in enumerate(apis, 1):
-                api_url = api.get('url')
-                try:
-                    print(f"[Auto Fallback {i}/{len(apis)}] Trying: {api_url}")
-
-                    fallback_downloader = TidalDownloader(api_url=api_url)
-                    fallback_downloader.set_progress_callback(self.progress_callback)
-
-                    result = fallback_downloader._download_single(
-                        query, isrc, output_dir, quality,
-                        is_paused_callback, is_stopped_callback
-                    )
-
-                    print(f"✓ Success with: {api_url}")
-                    return result
-
-                except Exception as e:
-                    last_error = str(e)
-                    print(f"✗ Failed with {api_url}: {last_error[:80]}")
-                    continue
-
-            raise Exception(f"All {len(apis)} APIs failed. Last error: {last_error}")
-
-        return self._download_single(query, isrc, output_dir, quality, is_paused_callback, is_stopped_callback)
-
-    def _download_single(self, query, isrc, output_dir, quality, is_paused_callback, is_stopped_callback):
-        track_info = self.get_track_info(query, isrc)
-        track_id = track_info.get("id")
-
-        if not track_id:
-            raise Exception("No track ID found")
-
-        artists_list = []
-        if track_info.get("artists"):
-            for artist in track_info["artists"]:
-                if artist.get("name"):
-                    artists_list.append(artist["name"])
-        elif track_info.get("artist") and track_info["artist"].get("name"):
-            artists_list.append(track_info["artist"]["name"])
-
-        artist_name = ", ".join(artists_list) if artists_list else "Unknown Artist"
-        artist_name = self.sanitize_filename(artist_name)
-        track_title = self.sanitize_filename(track_info.get("title", f"track_{track_id}"))
-
-        output_filename = os.path.join(output_dir, f"{artist_name} - {track_title}.flac")
-
-        if os.path.exists(output_filename):
-            file_size = os.path.getsize(output_filename)
-            if file_size > 0:
-                print(f"File already exists: {output_filename} ({file_size / (1024 * 1024):.2f} MB)")
-                return output_filename
-
-        download_info = self.get_download_url(track_id, quality)
-        download_url = download_info["download_url"]
-        download_track_info = download_info["track_info"]
-
-        print(f"Downloading to: {output_filename}")
-        self.download_file(
-            download_url,
-            output_filename,
-            is_paused_callback=is_paused_callback,
-            is_stopped_callback=is_stopped_callback
-        )
-
-        print("Adding metadata...")
         try:
-            self.embed_metadata(output_filename, download_track_info, track_info)
-            print("Metadata saved")
-        except Exception as e:
-            print(f"Tagging failed: {e}")
+            track_info = self.search_track_by_metadata_with_isrc(query, "", isrc or "", 0)
+        except Exception as exc:
+            raise Exception(f"Error getting track info: {exc}")
 
+        track_id = track_info.get("id")
+        if not track_id:
+            raise Exception("no track ID found")
+
+        artists = []
+        if track_info.get("artists"):
+            artists = [a.get("name") for a in track_info["artists"] if a.get("name")]
+        elif track_info.get("artist", {}).get("name"):
+            artists = [track_info["artist"]["name"]]
+        artist_name = _sanitize_filename(", ".join(artists) or "Unknown Artist")
+        track_title = _sanitize_filename(track_info.get("title") or f"track_{track_id}")
+        album_title = track_info.get("album", {}).get("title", "")
+
+        filename = _build_tidal_filename(
+            track_title,
+            artist_name,
+            track_info.get("trackNumber") or 0,
+            filename_format,
+            include_track_number,
+            position,
+            use_album_track_number,
+        )
+        output_filename = os.path.join(output_dir, filename)
+
+        if os.path.exists(output_filename) and os.path.getsize(output_filename) > 0:
+            print(f"File already exists: {output_filename}")
+            return output_filename
+
+        existing, exists = _check_isrc_exists(output_dir, track_info.get("isrc"))
+        if exists and existing:
+            print(f"File with ISRC exists: {existing}")
+            return existing
+
+        if auto_fallback and self.api_list:
+            api, download_url = self._get_download_url_parallel(self.api_list, track_id, quality)
+            downloader = TidalDownloader(api_url=api)
+            downloader.set_progress_callback(self.progress_callback)
+            downloader.download_file(download_url, output_filename)
+        else:
+            download_url = self.get_download_url(track_id, quality)
+            self.download_file(download_url, output_filename)
+
+        cover_path = ""
+        album_cover = track_info.get("album", {}).get("cover")
+        if album_cover:
+            cover_bytes = self.download_album_art(album_cover)
+            if cover_bytes:
+                cover_path = output_filename + ".cover.jpg"
+                with open(cover_path, "wb") as f:
+                    f.write(cover_bytes)
+
+        metadata = {
+            "Title": track_title,
+            "Artist": artist_name,
+            "Album": album_title,
+            "Date": (track_info.get("album", {}).get("releaseDate") or "")[:4],
+            "TrackNumber": track_info.get("trackNumber", 0),
+            "DiscNumber": track_info.get("volumeNumber", 0),
+            "ISRC": track_info.get("isrc", ""),
+            "CoverPath": cover_path,
+        }
+        self.embed_metadata(output_filename, metadata, track_info)
+        if cover_path and os.path.exists(cover_path):
+            try:
+                os.remove(cover_path)
+            except Exception:
+                pass
         print("Done")
         return output_filename
+
+
+def parse_manifest(manifest_b64: str) -> Tuple[str, str, List[str]]:
+    try:
+        manifest_bytes = base64.b64decode(manifest_b64)
+    except Exception as exc:
+        raise Exception(f"failed to decode manifest: {exc}") from exc
+
+    manifest_str = manifest_bytes.decode(errors="ignore").strip()
+    if manifest_str.startswith("{"):
+        try:
+            manifest = json.loads(manifest_str)
+            urls = manifest.get("urls") or manifest.get("URLs") or manifest.get("URLs".lower(), [])
+            if urls:
+                return urls[0], "", []
+        except Exception as exc:
+            raise Exception(f"failed to parse BTS manifest: {exc}") from exc
+        raise Exception("no URLs in BTS manifest")
+
+    try:
+        mpd = ET.fromstring(manifest_str)
+        ns = {"mpd": mpd.tag.split("}")[0].strip("{")} if "}" in mpd.tag else {}
+        seg_template = mpd.find(".//mpd:SegmentTemplate", ns)
+        if seg_template is None:
+            seg_template = mpd.find(".//SegmentTemplate")
+        init_url = seg_template.get("initialization")
+        media_template = seg_template.get("media")
+        timeline = seg_template.find("mpd:SegmentTimeline", ns) or seg_template.find("SegmentTimeline")
+        segments = []
+        if timeline is not None:
+            for seg in timeline.findall("mpd:S", ns) or timeline.findall("S"):
+                repeat = int(seg.get("r") or 0)
+                segments.append(repeat + 1)
+        segment_count = sum(segments) if segments else 0
+        if segment_count == 0:
+            segment_count = len(re.findall(r"<S ", manifest_str))
+        media_urls = []
+        for i in range(1, segment_count + 1):
+            media_urls.append(media_template.replace("$Number$", str(i)))
+        return "", init_url, media_urls
+    except Exception as exc:
+        raise Exception(f"failed to parse manifest XML: {exc}") from exc
