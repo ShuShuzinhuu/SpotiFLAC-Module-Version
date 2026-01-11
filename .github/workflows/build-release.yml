@@ -63,6 +63,7 @@ jobs:
           --hidden-import=tidalDL \
           --hidden-import=certifi \
           --collect-data=certifi \
+          --paths=spotiflac \
           ../launcher.py
 
     - name: Upload Build Artifact
