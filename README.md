@@ -15,8 +15,8 @@ Organize downloaded files into subfolders by album.<br><br>
 Specify the duration in minutes to keep retrying downloads in case of failures. Default is 0 (no retries).<br>
 
 <h2>CLI usage</h2>
-Program can be ran by downloading one of the release files.<br>
-Program can also be ran by downloading the python files and calling <code>python launcher.py</code> with the arguments.
+<p>Program can be ran by downloading one of the release files.<br>
+Program can also be ran by downloading the python files and calling <code>python launcher.py</code> with the arguments.</p>
 
 <h4>Windows:</h4>
 
@@ -43,6 +43,7 @@ chmod +x SpotiFLAC-Linux
 ```
 
 <h2>Python Module Usage</h2>
+<p>The program is now also available as a Python module:</p>
 
 ```bash
 from SpotiFLAC import SpotiFLAC
