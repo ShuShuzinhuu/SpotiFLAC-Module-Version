@@ -1,14 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "spotiflac"
+name = "SpotiFLAC"
 version = "0.1.0"
-description = "SpotiFLAC module for Python"
+description = "Downloader module wrapper for SpotiFLAC"
+authors = [
+  { name="ShuKurenais", email="shukurenais@proton.me" }
+]
 readme = "README.md"
 requires-python = ">=3.9"
-authors = [
-  { name="Shu" }
-]
-license = {text = "MIT"}
 
-[build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
+dependencies = [
+  "requests~=2.32.3",
+  "mutagen~=1.47.0",
+  "pyotp~=2.9.0"
+]
+
+[project.urls]
+"Repository" = "https://github.com/ShuShuzinhuu/SpotiFLAC-Module-Version"
