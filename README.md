@@ -1,6 +1,5 @@
 <h1>SpotiFLAC-Command-Line-Interface</h1>
-<p>Command Line Interface version of SpotiFLAC.<br>
-    Also available as a python module.</p>
+<p>Command Line Interface version of SpotiFLAC.<br> Also available as a python module.</p>
 <h2>Arguments</h2>
 <i>service {tidal,qobuz,deezer,amazon}</i><br>
 Specify the music service to use for downloading FLAC files. Specify multiple services separated by spaces to try them in order. Default is 'tidal'.<br><br>
@@ -16,6 +15,8 @@ Organize downloaded files into subfolders by album.<br><br>
 Specify the duration in minutes to keep retrying downloads in case of failures. Default is 0 (no retries).<br>
 
 <h2>CLI usage</h2>
+Program can be ran by downloading one of the release files.<br>
+Program can also be ran by downloading the python files and calling <code>python launcher.py</code> with the arguments.
 
 <h4>Windows:</h4>
 
