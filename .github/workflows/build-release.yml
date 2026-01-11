@@ -40,7 +40,7 @@ jobs:
     - name: Build executable (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        pyinstaller --onefile --name ${{ matrix.build_name }} --console --hidden-import=amazonDL --hidden-import=deezerDL --hidden-import=getMetadata --hidden-import=qobuzDL --hidden-import=tidalDL --hidden-import=certifi --collect-data=certifi SpotiFLAC.py
+        pyinstaller --onefile --name ${{ matrix.build_name }} --console --hidden-import=amazonDL --hidden-import=deezerDL --hidden-import=getMetadata --hidden-import=qobuzDL --hidden-import=tidalDL --hidden-import=certifi --collect-data=certifi spotiflac/SpotiFLAC.py
 
     - name: Build executable (macOS/Linux)
       if: matrix.os != 'windows-latest'
