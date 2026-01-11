@@ -64,7 +64,6 @@ jobs:
           --hidden-import=certifi \
           --collect-data=certifi \
           --paths=spotiflac \
-          --add-data="spotiflac:spotiflac" \
           launcher.py
 
     - name: Upload Build Artifact
