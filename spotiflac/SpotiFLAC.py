@@ -544,3 +544,11 @@ def spotiflac(
     except KeyboardInterrupt:
         print("\nDownload stopped by user.")
 
+def main():
+    import argparse
+    # Put all the current CLI logic from `if __name__ == "__main__"` here
+    args = parse_args()  # if you have a function like parse_args()
+    spotiflac(args.url, args.output_dir, ... )  # your main function that runs download
+
+if __name__ == "__main__":
+    main()
