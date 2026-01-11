@@ -27,15 +27,6 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Debug - List files
-      run: |
-        echo "=== Current directory ==="
-        pwd
-        echo "=== Files in root ==="
-        ls -la
-        echo "=== Python files ==="
-        find . -name "*.py" -type f
-
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
