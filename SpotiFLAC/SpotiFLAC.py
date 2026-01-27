@@ -17,6 +17,7 @@ class Config:
     output_dir: str
     service: list = None
     filename_format: str = "title_artist"
+    filename: str = None
     use_track_numbers: bool = False
     use_artist_subfolders: bool = False
     use_album_subfolders: bool = False
@@ -187,6 +188,7 @@ def start_download_worker(tracks_to_download, outpath):
         config.is_playlist,
         config.album_or_playlist_name,
         config.filename_format,
+        config.filename,
         config.use_track_numbers,
         config.use_artist_subfolders,
         config.use_album_subfolders,
@@ -257,7 +259,7 @@ def format_seconds(seconds: float) -> str:
 
 class DownloadWorker:
     def __init__(self, tracks, outpath, is_single_track=False, is_album=False, is_playlist=False,
-                 album_or_playlist_name='', filename_format='title_artist', use_track_numbers=True,
+                 album_or_playlist_name='', filename_format='title_artist', filename=None, use_track_numbers=True,
                  use_artist_subfolders=False, use_album_subfolders=False, services=["tidal"]):
         super().__init__()
         self.tracks = tracks
@@ -267,6 +269,7 @@ class DownloadWorker:
         self.is_playlist = is_playlist
         self.album_or_playlist_name = album_or_playlist_name
         self.filename_format = filename_format
+        self.filename = filename
         self.use_track_numbers = use_track_numbers
         self.use_artist_subfolders = use_artist_subfolders
         self.use_album_subfolders = use_album_subfolders
@@ -274,7 +277,9 @@ class DownloadWorker:
         self.failed_tracks = []
 
     def get_formatted_filename(self, track):
-        if self.filename_format == "artist_title":
+        if self.filename:
+            filename = self.filename if self.filename.endswith('.flac') else f"{self.filename}.flac"
+        elif self.filename_format == "artist_title":
             filename = f"{track.artists} - {track.title}.flac"
         elif self.filename_format == "title_only":
             filename = f"{track.title}.flac"
@@ -409,6 +414,7 @@ class DownloadWorker:
                                 output_dir=track_outpath,
                                 quality="LOSSLESS",
                                 filename_format=qb_format,
+                                filename=track.filename,
                                 include_track_number=self.use_track_numbers,
                                 position=track.track_number or i + 1,
                                 spotify_track_name=track.title,
@@ -429,6 +435,7 @@ class DownloadWorker:
                                 spotify_track_id=track.id,
                                 output_dir=track_outpath,
                                 filename_format=amz_format,
+                                filename=track.filename,
                                 include_track_number=self.use_track_numbers,
                                 position=track.track_number or i + 1,
                                 spotify_track_name=track.title,
@@ -520,6 +527,7 @@ def SpotiFLAC(
     output_dir: str,
     services=["tidal", "deezer", "qobuz", "amazon"],
     filename_format="title_artist",
+    filename=None,
     use_track_numbers=False,
     use_artist_subfolders=False,
     use_album_subfolders=False,
@@ -532,6 +540,7 @@ def SpotiFLAC(
         output_dir=output_dir,
         service=services,
         filename_format=filename_format,
+        filename=filename,
         use_track_numbers=use_track_numbers,
         use_artist_subfolders=use_artist_subfolders,
         use_album_subfolders=use_album_subfolders,
