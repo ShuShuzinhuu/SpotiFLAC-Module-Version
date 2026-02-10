@@ -3,8 +3,8 @@ import re
 import time
 import argparse
 import asyncio
+from dataclasses import dataclass, field
 
-from dataclasses import dataclass
 from SpotiFLAC.getMetadata import get_filtered_data, parse_uri, SpotifyInvalidUrlException
 from SpotiFLAC.tidalDL import TidalDownloader
 from SpotiFLAC.deezerDL import DeezerDownloader
@@ -25,8 +25,8 @@ class Config:
     is_playlist: bool = False
     is_single_track: bool = False
     album_or_playlist_name: str = ""
-    tracks = []
-    worker = None
+    tracks: list = field(default_factory=list) 
+    worker: object = None
     loop: int = 3600
     start_time: float = 0.0
     end_time: float = 0.0
@@ -43,7 +43,33 @@ class Track:
     id: str
     isrc: str = ""
     release_date: str = ""
+    # NEW SYSTEM COVERS FOR AMAZON AND QOBUZ (ONLY AUDIO SOURCES)
+    cover_url: str = ""
     downloaded: bool = False
+
+
+# Extract cover art URL supporting both list (Spotify API) and string (processed getMetadata)
+def extract_cover_art(data, key_primary="images", key_secondary="album"):
+    """
+    Extrai a URL da imagem suportando listas (API Spotify) e strings (getMetadata processado).
+    """
+    img_data = data.get(key_primary)
+    
+    if img_data and isinstance(img_data, str):
+        return img_data
+        
+    if img_data and isinstance(img_data, list) and len(img_data) > 0:
+        if isinstance(img_data[0], dict):
+            return img_data[0].get("url", "")
+        if isinstance(img_data[0], str):
+            return img_data[0]
+        
+    if key_secondary and key_secondary in data:
+        album_data = data[key_secondary]
+        if isinstance(album_data, dict):
+            return extract_cover_art(album_data, "images", None)
+            
+    return ""
 
 
 def get_metadata(url):
@@ -67,10 +93,11 @@ def fetch_tracks(url):
 
     try:
         print('Just a moment. Fetching metadata...')
-
         metadata = get_metadata(url)
-        on_metadata_fetched(metadata)
-
+        if metadata:
+            on_metadata_fetched(metadata)
+        else:
+            print("Error: Empty metadata received.")
     except Exception as e:
         print(f'Error: Failed to start metadata fetch: {str(e)}')
 
@@ -80,32 +107,53 @@ def on_metadata_fetched(metadata):
         url_info = parse_uri(config.url)
 
         if url_info["type"] == "track":
-            handle_track_metadata(metadata["track"])
+            data = metadata.get("track", metadata)
+            handle_track_metadata(data)
         elif url_info["type"] == "album":
             handle_album_metadata(metadata)
         elif url_info["type"] == "playlist":
             handle_playlist_metadata(metadata)
 
     except Exception as e:
-        print(f'Error: {str(e)}')
+        import traceback
+        traceback.print_exc()
+        print(f'Error parsing metadata: {str(e)}')
 
 
 def handle_track_metadata(track_data):
-    track_id = track_data["external_urls"].split("/")[-1]
+    track_id = track_data.get("id")
+    if not track_id and "external_urls" in track_data:
+        ext = track_data["external_urls"]
+        if isinstance(ext, dict): track_id = ext.get("spotify", "").split("/")[-1]
+        elif isinstance(ext, str): track_id = ext.split("/")[-1]
 
-    if any(t.id == track_id for t in config.tracks):
+    if not track_id:
+        print("[!] Skipping track without ID")
         return
 
+    # Extração de Capa
+    cover = extract_cover_art(track_data)
+    if cover:
+        print(f"[DEBUG] Cover found for track: {cover[:30]}...")
+
+    # Artistas
+    artists_list = track_data.get("artists", [])
+    if isinstance(artists_list, list):
+        artist_names = ", ".join([a.get("name", "Unknown") if isinstance(a, dict) else str(a) for a in artists_list])
+    else:
+        artist_names = str(artists_list)
+
     track = Track(
-        external_urls=track_data["external_urls"],
-        title=track_data["name"],
-        artists=track_data["artists"],
-        album=track_data["album_name"],
-        track_number=1,
+        external_urls=f"https://open.spotify.com/track/{track_id}",
+        title=track_data.get("name", "Unknown Title"),
+        artists=artist_names,
+        album=track_data.get("album_name", track_data.get("album", {}).get("name", "Unknown Album")),
+        track_number=track_data.get("track_number", 1),
         duration_ms=track_data.get("duration_ms", 0),
         id=track_id,
-        isrc=track_data.get("isrc", ""),
-        release_date=track_data.get("release_date", "")
+        isrc=track_data.get("external_ids", {}).get("isrc", "") or track_data.get("isrc", ""),
+        release_date=track_data.get("album", {}).get("release_date", "") or track_data.get("release_date", ""),
+        cover_url=cover 
     )
 
     config.tracks = [track]
@@ -115,25 +163,44 @@ def handle_track_metadata(track_data):
 
 
 def handle_album_metadata(album_data):
-    config.album_or_playlist_name = album_data["album_info"]["name"]
-    album_release_date = album_data["album_info"].get("release_date", "")
+    config.album_or_playlist_name = album_data.get("album_info", {}).get("name", album_data.get("name", "Unknown Album"))
+    album_release_date = album_data.get("album_info", {}).get("release_date", album_data.get("release_date", ""))
+    
+    album_cover = extract_cover_art(album_data.get("album_info", album_data))
+    
+    tracks_raw = album_data.get("track_list", album_data.get("tracks", {}).get("items", []))
 
-    for track in album_data["track_list"]:
-        track_id = track["external_urls"].split("/")[-1]
+    for track in tracks_raw:
+        track_id = track.get("id")
+        if not track_id and "external_urls" in track:
+            ext = track["external_urls"]
+            if isinstance(ext, dict): track_id = ext.get("spotify", "").split("/")[-1]
+            elif isinstance(ext, str): track_id = ext.split("/")[-1]
 
-        if any(t.id == track_id for t in config.tracks):
+        if not track_id or any(t.id == track_id for t in config.tracks):
             continue
 
+        track_cover = extract_cover_art(track)
+        if not track_cover:
+            track_cover = album_cover
+
+        artists_list = track.get("artists", [])
+        if isinstance(artists_list, list):
+            artist_names = ", ".join([a.get("name", "Unknown") if isinstance(a, dict) else str(a) for a in artists_list])
+        else:
+            artist_names = str(artists_list)
+
         config.tracks.append(Track(
-            external_urls=track["external_urls"],
-            title=track["name"],
-            artists=track["artists"],
+            external_urls=f"https://open.spotify.com/track/{track_id}",
+            title=track.get("name", "Unknown Title"),
+            artists=artist_names,
             album=config.album_or_playlist_name,
-            track_number=track["track_number"],
+            track_number=track.get("track_number", 0),
             duration_ms=track.get("duration_ms", 0),
             id=track_id,
-            isrc=track.get("isrc", ""),
-            release_date=track.get("release_date", album_release_date)
+            isrc=track.get("isrc", ""), 
+            release_date=album_release_date,
+            cover_url=track_cover
         ))
 
     config.is_album = True
@@ -141,24 +208,49 @@ def handle_album_metadata(album_data):
 
 
 def handle_playlist_metadata(playlist_data):
-    config.album_or_playlist_name = playlist_data["playlist_info"]["owner"]["name"]
+    info = playlist_data.get("playlist_info", playlist_data)
+    config.album_or_playlist_name = info.get("name", "Unknown Playlist")
+    
+    playlist_cover = extract_cover_art(info)
+    
+    tracks_raw = playlist_data.get("track_list", [])
+    if not tracks_raw and "tracks" in playlist_data:
+        tracks_raw = playlist_data["tracks"].get("items", [])
 
-    for track in playlist_data["track_list"]:
-        track_id = track["external_urls"].split("/")[-1]
-
-        if any(t.id == track_id for t in config.tracks):
+    for item in tracks_raw:
+        track = item.get("track", item)
+        if not track: continue 
+        
+        track_id = track.get("id")
+        if not track_id and "external_urls" in track:
+            ext = track["external_urls"]
+            if isinstance(ext, dict): track_id = ext.get("spotify", "").split("/")[-1]
+            elif isinstance(ext, str): track_id = ext.split("/")[-1]
+            
+        if not track_id or any(t.id == track_id for t in config.tracks):
             continue
+        
+        track_cover = extract_cover_art(track)
+        if not track_cover:
+            track_cover = playlist_cover
+        
+        artists_list = track.get("artists", [])
+        if isinstance(artists_list, list):
+            artist_names = ", ".join([a.get("name", "Unknown") if isinstance(a, dict) else str(a) for a in artists_list])
+        else:
+            artist_names = str(artists_list)
 
         config.tracks.append(Track(
-            external_urls=track["external_urls"],
-            title=track["name"],
-            artists=track["artists"],
-            album=track["album_name"],
+            external_urls=f"https://open.spotify.com/track/{track_id}",
+            title=track.get("name", "Unknown Title"),
+            artists=artist_names,
+            album=track.get("album", {}).get("name", track.get("album_name", "Unknown Album")),
             track_number=track.get("track_number", len(config.tracks) + 1),
             duration_ms=track.get("duration_ms", 0),
             id=track_id,
             isrc=track.get("isrc", ""),
-            release_date=track.get("release_date", "")
+            release_date=track.get("album", {}).get("release_date", ""),
+            cover_url=track_cover
         ))
 
     config.is_playlist = True
@@ -166,6 +258,10 @@ def handle_playlist_metadata(playlist_data):
 
 
 def download_tracks(indices):
+    if not config.tracks:
+        print("No tracks found to download.")
+        return
+
     raw_outpath = config.output_dir
     outpath = os.path.normpath(raw_outpath)
     if not os.path.exists(outpath):
@@ -183,7 +279,9 @@ def download_tracks(indices):
     try:
         start_download_worker(tracks_to_download, outpath)
     except Exception as e:
-        print(f"Error: An error occurred while starting the download: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        print(f"Error starting download: {str(e)}")
 
 
 def start_download_worker(tracks_to_download, outpath):
@@ -218,7 +316,7 @@ def on_download_finished(success, message, failed_tracks, total_elapsed=None):
     if total_elapsed is not None:
         print(f"\nElapsed time for this download loop: {format_seconds(total_elapsed)}")
 
-    if config.loop is not None:
+    if config.loop is not None and config.loop > 0:
         print(f"\nDownload starting again in: {format_minutes(config.loop)}")
         print(f"\n=======================================")
         time.sleep(config.loop * 60)
@@ -231,6 +329,9 @@ def update_progress(message):
 
 
 def format_minutes(minutes):
+    if not isinstance(minutes, (int, float)):
+        return f"{minutes} (invalid format)"
+        
     if minutes < 60:
         return f"{minutes} minutes"
     elif minutes < 1440:
@@ -246,28 +347,19 @@ def format_minutes(minutes):
 
 def format_seconds(seconds: float) -> str:
     seconds = int(round(seconds))
-
     days, rem = divmod(seconds, 86400)
     hrs, rem = divmod(rem, 3600)
     mins, secs = divmod(rem, 60)
-
     parts = []
-    if days:
-        parts.append(f"{days}d")
-    if hrs:
-        parts.append(f"{hrs}h")
-    if mins:
-        parts.append(f"{mins}m")
-    if secs or not parts:
-        parts.append(f"{secs}s")
-
+    if days: parts.append(f"{days}d")
+    if hrs: parts.append(f"{hrs}h")
+    if mins: parts.append(f"{mins}m")
+    if secs or not parts: parts.append(f"{secs}s")
     return " ".join(parts)
 
 
 def sanitize_filename_component(value: str) -> str:
-    """Sanitize individual filename components"""
-    if not value:
-        return ""
+    if not value: return ""
     sanitized = re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == '"' else '_', value)
     sanitized = re.sub(r'\s+', ' ', sanitized).strip()
     return sanitized
@@ -304,10 +396,7 @@ def format_custom_filename(template: str, track, position: int = 1) -> str:
 
     if not result.lower().endswith('.flac'):
         result += '.flac'
-
-    result = re.sub(r'\s+', ' ', result).strip()
-
-    return result
+    return re.sub(r'\s+', ' ', result).strip()
 
 
 class DownloadWorker:
@@ -337,14 +426,11 @@ class DownloadWorker:
             else:
                 filename = f"{track.title} - {track.artists}.flac"
             return re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == '"' else '_', filename)
-
         return format_custom_filename(self.filename_format, track, position)
 
     def run(self):
         try:
-
             total_tracks = len(self.tracks)
-
             start = time.perf_counter()
 
             def progress_update(current, total):
@@ -352,29 +438,19 @@ class DownloadWorker:
                     update_progress("Processing metadata...")
 
             for i, track in enumerate(self.tracks):
-
-                if track.downloaded:
-                    continue
+                if track.downloaded: continue
 
                 update_progress(f"[{i + 1}/{total_tracks}] Starting download: {track.title} - {track.artists}")
 
+                track_outpath = self.outpath
                 if self.is_playlist:
-                    track_outpath = self.outpath
-
                     if self.use_artist_subfolders:
-                        artist_name = track.artists.split(", ")[0] if ", " in track.artists else track.artists
-                        artist_folder = re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == "\"" else "_",
-                                               artist_name)
+                        artist_folder = re.sub(r'[<>:"/\\|?*]', '_', track.artists.split(", ")[0])
                         track_outpath = os.path.join(track_outpath, artist_folder)
-
                     if self.use_album_subfolders:
-                        album_folder = re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == "\"" else "_", track.album)
+                        album_folder = re.sub(r'[<>:"/\\|?*]', '_', track.album)
                         track_outpath = os.path.join(track_outpath, album_folder)
-
                     os.makedirs(track_outpath, exist_ok=True)
-
-                else:
-                    track_outpath = self.outpath
 
                 new_filename = self.get_formatted_filename(track, i + 1)
                 new_filepath = os.path.join(track_outpath, new_filename)
@@ -389,133 +465,85 @@ class DownloadWorker:
 
                 for svc in self.services:
                     update_progress(f"Trying service: {svc}")
-
-                    if svc == "tidal":
-                        downloader = TidalDownloader()
-                    elif svc == "deezer":
-                        downloader = DeezerDownloader()
-                    elif svc == "qobuz":
-                        downloader = QobuzDownloader()
-                    elif svc == "amazon":
-                        downloader = AmazonDownloader()
-                    else:
-                        downloader = TidalDownloader()
+                    
+                    if svc == "tidal": downloader = TidalDownloader()
+                    elif svc == "deezer": downloader = DeezerDownloader()
+                    elif svc == "qobuz": downloader = QobuzDownloader()
+                    elif svc == "amazon": downloader = AmazonDownloader()
+                    else: downloader = TidalDownloader()
 
                     downloader.set_progress_callback(progress_update)
 
                     try:
-                        if not track.isrc:
-                            raise Exception("No ISRC available")
-
+                        downloaded_file = None
+                        
+                        # --- TIDAL ---
                         if svc == "tidal":
-                            update_progress(
-                                f"Searching and downloading from Tidal for ISRC: {track.isrc} - {track.title} - {track.artists}"
-                            )
-
+                            if not track.isrc: raise Exception("No ISRC for Tidal")
                             result = downloader.download(
                                 query=f"{track.title} {track.artists}",
                                 isrc=track.isrc,
                                 output_dir=track_outpath,
                                 quality="LOSSLESS",
                             )
+                            if isinstance(result, str) and os.path.exists(result): downloaded_file = result
+                            elif isinstance(result, dict) and result.get("success") is False: raise Exception(result.get("error"))
+                            else: raise Exception("Tidal download failed (unknown result)")
 
-                            if isinstance(result, str) and os.path.exists(result):
-                                downloaded_file = result
-
-                            elif isinstance(result, dict) and result.get("success") == False:
-                                if result.get("error") == "Download stopped by user":
-                                    update_progress(f"Download stopped by user for: {track.title}")
-                                    return
-                                raise Exception(result.get("error", "Tidal download failed"))
-
-                            elif isinstance(result, dict) and result.get("status") in ("all_skipped", "skipped_exists"):
-                                downloaded_file = new_filepath
-
-                            else:
-                                raise Exception(f"Unexpected Tidal result: {result}")
-
+                        # --- DEEZER ---
                         elif svc == "deezer":
-                            update_progress(f"Downloading from Deezer with ISRC: {track.isrc}")
-
+                            if not track.isrc: raise Exception("No ISRC for Deezer")
                             ok = asyncio.run(downloader.download_by_isrc(track.isrc, track_outpath))
-
-                            if not ok:
-                                raise Exception("Deezer download failed")
-
+                            if not ok: raise Exception("Deezer download failed")
                             import glob
                             flac_files = glob.glob(os.path.join(track_outpath, "*.flac"))
-                            if not flac_files:
-                                raise Exception("No FLAC file found after Deezer download")
+                            if flac_files: downloaded_file = max(flac_files, key=os.path.getctime)
 
-                            downloaded_file = max(flac_files, key=os.path.getctime)
-
+                        # --- QOBUZ ---
                         elif svc == "qobuz":
-                            update_progress(f"Downloading from Qobuz with ISRC: {track.isrc}")
-
-                            qb_format = "title-artist"
+                            if not track.isrc: raise Exception("No ISRC for Qobuz")
                             downloaded_file = downloader.download_by_isrc(
                                 isrc=track.isrc,
                                 output_dir=track_outpath,
-                                quality="LOSSLESS",
-                                filename_format=qb_format,
-                                include_track_number=self.use_track_numbers,
+                                quality="6", # 6 = 16-bit FLAC
+                                filename_format=self.filename_format.replace("{title}", "temp_qobuz").replace("{artist}", "temp"), # Temp name
+                                include_track_number=False,
                                 position=track.track_number or i + 1,
                                 spotify_track_name=track.title,
                                 spotify_artist_name=track.artists,
                                 spotify_album_name=track.album,
                                 use_album_track_number=self.use_track_numbers,
+                                spotify_cover_url=track.cover_url  # <--- PASSANDO A CAPA
                             )
 
+                        # --- AMAZON ---
                         elif svc == "amazon":
-                            update_progress(f"Downloading from Amazon Music for track ID: {track.id}")
-                            amz_format = "title-artist"
                             downloaded_file = downloader.download_by_spotify_id(
                                 spotify_track_id=track.id,
                                 output_dir=track_outpath,
-                                filename_format=amz_format,
+                                filename_format="temp_amazon", # Temp name
                                 include_track_number=self.use_track_numbers,
                                 position=track.track_number or i + 1,
                                 spotify_track_name=track.title,
                                 spotify_artist_name=track.artists,
                                 spotify_album_name=track.album,
                                 use_album_track_number=self.use_track_numbers,
+                                spotify_cover_url=track.cover_url # <--- PASSANDO A CAPA
                             )
-
-                        else:
-                            track_id = track.id
-                            update_progress(f"Getting track info for ID: {track_id} from {svc}")
-
-                            try:
-                                loop = asyncio.get_event_loop()
-                                if loop.is_closed():
-                                    loop = asyncio.new_event_loop()
-                                    asyncio.set_event_loop(loop)
-                            except RuntimeError:
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-
-                            metadata = loop.run_until_complete(
-                                downloader.get_track_info(track_id, svc)
-                            )
-
-                            downloaded_file = downloader.download(metadata, track_outpath)
 
                         if downloaded_file and os.path.exists(downloaded_file):
                             if downloaded_file != new_filepath:
                                 try:
+                                    if os.path.exists(new_filepath): os.remove(new_filepath)
                                     os.rename(downloaded_file, new_filepath)
-                                    update_progress(f"File renamed to: {new_filename}")
                                 except OSError as e:
-                                    update_progress(
-                                        f"[X] Warning: Could not rename file {downloaded_file} → {new_filepath}: {e}"
-                                    )
+                                    update_progress(f"[!] Rename failed: {e}")
                             update_progress(f"Successfully downloaded using: {svc}")
                             track.downloaded = True
                             download_success = True
                             break
-
                         else:
-                            raise Exception("Downloaded file missing or invalid")
+                            raise Exception("File missing after download")
 
                     except Exception as e:
                         last_error = str(e)
@@ -524,67 +552,31 @@ class DownloadWorker:
 
                 if not download_success:
                     self.failed_tracks.append((track.title, track.artists, last_error))
-                    update_progress(f"[X] Failed all services for: {track.title}")
-                    continue
+                    update_progress(f"[X] Failed all services")
 
             total_elapsed = time.perf_counter() - start
-
-            msg = "Download completed!"
-            if self.failed_tracks:
-                msg += f"\n\nFailed downloads: {len(self.failed_tracks)}"
-
-            on_download_finished(True, msg, self.failed_tracks, total_elapsed)
+            on_download_finished(True, "Download completed!", self.failed_tracks, total_elapsed)
 
         except Exception as e:
-            total_elapsed = time.perf_counter() - start
-            on_download_finished(False, str(e), self.failed_tracks, total_elapsed)
+            on_download_finished(False, str(e), self.failed_tracks)
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("url", help="Spotify URL")
     parser.add_argument("output_dir", help="Output directory")
-    parser.add_argument(
-        "--service",
-        choices=["tidal", "deezer", "qobuz", "amazon"],
-        nargs="+",
-        default=["tidal"],
-        help="One or more services to try in order",
-    )
-    parser.add_argument(
-        "--filename-format",
-        default="{title} - {artist}",
-        help='Custom filename format using placeholders (e.g., "{title}, {artist}, {album}, {track_number}, {date}, {year}, {isrc}, {duration}")'
-    )
-    parser.add_argument("--use-track-numbers", action="store_true", help="(Deprecated - use {track} in format)")
+    parser.add_argument("--service", choices=["tidal", "deezer", "qobuz", "amazon"], nargs="+", default=["tidal"])
+    parser.add_argument("--filename-format", default="{title} - {artist}")
+    parser.add_argument("--use-track-numbers", action="store_true")
     parser.add_argument("--use-artist-subfolders", action="store_true")
     parser.add_argument("--use-album-subfolders", action="store_true")
     parser.add_argument("--loop", type=int, help="Loop delay in minutes")
     return parser.parse_args()
 
 
-def SpotiFLAC(
-        url: str,
-        output_dir: str,
-        services=["tidal", "deezer", "qobuz", "amazon"],
-        filename_format="{title} - {artist}",
-        use_track_numbers=False,
-        use_artist_subfolders=False,
-        use_album_subfolders=False,
-        loop=None
-):
+def SpotiFLAC(url, output_dir, services=["tidal"], filename_format="{title} - {artist}", use_track_numbers=False, use_artist_subfolders=False, use_album_subfolders=False, loop=None):
     global config
-    config = Config(
-        url=url,
-        output_dir=output_dir,
-        service=services,
-        filename_format=filename_format,
-        use_track_numbers=use_track_numbers,
-        use_artist_subfolders=use_artist_subfolders,
-        use_album_subfolders=use_album_subfolders,
-        loop=loop
-    )
-
+    config = Config(url, output_dir, services, filename_format, use_track_numbers, use_artist_subfolders, use_album_subfolders, False, False, False, "", [], None, loop)
     try:
         fetch_tracks(config.url)
         download_tracks(range(len(config.tracks)))
@@ -594,16 +586,7 @@ def SpotiFLAC(
 
 def main():
     args = parse_args()
-    SpotiFLAC(
-        url=args.url,
-        output_dir=args.output_dir,
-        services=args.service,
-        filename_format=args.filename_format,
-        use_track_numbers=args.use_track_numbers,
-        use_artist_subfolders=args.use_artist_subfolders,
-        use_album_subfolders=args.use_album_subfolders,
-        loop=args.loop
-    )
+    SpotiFLAC(args.url, args.output_dir, args.service, args.filename_format, args.use_track_numbers, args.use_artist_subfolders, args.use_album_subfolders, args.loop)
 
 
 if __name__ == "__main__":

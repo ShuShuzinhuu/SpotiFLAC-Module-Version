@@ -1,6 +1,6 @@
 <h1>SpotiFLAC Python Module</h1>
-<p>Integrate SpotiFLAC directly into your Python projects. Perfect for building custom telegram bots, automation tools, or web interfaces. <br> Also available as a <a href="https://github.com/jelte1/SpotiFLAC-Command-Line-Interface">CLI tool</a>.</p>
-
+<p>Integrate SpotiFLAC directly into your Python projects. Perfect for building custom telegram bots, automation tools, or web interfaces. <br> Also available as a <a href="https://github.com/jelte1/SpotiFLAC-Command-Line-Interface">CLI tool</a> and <a href="https://github.com/afkarxyz/SpotiFLAC">GUI tool</a>.</p>
+<a href="https://pypi.org/project/SpotiFLAC">Module in Pypi</a>
 <h2>Function Signature</h2>
 <pre>
 from SpotiFLAC import SpotiFLAC

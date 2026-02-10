@@ -20,7 +20,7 @@ def parse_args():
         "--service",
         choices=["tidal", "deezer", "qobuz", "amazon"],
         nargs="+",
-        default=["tidal"],
+        default=["tidal","amazon"],
         help="One or more services to try in order",
     )
     parser.add_argument(
