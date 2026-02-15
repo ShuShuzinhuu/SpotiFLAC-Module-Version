@@ -84,33 +84,43 @@ jobs:
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.build_name }}
+        name: bin-${{ matrix.build_name }}
         path: SpotiFLAC/dist/${{ matrix.artifact_name }}
+        retention-days: 1
 
-    - name: Create GitHub Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          SpotiFLAC/dist/SpotiFLAC-Windows.exe
-          SpotiFLAC/dist/SpotiFLAC-macOS
-          SpotiFLAC/dist/SpotiFLAC-Linux-x86_64
-          SpotiFLAC/dist/SpotiFLAC-Linux-arm64
-        draft: false
-        prerelease: false
-        body: |
-          ## Downloads
-          
-          - **Windows (x86_64)**: SpotiFLAC-Windows.exe
-          - **macOS (x86_64)**: SpotiFLAC-macOS
-          - **Linux x86_64**: SpotiFLAC-Linux-x86_64
-          - **Linux ARM64**: SpotiFLAC-Linux-arm64
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: release-files
+          merge-multiple: true
 
-          ### Usage
-          ```bash
-          chmod +x SpotiFLAC-Linux-*
-          ./SpotiFLAC-Linux-x86_64 --service tidal [url] ./out
-          ./SpotiFLAC-Linux-arm64  --service tidal [url] ./out
-          ```
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2 
+        with:
+          files: release-files/*
+          draft: false
+          prerelease: false
+          body: |
+            ## Downloads
+            
+            - **Windows (x86_64)**: SpotiFLAC-Windows.exe
+            - **macOS (x86_64)**: SpotiFLAC-macOS
+            - **Linux x86_64**: SpotiFLAC-Linux-x86_64
+            - **Linux ARM64**: SpotiFLAC-Linux-arm64
+
+            ### Usage
+            ```bash
+            chmod +x SpotiFLAC-Linux-*
+            ./SpotiFLAC-Linux-x86_64 --service tidal [url] ./out
+            ./SpotiFLAC-Linux-arm64  --service tidal [url] ./out
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
