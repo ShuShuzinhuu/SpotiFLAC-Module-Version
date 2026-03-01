@@ -502,18 +502,22 @@ class DownloadWorker:
                         
                         # --- TIDAL ---
                         if svc == "tidal":
-                            if not track.isrc: raise Exception("No ISRC for Tidal")
-                            result = downloader.download(
-                                query=f"{track.title} {track.artists}",
-                                isrc=track.isrc,
+                            downloaded_file = downloader.download_by_spotify_id(
+                                spotify_track_id=track.id,
                                 output_dir=track_outpath,
-                                quality="LOSSLESS",
+                                filename_format=self.filename_format,
+                                include_track_number=self.use_track_numbers,
+                                position=track.track_number or i + 1,
+                                spotify_track_name=track.title,
+                                spotify_artist_name=track.artists,
+                                spotify_album_name=track.album,
+                                spotify_album_artist=track.album_artist,
+                                spotify_release_date=track.release_date,
+                                use_album_track_number=self.use_track_numbers,
+                                spotify_cover_url=track.cover_url
                             )
-                            if isinstance(result, str) and os.path.exists(result): downloaded_file = result
-                            elif isinstance(result, dict) and result.get("success") is False: raise Exception(result.get("error"))
-                            else: raise Exception("Tidal download failed (unknown result)")
 
-                        # --- DEEZER ---
+                        # --- DEEZER(NO WORKING) ---
                         elif svc == "deezer":
                             if not track.isrc: raise Exception("No ISRC for Deezer")
                             ok = asyncio.run(downloader.download_by_isrc(track.isrc, track_outpath))
