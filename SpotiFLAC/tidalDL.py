@@ -138,8 +138,8 @@ def parse_manifest(manifest_b64: str) -> Tuple[str, str, List[str], str]:
     if segment_count == 0:
         raise Exception("no segments found in manifest")
 
-    init_url = init_url.replace("&amp;", "&")
-    media_template = media_template.replace("&amp;", "&")
+    init_url = init_url.replace("&", "&")
+    media_template = media_template.replace("&", "&")
 
     media_urls = []
     for i in range(1, segment_count + 1):
@@ -156,10 +156,16 @@ class TidalDownloader:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
         })
         self.progress_callback: Callable[[int, int], None] = ProgressCallback()
+        
+        # Lista de APIs atualizada para espelhar o código Go
         self.apis = [
-            "https://triton.squid.wtf",
             "https://hifi-one.spotisaver.net",
-            "https://hifi-two.spotisaver.net"
+            "https://hifi-two.spotisaver.net",
+            "https://eu-central.monochrome.tf",
+            "https://us-west.monochrome.tf",
+            "https://api.monochrome.tf",
+            "https://monochrome-api.samidy.com",
+            "https://tidal.kinoplus.online"
         ]
 
     def set_progress_callback(self, callback: Callable[[int, int], None]) -> None:
