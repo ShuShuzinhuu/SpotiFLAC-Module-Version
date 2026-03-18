@@ -35,7 +35,7 @@ SpotiFLAC(
 ```
 New use:
 ```spotiflac 
-> spotiflac --service qobuz tidal --use-artist-subfolders url ./out 
+> spotiflac url ./out --service qobuz tidal --use-artist-subfolders
 ```
 ---
 
@@ -64,25 +64,27 @@ Program can also be ran by downloading the python files and calling <code>python
 <h4>Windows example usage:</h4>
 
 ```bash
-./SpotiFLAC-Windows.exe [--service tidal qobuz deezer amazon]
+./SpotiFLAC-Windows.exe url
+                        output_dir
+                        [--service tidal qobuz deezer amazon]
                         [--filename-format "{title} - {artist}"]
                         [--use-track-numbers] [--use-artist-subfolders]
                         [--use-album-subfolders]
                         [--loop minutes]
-                        url
-                        output_dir
+                        
 ```
 
 <h4>Linux / Mac example usage:</h4>
 
 ```bash
 chmod +x SpotiFLAC-Linux-arm64
-./SpotiFLAC-Linux-arm64 [--filename-format "{title} - {artist}"]
+./SpotiFLAC-Linux-arm64 url
+                        output_dir
+                        [--filename-format "{title} - {artist}"]
                         [--use-track-numbers] [--use-artist-subfolders]
                         [--use-album-subfolders]
                         [--loop minutes]
-                        url
-                        output_dir
+                        
 ```
 ---
 
