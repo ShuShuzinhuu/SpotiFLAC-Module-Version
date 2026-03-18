@@ -609,7 +609,13 @@ class DownloadWorker:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        prog="spotiflac",
+        usage="spotiflac url output_dir [-h] [--service {tidal,deezer,qobuz,amazon} ...] "
+              "[--filename-format FILENAME_FORMAT] [--use-track-numbers] "
+              "[--use-artist-subfolders] [--use-album-subfolders] [--loop LOOP]"
+    )
+
     parser.add_argument("url", help="Spotify URL")
     parser.add_argument("output_dir", help="Output directory")
     parser.add_argument("--service", choices=["tidal", "deezer", "qobuz", "amazon"], nargs="+", default=["tidal"])
@@ -618,6 +624,7 @@ def parse_args():
     parser.add_argument("--use-artist-subfolders", action="store_true")
     parser.add_argument("--use-album-subfolders", action="store_true")
     parser.add_argument("--loop", type=int, help="Loop delay in minutes")
+
     return parser.parse_args()
 
 

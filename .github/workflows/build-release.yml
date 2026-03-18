@@ -117,6 +117,7 @@ jobs:
               ## Changelog
               
               *(Adicione as novidades da versão aqui)*
+              ### WORKING APIs
 
               ## Downloads
               
@@ -127,19 +128,19 @@ jobs:
               
               ### Windows (PowerShell ou CMD)
               ```cmd
-              SpotiFLAC-Windows.exe --service tidal https://open.spotify.com/track/ ./out 
+              SpotiFLAC-Windows.exe https://open.spotify.com/track/ ./out --service tidal
               ```
 
               ### 🍏 macOS
               ```bash
               chmod +x SpotiFLAC-macOS
-              ./SpotiFLAC-macOS --service tidal https://open.spotify.com/track/ ./out 
+              ./SpotiFLAC-macOS https://open.spotify.com/track/ ./out --service tidal
               ```
 
               ### 🐧 Linux
               ```bash
               chmod +x SpotiFLAC-Linux-x86_64
-              ./SpotiFLAC-Linux-x86_64 --service tidal https://open.spotify.com/track/ ./out 
+              ./SpotiFLAC-Linux-x86_64 https://open.spotify.com/track/ ./out --service tidal
               ```
               *(For ARM devices like Raspberry Pi, replace `x86_64` with `arm64`)*
               </details>
