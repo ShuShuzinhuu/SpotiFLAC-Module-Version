@@ -14,6 +14,7 @@ from SpotiFLAC.qobuzDL import QobuzDownloader
 from SpotiFLAC.amazonDL import AmazonDownloader
 from SpotiFLAC.progress import DownloadManager, RichProgressCallback
 from SpotiFLAC.check_update import check_for_updates
+from SpotiFLAC.spotidownloaderDL import SpotiDownloader
 
 
 @dataclass
@@ -506,6 +507,7 @@ class DownloadWorker:
                     elif svc == "qobuz": downloader = QobuzDownloader()
                     elif svc == "amazon": downloader = AmazonDownloader()
                     elif svc == "youtube": downloader = YouTubeDownloader()
+                    elif svc == "spoti": downloader = SpotiDownloader()
                     else: downloader = TidalDownloader()
 
                     progress_cb = RichProgressCallback(item_id=track.id)
@@ -586,6 +588,21 @@ class DownloadWorker:
                                 spotify_total_discs=1,
                                 spotify_cover_url=track.cover_url
                             )
+                        elif svc == "spoti":
+                            downloaded_file = downloader.download_by_spotify_id(
+                                spotify_track_id=track.id,
+                                output_dir=track_outpath,
+                                spotify_track_name=track.title,
+                                spotify_artist_name=track.artists,
+                                spotify_album_name=track.album,
+                                spotify_album_artist=track.album_artist,
+                                spotify_release_date=track.release_date,
+                                spotify_track_number=track.track_number or i + 1,
+                                spotify_total_tracks=len(self.tracks),
+                                spotify_disc_number=1,
+                                spotify_total_discs=1,
+                                spotify_cover_url=track.cover_url
+                            )
 
                         if downloaded_file and os.path.exists(downloaded_file):
                             if downloaded_file != new_filepath:
@@ -640,7 +657,7 @@ def parse_args():
 
     parser.add_argument("url", help="Spotify URL")
     parser.add_argument("output_dir", help="Output directory")
-    parser.add_argument("--service", choices=["tidal", "deezer", "qobuz", "amazon", "youtube"], nargs="+", default=["tidal"])
+    parser.add_argument("--service", choices=["tidal", "deezer", "qobuz", "amazon", "youtube", "spoti"], nargs="+", default=["tidal"])
     parser.add_argument("--filename-format", default="{title} - {artist}")
     parser.add_argument("--use-track-numbers", action="store_true")
     parser.add_argument("--use-artist-subfolders", action="store_true")

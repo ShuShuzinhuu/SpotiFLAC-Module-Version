@@ -19,9 +19,9 @@ def parse_args():
     parser.add_argument("output_dir", help="Output directory")
     parser.add_argument(
         "--service",
-        choices=["tidal", "qobuz", "amazon", "youtube"],
+        choices=["tidal", "qobuz", "amazon","spoti", "youtube"],
         nargs="+",
-        default=["tidal", "qobuz", "amazon"],
+        default=["tidal", "spoti", "qobuz", "amazon"],
         help="One or more services to try in order",
     )
     parser.add_argument(
