@@ -8,7 +8,7 @@ import time
 import xml.etree.ElementTree as ET
 from typing import Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote
-
+from random import randrange
 import requests
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import PictureType
@@ -26,6 +26,9 @@ def safe_int(value) -> int:
         return int(value)
     except (ValueError, TypeError):
         return 0
+   
+def get_random_user_agent():
+    return f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_{randrange(11, 15)}_{randrange(4, 9)}) AppleWebKit/{randrange(530, 537)}.{randrange(30, 37)} (KHTML, like Gecko) Chrome/{randrange(80, 105)}.0.{randrange(3000, 4500)}.{randrange(60, 125)} Safari/{randrange(530, 537)}.{randrange(30, 36)}"
 
 def build_tidal_filename(title, artist, album, album_artist, release_date, track_number, disc_number, format_string, include_track_number, position, use_album_track_number):
     number_to_use = track_number if use_album_track_number and track_number > 0 else position
@@ -145,7 +148,7 @@ class TidalDownloader:
         self.session = requests.Session()
         self.session.timeout = timeout
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+            "User-Agent": get_random_user_agent()
         })
         self.progress_callback: Callable[[int, int], None] = None
         

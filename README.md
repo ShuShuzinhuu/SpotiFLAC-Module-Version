@@ -11,6 +11,10 @@ Integrate **SpotiFLAC** directly into your Python projects. Perfect for building
 
 Download music in true lossless FLAC from Tidal, Qobuz & Amazon Music for Windows, macOS & Linux
 
+### [SpotiFLAC (Mobile)](https://github.com/zarzet/SpotiFLAC-Mobile)
+
+SpotiFLAC for Android & iOS — maintained by [@zarzet](https://github.com/zarzet)
+
 ---
 
 ## Installation
