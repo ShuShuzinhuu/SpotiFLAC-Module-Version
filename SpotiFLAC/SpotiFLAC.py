@@ -13,6 +13,7 @@ from SpotiFLAC.deezerDL import DeezerDownloader
 from SpotiFLAC.qobuzDL import QobuzDownloader
 from SpotiFLAC.amazonDL import AmazonDownloader
 from SpotiFLAC.progress import DownloadManager, RichProgressCallback
+from SpotiFLAC.check_update import check_for_updates
 
 
 @dataclass
@@ -49,9 +50,6 @@ class Track:
     release_date: str = ""
     cover_url: str = ""
     downloaded: bool = False
-
-
-# --- FUNÇÕES AUXILIARES ---
 
 def extract_cover_art(data, key_primary="images", key_secondary="album"):
     img_data = data.get(key_primary)
@@ -653,6 +651,7 @@ def parse_args():
 
 
 def SpotiFLAC(url, output_dir, services=["tidal"], filename_format="{title} - {artist}", use_track_numbers=False, use_artist_subfolders=False, use_album_subfolders=False, loop=None):
+    check_for_updates()
     global config
     config = Config(url, output_dir, services, filename_format, use_track_numbers, use_artist_subfolders, use_album_subfolders, False, False, False, "", [], None, loop)
     try:

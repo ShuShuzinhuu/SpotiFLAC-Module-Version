@@ -4,6 +4,7 @@ Launcher script for SpotiFLAC CLI
 import argparse
 import sys
 import os
+from SpotiFLAC.SpotiFLAC import SpotiFLAC
 
 if getattr(sys, 'frozen', False):
     application_path = sys._MEIPASS
@@ -35,8 +36,6 @@ def parse_args():
     return parser.parse_args()
 
 def main():
-    from SpotiFLAC.SpotiFLAC import SpotiFLAC
-
     args = parse_args()
     SpotiFLAC(
         args.url, 

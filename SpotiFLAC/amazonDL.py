@@ -201,7 +201,6 @@ class AmazonDownloader:
         if use_album_track_number and safe_int(spotify_track_number) > 0:
             track_num_for_filename = safe_int(spotify_track_number)
 
-        # 2. Gera o nome do arquivo ESPERADO ANTES de baixar (Idêntico ao Go)
         if "{" in filename_format:
             new_name = (filename_format.replace("{title}", safe_title)
                         .replace("{artist}", safe_artist)
