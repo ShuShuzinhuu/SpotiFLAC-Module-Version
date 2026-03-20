@@ -418,11 +418,11 @@ def format_playlist_data(playlist_data):
         })
 
     playlist_info = {
+        "name": playlist_data.get('name', 'Unknown Playlist'),
         "tracks": {"total": playlist_data.get('tracks', {}).get('total', 0)},
         "followers": {"total": playlist_data.get('followers', {}).get('total', 0)},
         "owner": {
-            "display_name": playlist_data.get('owner', {}).get('display_name', ''),
-            "name": playlist_data.get('name', ''),
+            "display_name": playlist_data.get('owner', {}).get('display_name', 'Unknown Owner'),
             "images": image_url
         }
     }
