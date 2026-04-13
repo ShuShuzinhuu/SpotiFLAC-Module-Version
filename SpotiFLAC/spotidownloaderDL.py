@@ -35,7 +35,7 @@ class SpotiDownloader:
             return SpotiDownloader._cached_token
 
         print("Fetching session token from SpotiDownloader...")
-        url = "https://spdl.afkarxyz.fun/token"
+        url = "https://spdl.afkarxyz.qzz.io/token"
         
         for attempt in range(1, 4):
             try:

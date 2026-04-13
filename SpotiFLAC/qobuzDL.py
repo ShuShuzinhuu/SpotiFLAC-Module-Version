@@ -126,7 +126,7 @@ class QobuzDownloader:
         standard_apis = [
             "https://dab.yeet.su/api/stream?trackId=",
             "https://dabmusic.xyz/api/stream?trackId=",
-            "https://qbz.afkarxyz.fun/api/track/"
+            "https://qbz.afkarxyz.qzz.io/api/track/"
         ]
 
         def attempt_download(qual):
