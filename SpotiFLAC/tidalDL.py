@@ -112,7 +112,7 @@ def parse_manifest(manifest_b64: str) -> Tuple[str, str, List[str], str]:
     except Exception:
         pass
 
-    # Regex Fallback caso o XML falhe
+    # Regex Fallback caso il XML falhe
     if not init_url or not media_template or segment_count == 0:
         print("Using regex fallback for DASH manifest...")
         init_match = re.search(r'initialization="([^"]+)"', manifest_str)
@@ -165,39 +165,85 @@ class TidalDownloader:
     def set_progress_callback(self, callback: Callable[[int, int], None]) -> None:
         self.progress_callback = callback
 
-    def get_tidal_url_from_spotify(self, spotify_track_id: str) -> str:
+    def get_tidal_url_from_spotify(self, spotify_track_id: str, track_name: str = None, artist_name: str = None) -> str:
+        print(f"Risoluzione URL Tidal per Spotify ID: {spotify_track_id}...")
 
-        print("Getting Tidal URL via Songlink HTML...")
+        # --- TENTATIVO 1 (PRIORITÀ): RICERCA SU MIRROR (Monochrome ecc.) ---
+        if track_name and artist_name and track_name != "Unknown" and artist_name != "Unknown":
+            # Pulizia per migliorare i risultati di ricerca
+            clean_track = re.sub(r'\s*[\(\[][^)\]]*[\)\]]', '', track_name).strip()
+            clean_artist = artist_name.split(",")[0].strip()
+            clean_query = f"{clean_artist} {clean_track}"
+            search_query = quote(clean_query)
+            
+            print(f"➡ Tentativo 1: Ricerca testuale per '{clean_query}'...")
+            
+            for api_url in self.apis:
+                base = api_url.rstrip('/')
+                # Usiamo 's=' come richiesto dall'API
+                endpoints = [
+                    f"{base}/search/?s={search_query}&limit=3",
+                    f"{base}/search?s={search_query}&limit=3",
+                    f"{base}/search/track/?s={search_query}&limit=3"
+                ]
+                
+                for url in endpoints:
+                    try:
+                        s_resp = self.session.get(url, timeout=7)
+                        if s_resp.status_code == 200:
+                            data = s_resp.json()
+                            t_id = None
+                            
+                            # Estrazione ID flessibile (lista o dizionario)
+                            if isinstance(data, list) and len(data) > 0:
+                                t_id = data[0].get("id") or data[0].get("track_id")
 
-        url = f"https://song.link/s/{spotify_track_id}"
 
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept-Language": "en-US,en;q=0.9"
-        }
+                            elif isinstance(data, dict):
+                                nested = data.get("data", {})
+                                if isinstance(nested, dict):
+                                    inner = nested.get("items") or nested.get("tracks") or nested.get("results")
+                                    if isinstance(inner, list) and len(inner) > 0:
+                                        t_id = inner[0].get("id") or inner[0].get("track_id")
 
+                                if not t_id:
+                                    for key in ["items", "tracks", "result", "results"]:
+                                        inner = data.get(key)
+                                        if isinstance(inner, list) and len(inner) > 0:
+                                            t_id = inner[0].get("id") or inner[0].get("track_id")
+                                            break
+                                if not t_id:
+                                    t_id = data.get("id") or data.get("trackId")
+
+
+                            if t_id:
+                                t_url = f"https://listen.tidal.com/track/{t_id}"
+                                print(f"✓ TROVATO su {base}! ID: {t_id}")
+                                return t_url
+                    except Exception:
+                        continue
+            print("⚠ Ricerca sui mirror fallita o nessun risultato. Passo a Songlink...")
+
+        # --- TENTATIVO 2 (FALLBACK): SONGLINK ---
+        print(f"➡ Tentativo 2: Risoluzione tramite API Songlink...")
+        spotify_url = f"https://open.spotify.com/track/{spotify_track_id}"
+        api_url = f"https://api.song.link/v1-alpha.1/links?url={spotify_url}&userCountry=IT"
+        
         try:
-            resp = self.session.get(url, headers=headers, timeout=10)
+            resp = self.session.get(api_url, timeout=10)
             resp.raise_for_status()
-
-            html = resp.text
-
-            match = re.search(
-                r'https://listen\.tidal\.com/(track|album)/([0-9]+)',
-                html
-            )
-
-            if not match:
-                raise Exception("Tidal link not found in HTML")
-
-            tidal_url = match.group(0)
-
-            print(f"Found Tidal URL: {tidal_url}")
-
+            data = resp.json()
+            
+            tidal_data = data.get("linksByPlatform", {}).get("tidal")
+            if not tidal_data:
+                raise Exception("Link Tidal non trovato per questo brano su Songlink")
+                
+            tidal_url = tidal_data.get("url")
+            print(f"✓ URL Tidal trovato tramite Songlink: {tidal_url}")
             return tidal_url
 
         except Exception as e:
-            raise Exception(f"Error resolving Tidal URL: {e}")
+            raise Exception(f"Impossibile trovare il brano (Ricerca mirror e Songlink falliti: {e})")
 
     def get_track_id_from_url(self, tidal_url: str) -> int:
         parts = tidal_url.split("/track/")
@@ -308,7 +354,7 @@ class TidalDownloader:
         print("Converting to FLAC...")
         cmd = ["ffmpeg", "-y", "-i", temp_path, "-vn", "-c:a", "flac", output_path]
         
-        # Ocultar janela no Windows
+        # Ocultar finestra no Windows
         si = None
         if os.name == 'nt':
             si = subprocess.STARTUPINFO()
@@ -332,7 +378,7 @@ class TidalDownloader:
             self._stream_download(url, filepath)
 
     def embed_metadata(self, filepath, title, artist, album, album_artist, date, track_num, total_tracks, 
-                       disc_num, total_discs, cover_url, copyright, publisher, url):
+                        disc_num, total_discs, cover_url, copyright, publisher, url):
         print("Embedding metadata and cover art...")
         try:
             cover_data = None
@@ -437,7 +483,6 @@ class TidalDownloader:
         return filepath
 
     def download_by_spotify_id(self, spotify_track_id, **kwargs):
-        tidal_url = self.get_tidal_url_from_spotify(spotify_track_id)
         spotify_url = f"https://open.spotify.com/track/{spotify_track_id}"
         
         default_kwargs = {
@@ -451,8 +496,16 @@ class TidalDownloader:
             "use_album_track_number": False, "use_first_artist_only": False, "allow_fallback": True
         }
 
+        # Applica i kwargs passati
         for key in kwargs:
             if key in default_kwargs:
                 default_kwargs[key] = kwargs[key]
+
+        # Estraiamo i nomi per la ricerca PRIMA di chiamare get_tidal_url_from_spotify
+        s_name = default_kwargs.get("spotify_track_name")
+        s_artist = default_kwargs.get("spotify_artist_name")
+
+        # Cerchiamo l'URL (Prima Monochrome, poi Songlink)
+        tidal_url = self.get_tidal_url_from_spotify(spotify_track_id, track_name=s_name, artist_name=s_artist)
 
         return self.download_by_url(tidal_url, **default_kwargs)
