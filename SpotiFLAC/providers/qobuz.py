@@ -33,8 +33,7 @@ from ..core.provider_stats import record_success, record_failure, prioritize_pro
 from .base import BaseProvider
 
 from ..core.console import (
-    print_source_banner, print_official_source,
-    print_api_failure, print_quality_fallback,
+    print_source_banner, print_api_failure, print_quality_fallback,
 )
 
 logger = logging.getLogger(__name__)
@@ -346,33 +345,6 @@ class QobuzProvider(BaseProvider):
             raise TrackNotFoundError(self.name, isrc)
         return items[0]
 
-    # ------------------------------------------------------------------
-    # Stream URL — con prioritize() invece di shuffle casuale
-    # Equivalente a GetDownloadURL() del Go
-    # ------------------------------------------------------------------
-
-    def _get_official_stream(self, track_id: int, quality: str) -> str:
-        """Ottiene l'URL dello stream usando l'API ufficiale e il token utente."""
-        resp = self._do_signed_get(
-            "track/getFileUrl",
-            {
-                "track_id": str(track_id),
-                "format_id": quality,
-                "intent": "stream"
-            }
-        )
-        if resp.status_code != 200:
-            self._raise_api_error(resp, "track/getFileUrl")
-
-        data = resp.json()
-        if "url" not in data:
-            raise SpotiflacError(
-                ErrorKind.UNAVAILABLE,
-                f"No stream URL returned by official API for track {track_id}",
-                self.name
-            )
-        print_official_source("qobuz", quality)
-        return data["url"]
 
     def _try_quality(self, track_id: int, quality: str) -> str:
         """
@@ -427,33 +399,18 @@ class QobuzProvider(BaseProvider):
         if not allow_fallback:
             chain = [chain[0]]
 
-        creds = self._get_credentials()
-        has_token = bool(creds.user_auth_token)
-
         last_exc: SpotiflacError | None = None
-        for q in chain:
+        for i, q in enumerate(chain):
             try:
-                logger.debug("[qobuz] Trying public APIs for track %s (quality=%s)", track_id, q)
                 return self._try_quality(track_id, q)
-            except Exception as public_exc:
-                logger.debug("[qobuz] Public APIs failed for quality %s: %s", q, public_exc)
-                if has_token:
-                    try:
-                        print_quality_fallback("qobuz", q, chain[chain.index(q) + 1] if q != chain[-1] else "—")
-                        return self._get_official_stream(track_id, q)
-                    except Exception as official_exc:
-                        logger.warning("[qobuz] Official API also failed for quality %s: %s", q, official_exc)
-                        if isinstance(official_exc, SpotiflacError):
-                            last_exc = official_exc
-                        else:
-                            last_exc = SpotiflacError(ErrorKind.UNAVAILABLE, str(official_exc), self.name)
-                else:
-                    if isinstance(public_exc, SpotiflacError):
-                        last_exc = public_exc
-                    else:
-                        last_exc = SpotiflacError(ErrorKind.UNAVAILABLE, str(public_exc), self.name)
-
-                logger.warning("[qobuz] Quality %s completely unavailable, trying next fallback", q)
+            except Exception as exc:
+                last_exc = (
+                    exc if isinstance(exc, SpotiflacError)
+                    else SpotiflacError(ErrorKind.UNAVAILABLE, str(exc), self.name)
+                )
+                if allow_fallback and i + 1 < len(chain):
+                    print_quality_fallback("qobuz", q, chain[i + 1])
+                logger.warning("[qobuz] Quality %s non disponibile via API pubbliche", q)
         raise last_exc  # type: ignore[misc]
 
     # ------------------------------------------------------------------
