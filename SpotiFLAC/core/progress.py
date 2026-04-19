@@ -160,29 +160,46 @@ class ProgressCallback:
             return
 
         bytes_diff = current_bytes - self._last_bytes
-        speed_mbps = (bytes_diff / (1024 * 1024)) / time_diff if time_diff > 0 else 0.0
+        speed_bps  = bytes_diff / time_diff if time_diff > 0 else 0.0
+        speed_mbs  = speed_bps / (1024 * 1024)
         mb_done    = current_bytes / (1024 * 1024)
 
         if total_bytes > 0:
-            pct = (current_bytes / total_bytes) * 100
+            pct     = current_bytes / total_bytes
+            filled  = int(pct * 20)
+            bar     = "█" * filled + "░" * (20 - filled)
+            eta_s   = (total_bytes - current_bytes) / speed_bps if speed_bps > 0 else 0
+            eta_str = _fmt_eta(eta_s) if eta_s > 0 else "--:--"
+            mb_tot  = total_bytes / (1024 * 1024)
             print(
-                f"\rDownloaded: {pct:.1f}% | {mb_done:.2f} MB | {speed_mbps:.2f} MB/s",
+                f"\r  [{bar}] {pct*100:5.1f}%  "
+                f"{mb_done:.1f}/{mb_tot:.1f} MB  "
+                f"{speed_mbs:.2f} MB/s  ETA {eta_str}   ",
                 end="", flush=True,
             )
         else:
             print(
-                f"\rDownloaded: {mb_done:.2f} MB | {speed_mbps:.2f} MB/s",
+                f"\r  ↓ {mb_done:.2f} MB  ·  {speed_mbs:.2f} MB/s   ",
                 end="", flush=True,
             )
 
         if self._item_id:
-            self._manager.update_progress(self._item_id, mb_done, speed_mbps)
+            self._manager.update_progress(self._item_id, mb_done, speed_mbs)
 
         self._last_time  = now
         self._last_bytes = current_bytes
 
         if current_bytes == total_bytes and total_bytes > 0:
-            print()
+            elapsed = now - self._start
+            mb_tot  = total_bytes / (1024 * 1024)
+            avg_mbs = mb_tot / elapsed if elapsed > 0 else 0
+            print(f"\r  ✓ {mb_tot:.2f} MB scaricati in {_fmt_eta(elapsed)}  ·  media {avg_mbs:.2f} MB/s   ")
+
+
+def _fmt_eta(seconds: float) -> str:
+    s = int(seconds)
+    m, s = divmod(s, 60)
+    return f"{m:02d}:{s:02d}"
 
 
 # Alias retrocompatibile

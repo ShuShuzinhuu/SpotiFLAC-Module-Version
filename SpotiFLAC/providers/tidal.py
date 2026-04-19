@@ -32,6 +32,10 @@ from ..core.http import HttpClient, RetryConfig
 from ..core.models import TrackMetadata, DownloadResult
 from ..core.tagger import embed_metadata
 from .base import BaseProvider
+from ..core.console import (
+    print_source_banner, print_api_failure,
+    print_quality_fallback,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -254,31 +258,37 @@ class TidalProvider(BaseProvider):
         for api in ordered:
             url = f"{api}/track/?id={track_id}&quality={quality}"
             try:
-                resp = self._session.get(url, timeout=15, headers={"User-Agent": _TIDAL_USER_AGENT},)
+                resp = self._session.get(
+                    url, timeout=15,
+                    headers={"User-Agent": _TIDAL_USER_AGENT},
+                )
                 if resp.status_code != 200:
                     last_err = f"HTTP {resp.status_code}"
                     record_failure("tidal", api)
+                    print_api_failure("tidal", api, last_err)
                     continue
 
                 body = resp.json()
-                # v2 response: manifest
                 if isinstance(body, dict) and body.get("data", {}).get("manifest"):
                     record_success("tidal", api)
-                    print(f"📡 Fonte: {api} (Tidal, Qualità: {quality})")
+                    print_source_banner("tidal", api, quality)
                     return "MANIFEST:" + body["data"]["manifest"]
-                # v1 response: direct URL
                 if isinstance(body, list):
                     for item in body:
                         if item.get("OriginalTrackUrl"):
                             record_success("tidal", api)
-                            print(f"📡 Fonte: {api} (Tidal, Qualità: {quality})")
+                            print_source_banner("tidal", api, quality)
                             return item["OriginalTrackUrl"]
+
                 last_err = "no URL in response"
                 record_failure("tidal", api)
+                print_api_failure("tidal", api, last_err)
 
             except Exception as exc:
                 last_err = str(exc)
                 record_failure("tidal", api)
+                print_api_failure("tidal", api, last_err)
+                logger.debug("[tidal] %s → %s", api, exc)
 
         raise SpotiflacError(
             ErrorKind.UNAVAILABLE,
@@ -291,6 +301,7 @@ class TidalProvider(BaseProvider):
             return self._get_download_url(track_id, quality)
         except SpotiflacError:
             if quality == "HI_RES":
+                print_quality_fallback("tidal", "HI_RES", "LOSSLESS")
                 logger.warning("[tidal] HI_RES failed — fallback to LOSSLESS")
                 return self._get_download_url(track_id, "LOSSLESS")
             raise
@@ -329,26 +340,35 @@ class TidalProvider(BaseProvider):
                 except OSError:
                     pass
 
-    def _download_segments(
-            self,
-            init_url:   str,
-            media_urls: list[str],
-            dest:       Path,
-    ) -> None:
+    def _download_segments(self, init_url: str, media_urls: list[str], dest: Path) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
         _headers = {"User-Agent": _TIDAL_USER_AGENT}
+        total    = len(media_urls)
+        t_start  = time.time()
+
         with open(dest, "wb") as f:
             resp = self._session.get(init_url, timeout=20, headers=_headers)
             resp.raise_for_status()
             f.write(resp.content)
 
-            total = len(media_urls)
             for i, url in enumerate(media_urls, 1):
                 resp = self._session.get(url, timeout=20, headers=_headers)
                 resp.raise_for_status()
                 f.write(resp.content)
-                print(f"\rSegments: {i}/{total}", end="", flush=True)
-        print()
+
+                pct     = i / total
+                filled  = int(pct * 24)
+                bar     = "█" * filled + "░" * (24 - filled)
+                elapsed = time.time() - t_start
+                eta     = (elapsed / i) * (total - i) if i > 0 else 0
+                m, s    = divmod(int(eta), 60)
+                print(
+                    f"\r  [{bar}] {i}/{total} segmenti  ETA {m:02d}:{s:02d}   ",
+                    end="", flush=True,
+                )
+
+        elapsed = time.time() - t_start
+        print(f"\r  ✓ {total} segmenti scaricati in {elapsed:.1f}s{'':<20}")
 
     @staticmethod
     def _ffmpeg_to_flac(src: Path, dst: Path) -> None:

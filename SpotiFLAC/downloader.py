@@ -20,6 +20,7 @@ from .core.progress import DownloadManager, ProgressCallback
 from .core.errors import SpotiflacError
 from .providers.base import BaseProvider
 from .providers.spotify_metadata import SpotifyMetadataClient
+from .core.console import print_track_header, print_summary
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +182,7 @@ class DownloadWorker:
 
         for i, track in enumerate(self._tracks):
             position = i + 1
-            print(f"\n[{position}/{total}] {track.title} — {track.artists}")
+            print_track_header(position, total, track.title, track.artists, track.album)
 
             manager.start_download(track.id)
 
@@ -231,14 +232,8 @@ class DownloadWorker:
         return out
 
     def _print_summary(self, elapsed: float) -> None:
-        print(f"\n{'='*40}")
-        if self._failed:
-            print(f"Completed with {len(self._failed)} failure(s):")
-            for title, artists, err in self._failed:
-                print(f"  ✗ {title} — {artists}: {err}")
-        else:
-            print("All tracks downloaded successfully ✓")
-        print(f"Elapsed: {_format_seconds(elapsed)}")
+        succeeded = len(self._tracks) - len(self._failed)
+        print_summary(len(self._tracks), succeeded, self._failed, elapsed)
 
 
 # ---------------------------------------------------------------------------

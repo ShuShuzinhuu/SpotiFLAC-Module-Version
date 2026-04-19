@@ -32,6 +32,11 @@ from ..core.tagger import embed_metadata
 from ..core.provider_stats import record_success, record_failure, prioritize_providers
 from .base import BaseProvider
 
+from ..core.console import (
+    print_source_banner, print_official_source,
+    print_api_failure, print_quality_fallback,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -366,7 +371,7 @@ class QobuzProvider(BaseProvider):
                 f"No stream URL returned by official API for track {track_id}",
                 self.name
             )
-        print(f"💎 Fonte: API Ufficiale Qobuz (Qualità: {quality})")
+        print_official_source("qobuz", quality)
         return data["url"]
 
     def _try_quality(self, track_id: int, quality: str) -> str:
@@ -396,7 +401,7 @@ class QobuzProvider(BaseProvider):
                     if stream:
                         record_success("qobuz", api)
                         logger.debug("[qobuz] Stream URL via %s (quality=%s)", api, quality)
-                        print(f"📡 Fonte: API Pubblica {api} (Qobuz, Qualità: {quality})")
+                        print_source_banner("qobuz", api, quality)
                         return stream
 
                 last_err = "no URL in response"
@@ -405,7 +410,7 @@ class QobuzProvider(BaseProvider):
             except Exception as exc:
                 last_err = str(exc)
                 record_failure("qobuz", api)
-                logger.debug("[qobuz] API %s failed: %s", api, exc)
+                print_api_failure("qobuz", api, last_err)
 
         raise SpotiflacError(
             ErrorKind.UNAVAILABLE,
@@ -434,7 +439,7 @@ class QobuzProvider(BaseProvider):
                 logger.debug("[qobuz] Public APIs failed for quality %s: %s", q, public_exc)
                 if has_token:
                     try:
-                        logger.info("[qobuz] Public APIs failed, falling back to OFFICIAL API for quality %s", q)
+                        print_quality_fallback("qobuz", q, chain[chain.index(q) + 1] if q != chain[-1] else "—")
                         return self._get_official_stream(track_id, q)
                     except Exception as official_exc:
                         logger.warning("[qobuz] Official API also failed for quality %s: %s", q, official_exc)
