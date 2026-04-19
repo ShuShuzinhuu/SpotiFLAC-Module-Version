@@ -366,6 +366,7 @@ class QobuzProvider(BaseProvider):
                 f"No stream URL returned by official API for track {track_id}",
                 self.name
             )
+        print(f"💎 Fonte: API Ufficiale Qobuz (Qualità: {quality})")
         return data["url"]
 
     def _try_quality(self, track_id: int, quality: str) -> str:
@@ -395,6 +396,7 @@ class QobuzProvider(BaseProvider):
                     if stream:
                         record_success("qobuz", api)
                         logger.debug("[qobuz] Stream URL via %s (quality=%s)", api, quality)
+                        print(f"📡 Fonte: API Pubblica {api} (Qobuz, Qualità: {quality})")
                         return stream
 
                 last_err = "no URL in response"

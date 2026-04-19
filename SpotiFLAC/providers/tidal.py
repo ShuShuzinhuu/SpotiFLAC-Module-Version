@@ -264,12 +264,14 @@ class TidalProvider(BaseProvider):
                 # v2 response: manifest
                 if isinstance(body, dict) and body.get("data", {}).get("manifest"):
                     record_success("tidal", api)
+                    print(f"📡 Fonte: {api} (Tidal, Qualità: {quality})")
                     return "MANIFEST:" + body["data"]["manifest"]
                 # v1 response: direct URL
                 if isinstance(body, list):
                     for item in body:
                         if item.get("OriginalTrackUrl"):
                             record_success("tidal", api)
+                            print(f"📡 Fonte: {api} (Tidal, Qualità: {quality})")
                             return item["OriginalTrackUrl"]
                 last_err = "no URL in response"
                 record_failure("tidal", api)
