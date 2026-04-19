@@ -55,9 +55,8 @@ def _build_provider(name: str) -> BaseProvider | None:
     """
     from .providers.tidal import TidalProvider
     from .providers.qobuz import QobuzProvider
-    from .providers.spotidownloader import SpotiDownloaderProvider
 
-    native = {"tidal": TidalProvider, "qobuz": QobuzProvider, "spoti": SpotiDownloaderProvider}
+    native = {"tidal": TidalProvider, "qobuz": QobuzProvider}
     if name in native:
         return native[name]()
 

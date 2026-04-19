@@ -24,7 +24,6 @@ from .downloader import SpotiflacDownloader, DownloadOptions
 from .providers import (
     QobuzProvider,
     TidalProvider,
-    SpotiDownloaderProvider,
     SpotifyMetadataClient,
 )
 from .core import TrackMetadata, DownloadResult
