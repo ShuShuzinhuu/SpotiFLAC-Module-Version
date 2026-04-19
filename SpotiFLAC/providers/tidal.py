@@ -51,6 +51,11 @@ _TIDAL_APIS = [
     "https://tidal.kinoplus.online",
 ]
 
+_TIDAL_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/145.0.0.0 Safari/537.36"
+)
 
 # ---------------------------------------------------------------------------
 # Manifest parsing (pure function, testabile)
@@ -249,7 +254,7 @@ class TidalProvider(BaseProvider):
         for api in ordered:
             url = f"{api}/track/?id={track_id}&quality={quality}"
             try:
-                resp = self._session.get(url, timeout=15)
+                resp = self._session.get(url, timeout=15, headers={"User-Agent": _TIDAL_USER_AGENT},)
                 if resp.status_code != 200:
                     last_err = f"HTTP {resp.status_code}"
                     record_failure("tidal", api)
