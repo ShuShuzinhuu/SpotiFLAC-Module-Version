@@ -440,10 +440,7 @@ class QobuzProvider(BaseProvider):
             if not metadata.isrc:
                 raise TrackNotFoundError(self.name, "no ISRC provided")
             genre_fetch = (
-                AsyncGenreFetch().start(
-                    metadata.isrc, metadata.title,
-                    metadata.first_artist, single_genre,
-                )
+                AsyncGenreFetch(metadata.isrc, use_single_genre=single_genre)
                 if embed_genre else None
             )
 
