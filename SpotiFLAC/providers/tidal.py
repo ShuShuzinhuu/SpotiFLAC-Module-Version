@@ -8,6 +8,7 @@ Cambiamenti rispetto al codice originale:
 - parse_manifest estratta come funzione pura testabile
 - Tutti gli errori sono SpotiflacError tipati
 - embed_metadata delegato al tagger centralizzato
+- Aggiunto fallback all'API ufficiale tramite token utente (TIDAL_AUTH_TOKEN)
 """
 from __future__ import annotations
 import base64
@@ -18,6 +19,7 @@ import re
 import subprocess
 import time
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
@@ -56,6 +58,39 @@ _TIDAL_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/145.0.0.0 Safari/537.36"
 )
+
+# ---------------------------------------------------------------------------
+# Credentials
+# ---------------------------------------------------------------------------
+
+_CREDS_CACHE_FILE = os.path.join(
+    os.path.expanduser("~"), ".cache", "spotiflac", "tidal-credentials.json"
+)
+
+@dataclass
+class TidalCredentials:
+    user_auth_token: str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "user_auth_token": self.user_auth_token,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TidalCredentials":
+        token = d.get("user_auth_token") or os.environ.get("TIDAL_AUTH_TOKEN")
+        return cls(user_auth_token=token)
+
+    @classmethod
+    def default(cls) -> "TidalCredentials":
+        return cls(user_auth_token=os.environ.get("TIDAL_AUTH_TOKEN"))
+
+def _load_cached_credentials() -> TidalCredentials:
+    try:
+        with open(_CREDS_CACHE_FILE, "r", encoding="utf-8") as f:
+            return TidalCredentials.from_dict(json.load(f))
+    except Exception:
+        return TidalCredentials.default()
 
 # ---------------------------------------------------------------------------
 # Manifest parsing (pure function, testabile)
@@ -131,8 +166,8 @@ def _parse_dash_manifest(text: str) -> ManifestResult:
     if segment_count == 0:
         raise ParseError("tidal", "No segments found in DASH manifest")
 
-    init_url       = init_url.replace("&amp;", "&")
-    media_template = media_template.replace("&amp;", "&")
+    init_url       = init_url.replace("&", "&")
+    media_template = media_template.replace("&", "&")
     media_urls     = [media_template.replace("$Number$", str(i))
                       for i in range(1, segment_count + 1)]
 
@@ -147,24 +182,25 @@ class TidalProvider(BaseProvider):
     name = "tidal"
 
     def __init__(
-        self,
-        apis:      list[str] | None = None,
-        timeout_s: int              = 15,
+            self,
+            apis:      list[str] | None = None,
+            timeout_s: int              = 15,
     ) -> None:
         super().__init__(timeout_s=timeout_s, retry=RetryConfig(max_attempts=2))
         self._apis    = list(apis or _TIDAL_APIS)
         self._session = self._http._session
         self._session.headers.update({"User-Agent": self._random_ua()})
+        self._creds   = _load_cached_credentials()
 
     # ------------------------------------------------------------------
     # Spotify → Tidal resolution
     # ------------------------------------------------------------------
 
     def resolve_spotify_to_tidal(
-        self,
-        spotify_track_id: str,
-        track_name:       str = "",
-        artist_name:      str = "",
+            self,
+            spotify_track_id: str,
+            track_name:       str = "",
+            artist_name:      str = "",
     ) -> str:
         """
         Ritorna URL Tidal per il track_id Spotify.
@@ -243,10 +279,46 @@ class TidalProvider(BaseProvider):
         raise TrackNotFoundError(self.name, spotify_track_id)
 
     # ------------------------------------------------------------------
-    # Download URL (rotation system)
+    # Download URL (rotation system & fallback)
     # ------------------------------------------------------------------
 
-    def _get_download_url(self, track_id: int, quality: str) -> str:
+    def _get_official_stream(self, track_id: int, quality: str) -> str:
+        """Ottiene l'URL dello stream o manifest usando l'API ufficiale e il token utente."""
+        url = f"https://api.tidal.com/v1/tracks/{track_id}/playbackinfo"
+        params = {
+            "audioquality": quality,
+            "playbackmode": "STREAM",
+            "assetpresentation": "FULL"
+        }
+
+        # Gestisce i token sia puliti che già formattati
+        token = self._creds.user_auth_token
+        auth_header = token if token.startswith("Bearer ") else f"Bearer {token}"
+
+        headers = {
+            "Authorization": auth_header,
+        }
+
+        resp = self._session.get(url, params=params, headers=headers, timeout=15)
+
+        if resp.status_code != 200:
+            try:
+                msg = resp.json().get("userMessage", f"HTTP {resp.status_code}")
+            except Exception:
+                msg = f"HTTP {resp.status_code}"
+            raise SpotiflacError(ErrorKind.UNAVAILABLE, f"Official API error: {msg}", self.name)
+
+        data = resp.json()
+        if "manifest" in data:
+            return "MANIFEST:" + data["manifest"]
+
+        raise SpotiflacError(
+            ErrorKind.UNAVAILABLE,
+            f"No manifest returned by official API for track {track_id}",
+            self.name
+        )
+
+    def _try_public_apis(self, track_id: int, quality: str) -> str:
         from ..core.provider_stats import prioritize_providers, record_success, record_failure
         ordered = prioritize_providers("tidal", self._apis)
 
@@ -280,9 +352,33 @@ class TidalProvider(BaseProvider):
 
         raise SpotiflacError(
             ErrorKind.UNAVAILABLE,
-            f"All Tidal APIs failed (last: {last_err})",
+            f"All public Tidal APIs failed (last: {last_err})",
             self.name,
         )
+
+    def _get_download_url(self, track_id: int, quality: str) -> str:
+        has_token = bool(self._creds and self._creds.user_auth_token)
+
+        try:
+            logger.debug("[tidal] Trying public APIs for track %s (quality=%s)", track_id, quality)
+            return self._try_public_apis(track_id, quality)
+        except Exception as public_exc:
+            logger.debug("[tidal] Public APIs failed for quality %s: %s", quality, public_exc)
+
+            # Se le pubbliche falliscono e abbiamo il token, tentiamo la via ufficiale
+            if has_token:
+                try:
+                    logger.info("[tidal] Public APIs failed, falling back to OFFICIAL API for quality %s", quality)
+                    return self._get_official_stream(track_id, quality)
+                except Exception as official_exc:
+                    logger.warning("[tidal] Official API also failed for quality %s: %s", quality, official_exc)
+                    if isinstance(official_exc, SpotiflacError):
+                        raise official_exc
+                    raise SpotiflacError(ErrorKind.UNAVAILABLE, str(official_exc), self.name)
+            else:
+                if isinstance(public_exc, SpotiflacError):
+                    raise public_exc
+                raise SpotiflacError(ErrorKind.UNAVAILABLE, str(public_exc), self.name)
 
     def _get_download_url_with_fallback(self, track_id: int, quality: str) -> str:
         try:
@@ -328,10 +424,10 @@ class TidalProvider(BaseProvider):
                     pass
 
     def _download_segments(
-        self,
-        init_url:   str,
-        media_urls: list[str],
-        dest:       Path,
+            self,
+            init_url:   str,
+            media_urls: list[str],
+            dest:       Path,
     ) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
         with open(dest, "wb") as f:
@@ -374,17 +470,17 @@ class TidalProvider(BaseProvider):
     # ------------------------------------------------------------------
 
     def download_track(
-        self,
-        metadata:   TrackMetadata,
-        output_dir: str,
-        *,
-        filename_format:     str  = "{title} - {artist}",
-        position:            int  = 1,
-        include_track_num:   bool = False,
-        use_album_track_num: bool = False,
-        first_artist_only:   bool = False,
-        allow_fallback:      bool = True,
-        quality:             str  = "LOSSLESS",
+            self,
+            metadata:   TrackMetadata,
+            output_dir: str,
+            *,
+            filename_format:     str  = "{title} - {artist}",
+            position:            int  = 1,
+            include_track_num:   bool = False,
+            use_album_track_num: bool = False,
+            first_artist_only:   bool = False,
+            allow_fallback:      bool = True,
+            quality:             str  = "LOSSLESS",
     ) -> DownloadResult:
         try:
             tidal_url = self.resolve_spotify_to_tidal(
