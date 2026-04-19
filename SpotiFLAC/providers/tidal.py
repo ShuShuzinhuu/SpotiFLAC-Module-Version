@@ -336,14 +336,15 @@ class TidalProvider(BaseProvider):
             dest:       Path,
     ) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
+        _headers = {"User-Agent": _TIDAL_USER_AGENT}
         with open(dest, "wb") as f:
-            resp = self._session.get(init_url, timeout=20)
+            resp = self._session.get(init_url, timeout=20, headers=_headers)
             resp.raise_for_status()
             f.write(resp.content)
 
             total = len(media_urls)
             for i, url in enumerate(media_urls, 1):
-                resp = self._session.get(url, timeout=20)
+                resp = self._session.get(url, timeout=20, headers=_headers)
                 resp.raise_for_status()
                 f.write(resp.content)
                 print(f"\rSegments: {i}/{total}", end="", flush=True)
