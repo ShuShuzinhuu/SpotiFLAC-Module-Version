@@ -48,5 +48,10 @@ dependencies = [
 spotiflac = "launcher:main"
 
 [tool.setuptools]
-packages = ["SpotiFLAC"]
 py-modules = ["launcher"]
+
+[tool.setuptools]
+py-modules = ["launcher"]
+
+[tool.setuptools.packages.find]
+include = ["SpotiFLAC*"]
