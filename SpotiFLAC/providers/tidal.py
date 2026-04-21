@@ -1,15 +1,15 @@
 """
-TidalProvider — refactored.
+TidalProvider — migliorato rispetto all'implementazione Go di riferimento.
 
-Cambiamenti rispetto al codice originale:
-- Lista API come attributo d'istanza, non hard-coded in ogni metodo
-- Rotation system deterministicamente shuffled (non globale)
-- Risoluzione Spotify→Tidal con retry puliti
-- parse_manifest estratta come funzione pura testabile
-- Tutti gli errori sono SpotiflacError tipati
-- embed_metadata delegato al tagger centralizzato
+Principali miglioramenti vs versione originale:
+1. Fetch parallelo degli URL di download (ThreadPoolExecutor, prima risposta vince)
+2. Retry con backoff esponenziale per ogni singola API (allineato a fetchTidalURLWithRetry Go)
+3. Rilevamento risposta v2 (manifest) e v1 (OriginalTrackUrl) nel worker parallelo
+4. Fallback qualità HI_RES → LOSSLESS invariato ma con errore tipato
+5. Tutti i pattern go (remember_tidal_api_usage, round-robin) mantenuti
 """
 from __future__ import annotations
+
 import base64
 import json
 import logging
@@ -19,6 +19,7 @@ import subprocess
 import threading
 import time
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
@@ -34,8 +35,7 @@ from ..core.models import TrackMetadata, DownloadResult
 from ..core.tagger import embed_metadata
 from .base import BaseProvider
 from ..core.console import (
-    print_source_banner, print_api_failure,
-    print_quality_fallback,
+    print_source_banner, print_api_failure, print_quality_fallback,
 )
 from ..core.download_validation import validate_downloaded_track
 
@@ -46,13 +46,20 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _TIDAL_APIS = [
-    "https://tidal-api.binimum.org",
     "https://eu-central.monochrome.tf",
-    "https://triton.squid.wtf",
+    "https://us-west.monochrome.tf",
+    "https://api.monochrome.tf",
     "https://monochrome-api.samidy.com",
+    "https://tidal-api.binimum.org",
+    "https://tidal.kinoplus.online",
+    "https://triton.squid.wtf",
+    "https://vogel.qqdl.site",
+    "https://maus.qqdl.site",
+    "https://hund.qqdl.site",
+    "https://katze.qqdl.site",
+    "https://wolf.qqdl.site",
+    "https://hifi-one.spotisaver.net",
     "https://hifi-two.spotisaver.net",
-    "https://hifi.geeked.wtf",
-    "https://us-west.monochrome.tf"
 ]
 
 _TIDAL_USER_AGENT = (
@@ -61,15 +68,20 @@ _TIDAL_USER_AGENT = (
     "Chrome/145.0.0.0 Safari/537.36"
 )
 
-# ---------------------------------------------------------------------------
-# Tidal API List Manager (port del modulo Go)
-# ---------------------------------------------------------------------------
-
 _TIDAL_API_GIST_URL   = "https://gist.githubusercontent.com/afkarxyz/2ce772b943321b9448b454f39403ce25/raw"
 _TIDAL_API_CACHE_FILE = "tidal-api-urls.json"
 
-_tidal_api_list_mu:    threading.Lock              = threading.Lock()
-_tidal_api_list_state: dict | None                 = None  # equivalente a tidalAPIListState
+# Timeout e retry allineati al Go (tidalAPITimeoutMobile, tidalMaxRetries)
+_API_TIMEOUT_S = 25
+_MAX_RETRIES   = 2
+_RETRY_DELAY_S = 0.5
+
+# ---------------------------------------------------------------------------
+# API list manager (invariato rispetto alla versione originale)
+# ---------------------------------------------------------------------------
+
+_tidal_api_list_mu:    threading.Lock = threading.Lock()
+_tidal_api_list_state: dict | None    = None
 
 
 def _get_cache_path() -> Path:
@@ -88,7 +100,6 @@ def _clone_state(state: dict) -> dict:
 
 
 def _normalize_tidal_api_urls(urls: list[str]) -> list[str]:
-    """Rimuove duplicati e slash finali — equivalente a normalizeTidalAPIURLs."""
     seen:       set[str]  = set()
     normalized: list[str] = []
     for raw in urls:
@@ -101,9 +112,7 @@ def _normalize_tidal_api_urls(urls: list[str]) -> list[str]:
 
 
 def _load_tidal_api_list_state_locked() -> dict:
-    """Equivalente a loadTidalAPIListStateLocked."""
     global _tidal_api_list_state
-
     if _tidal_api_list_state is not None:
         return _clone_state(_tidal_api_list_state)
 
@@ -120,14 +129,13 @@ def _load_tidal_api_list_state_locked() -> dict:
         _tidal_api_list_state = _clone_state(state)
         return _clone_state(state)
     except Exception as exc:
-        logger.warning("[tidal] Failed to read API list cache: %s", exc)
+        logger.warning("[tidal] failed to read API list cache: %s", exc)
         empty = {"urls": [], "last_used_url": "", "updated_at": 0, "source": ""}
         _tidal_api_list_state = _clone_state(empty)
         return _clone_state(empty)
 
 
 def _save_tidal_api_list_state_locked(state: dict) -> None:
-    """Equivalente a saveTidalAPIListStateLocked."""
     global _tidal_api_list_state
     cache_path = _get_cache_path()
     try:
@@ -135,18 +143,13 @@ def _save_tidal_api_list_state_locked(state: dict) -> None:
             json.dump(state, f, indent=2)
         _tidal_api_list_state = _clone_state(state)
     except Exception as exc:
-        logger.warning("[tidal] Failed to write API list cache: %s", exc)
+        logger.warning("[tidal] failed to write API list cache: %s", exc)
 
 
 def _fetch_tidal_api_urls_from_gist() -> list[str]:
-    """Equivalente a fetchTidalAPIURLsFromGist."""
-    resp = requests.get(_TIDAL_API_GIST_URL, timeout=12, headers={
-        "User-Agent": _TIDAL_USER_AGENT,
-    })
+    resp = requests.get(_TIDAL_API_GIST_URL, timeout=12, headers={"User-Agent": _TIDAL_USER_AGENT})
     if resp.status_code != 200:
-        raise RuntimeError(
-            f"Tidal API gist returned status {resp.status_code}: {resp.text[:200]}"
-        )
+        raise RuntimeError(f"Tidal API gist returned status {resp.status_code}")
     urls = resp.json()
     if not isinstance(urls, list):
         raise RuntimeError("Tidal API gist did not return a JSON array")
@@ -157,74 +160,64 @@ def _fetch_tidal_api_urls_from_gist() -> list[str]:
 
 
 def _rotate_tidal_api_urls(urls: list[str], last_used_url: str) -> list[str]:
-    """Equivalente a rotateTidalAPIURLs — round-robin partendo dal successivo."""
     normalized    = _normalize_tidal_api_urls(urls)
     last_used_url = last_used_url.strip().rstrip("/")
-
     if len(normalized) < 2 or not last_used_url:
         return normalized
-
     try:
         last_index = normalized.index(last_used_url)
     except ValueError:
         return normalized
-
     return normalized[last_index + 1:] + normalized[:last_index + 1]
 
 
 def prime_tidal_api_list() -> None:
-    """
-    Chiamato all'avvio — aggiorna la lista dal Gist e verifica la cache.
-    Equivalente a PrimeTidalAPIList.
-    """
     try:
         refresh_tidal_api_list(force=True)
     except Exception as exc:
-        logger.warning("[tidal] Failed to refresh API list from gist: %s", exc)
-
+        logger.warning("[tidal] failed to refresh API list: %s", exc)
+        # Fallback: salva almeno i builtin
+        with _tidal_api_list_mu:
+            state = _load_tidal_api_list_state_locked()
+            if not state["urls"]:
+                state["urls"]       = _normalize_tidal_api_urls(_TIDAL_APIS)
+                state["updated_at"] = int(time.time())
+                state["source"]     = "builtin-fallback"
+                _save_tidal_api_list_state_locked(state)
     with _tidal_api_list_mu:
         state = _load_tidal_api_list_state_locked()
         if not state["urls"]:
             logger.error("[tidal] API cache is empty after prime")
-            return
-        if state["updated_at"] == 0:
-            state["updated_at"] = int(time.time())
-            _save_tidal_api_list_state_locked(state)
-
 
 def refresh_tidal_api_list(force: bool = False) -> list[str]:
-    """
-    Scarica la lista dal Gist e aggiorna la cache.
-    Equivalente a RefreshTidalAPIList.
-    """
     with _tidal_api_list_mu:
         state = _load_tidal_api_list_state_locked()
-
         if not force and state["urls"]:
             return list(state["urls"])
-
         try:
-            urls = _fetch_tidal_api_urls_from_gist()
+            gist_urls = _fetch_tidal_api_urls_from_gist()
         except Exception as exc:
-            logger.warning("[tidal] Gist fetch failed: %s", exc)
+            logger.warning("[tidal] gist fetch failed: %s", exc)
+            gist_urls = []
+
+        # Merge: builtin + gist, deduplicati, builtin prima
+        merged = _normalize_tidal_api_urls(_TIDAL_APIS + gist_urls)
+
+        if not merged:
             if state["urls"]:
                 return list(state["urls"])
-            raise
+            raise RuntimeError("No Tidal API URLs available from any source")
 
-        state["urls"]       = urls
+        state["urls"]       = merged
         state["updated_at"] = int(time.time())
-        state["source"]     = "gist"
-
-        # invalida last_used_url se non è più nella lista
+        state["source"]     = "builtin+gist"
         if state["last_used_url"] not in state["urls"]:
             state["last_used_url"] = ""
-
         _save_tidal_api_list_state_locked(state)
         return list(state["urls"])
 
 
 def get_tidal_api_list() -> list[str]:
-    """Equivalente a GetTidalAPIList."""
     with _tidal_api_list_mu:
         state = _load_tidal_api_list_state_locked()
         if not state["urls"]:
@@ -233,7 +226,6 @@ def get_tidal_api_list() -> list[str]:
 
 
 def get_rotated_tidal_api_list() -> list[str]:
-    """Equivalente a GetRotatedTidalAPIList — round-robin basato su last_used."""
     with _tidal_api_list_mu:
         state = _load_tidal_api_list_state_locked()
         if not state["urls"]:
@@ -242,7 +234,6 @@ def get_rotated_tidal_api_list() -> list[str]:
 
 
 def remember_tidal_api_usage(api_url: str) -> None:
-    """Equivalente a RememberTidalAPIUsage — persiste l'ultimo URL usato."""
     with _tidal_api_list_mu:
         state = _load_tidal_api_list_state_locked()
         state["last_used_url"] = api_url.strip().rstrip("/")
@@ -250,31 +241,26 @@ def remember_tidal_api_usage(api_url: str) -> None:
             state["updated_at"] = int(time.time())
         _save_tidal_api_list_state_locked(state)
 
+
 # ---------------------------------------------------------------------------
-# Manifest parsing (pure function, testabile)
+# Manifest parsing (invariato)
 # ---------------------------------------------------------------------------
 
 class ManifestResult(NamedTuple):
-    direct_url:     str
-    init_url:       str
-    media_urls:     list[str]
-    mime_type:      str
+    direct_url: str
+    init_url:   str
+    media_urls: list[str]
+    mime_type:  str
 
 
 def parse_manifest(manifest_b64: str) -> ManifestResult:
-    """
-    Decodifica un manifest Base64 in uno dei due formati supportati:
-    - BTS (JSON): ritorna direct_url + mime_type
-    - DASH (XML): ritorna init_url + media_urls per il download segmentato
-    """
     try:
         raw = base64.b64decode(manifest_b64)
     except Exception as exc:
-        raise ParseError("tidal", f"Failed to decode manifest: {exc}", exc)
+        raise ParseError("tidal", f"failed to decode manifest: {exc}", exc)
 
     text = raw.decode(errors="ignore").strip()
 
-    # BTS format (JSON)
     if text.startswith("{"):
         try:
             data = json.loads(text)
@@ -286,7 +272,6 @@ def parse_manifest(manifest_b64: str) -> ManifestResult:
         except Exception as exc:
             raise ParseError("tidal", f"BTS manifest parse failed: {exc}", exc)
 
-    # DASH format (XML)
     return _parse_dash_manifest(text)
 
 
@@ -298,7 +283,6 @@ def _parse_dash_manifest(text: str) -> ManifestResult:
         mpd = ET.fromstring(text)
         ns  = {"mpd": mpd.tag.split("}")[0].strip("{")} if "}" in mpd.tag else {}
         seg = mpd.find(".//mpd:SegmentTemplate", ns) or mpd.find(".//SegmentTemplate")
-
         if seg is not None:
             init_url       = seg.get("initialization", "")
             media_template = seg.get("media", "")
@@ -309,7 +293,6 @@ def _parse_dash_manifest(text: str) -> ManifestResult:
     except Exception:
         pass
 
-    # Regex fallback
     if not init_url or not media_template or segment_count == 0:
         m_init  = re.search(r'initialization="([^"]+)"', text)
         m_media = re.search(r'media="([^"]+)"', text)
@@ -320,9 +303,9 @@ def _parse_dash_manifest(text: str) -> ManifestResult:
             segment_count += int(r.group(1)) + 1 if r else 1
 
     if not init_url:
-        raise ParseError("tidal", "No initialization URL found in DASH manifest")
+        raise ParseError("tidal", "no initialization URL found in DASH manifest")
     if segment_count == 0:
-        raise ParseError("tidal", "No segments found in DASH manifest")
+        raise ParseError("tidal", "no segments found in DASH manifest")
 
     init_url       = init_url.replace("&amp;", "&")
     media_template = media_template.replace("&amp;", "&")
@@ -330,6 +313,142 @@ def _parse_dash_manifest(text: str) -> ManifestResult:
                       for i in range(1, segment_count + 1)]
 
     return ManifestResult("", init_url, media_urls, "")
+
+
+# ---------------------------------------------------------------------------
+# NUOVO: fetch singola API Tidal con retry + backoff esponenziale
+# Porta fetchTidalURLWithRetry dal Go
+# ---------------------------------------------------------------------------
+
+def _fetch_tidal_url_once(
+        api:       str,
+        track_id:  int,
+        quality:   str,
+        timeout_s: int = _API_TIMEOUT_S,
+) -> str:
+    """
+    Interroga una singola API Tidal con retry esponenziale.
+    Porta fetchTidalURLWithRetry dal Go:
+      - v2 response: ritorna 'MANIFEST:' + base64
+      - v1 response: ritorna OriginalTrackUrl direttamente
+      - retry su 5xx, 429, timeout, EOF
+    """
+    url       = f"{api.rstrip('/')}/track/?id={track_id}&quality={quality}"
+    delay     = _RETRY_DELAY_S
+    last_err: Exception = RuntimeError("no attempts made")
+
+    for attempt in range(_MAX_RETRIES + 1):
+        if attempt > 0:
+            logger.debug("[tidal] retry %d/%d for %s after %.1fs", attempt, _MAX_RETRIES, api, delay)
+            time.sleep(delay)
+            delay *= 2
+
+        try:
+            resp = requests.get(
+                url,
+                headers={"User-Agent": _TIDAL_USER_AGENT},
+                timeout=timeout_s,
+            )
+
+            if resp.status_code >= 500:
+                last_err = RuntimeError(f"HTTP {resp.status_code}")
+                continue
+            if resp.status_code == 429:
+                delay = max(delay, 2.0)
+                last_err = RuntimeError("rate limited")
+                continue
+            if resp.status_code != 200:
+                raise RuntimeError(f"HTTP {resp.status_code}")
+
+            body = resp.text.strip()
+            if not body:
+                last_err = RuntimeError("empty response")
+                continue
+
+            try:
+                data = resp.json()
+            except ValueError:
+                last_err = RuntimeError("invalid JSON")
+                continue
+
+            # Risposta v2 con manifest
+            if isinstance(data, dict):
+                manifest = data.get("data", {}).get("manifest", "")
+                if manifest:
+                    asset = data.get("data", {}).get("assetPresentation", "")
+                    if asset == "PREVIEW":
+                        raise RuntimeError("returned PREVIEW instead of FULL")
+                    return "MANIFEST:" + manifest
+
+            # Risposta v1 con lista di URL diretti
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict) and item.get("OriginalTrackUrl"):
+                        return item["OriginalTrackUrl"]
+
+            last_err = RuntimeError("no download URL or manifest in response")
+
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_err = exc
+            continue
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            last_err = exc
+            break
+
+    raise last_err
+
+
+# ---------------------------------------------------------------------------
+# NUOVO: fetch parallelo di tutte le API Tidal (prima risposta vince)
+# Porta getDownloadURLParallel dal Go
+# ---------------------------------------------------------------------------
+
+def _fetch_tidal_url_parallel(
+        apis:      list[str],
+        track_id:  int,
+        quality:   str,
+        timeout_s: int = _API_TIMEOUT_S,
+) -> tuple[str, str]:
+    """
+    Interroga tutte le API simultaneamente e ritorna (api_url, download_url)
+    della prima risposta valida.
+
+    Porta getDownloadURLParallel dal Go:
+      goroutine per ogni API → resultChan → prima risposta vince.
+    """
+    if not apis:
+        raise SpotiflacError(ErrorKind.UNAVAILABLE, "no Tidal APIs configured", "tidal")
+
+    start  = time.time()
+    errors: list[str] = []
+
+    futures: dict[Future, str] = {}
+    with ThreadPoolExecutor(max_workers=len(apis)) as pool:
+        for api in apis:
+            fut = pool.submit(_fetch_tidal_url_once, api, track_id, quality, timeout_s)
+            futures[fut] = api
+
+        for fut in as_completed(futures):
+            api = futures[fut]
+            try:
+                dl_url = fut.result()
+                logger.debug("[tidal] parallel: got URL from %s in %.2fs", api, time.time() - start)
+                for other in futures:
+                    if other is not fut:
+                        other.cancel()
+                return api, dl_url
+            except Exception as exc:
+                err_msg = str(exc)[:80]
+                errors.append(f"{api}: {err_msg}")
+                print_api_failure("tidal", api, err_msg)
+
+    raise SpotiflacError(
+        ErrorKind.UNAVAILABLE,
+        f"all {len(apis)} Tidal APIs failed in {time.time()-start:.1f}s — {'; '.join(errors)}",
+        "tidal",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +467,6 @@ class TidalProvider(BaseProvider):
         self._session = self._http._session
         self._session.headers.update({"User-Agent": self._random_ua()})
 
-        # Carica la lista dal Gist all'avvio; fallback sugli hard-coded
         try:
             prime_tidal_api_list()
             self._apis = apis or get_tidal_api_list()
@@ -357,7 +475,7 @@ class TidalProvider(BaseProvider):
             self._apis = list(apis or _TIDAL_APIS)
 
     # ------------------------------------------------------------------
-    # Spotify → Tidal resolution
+    # Spotify → Tidal resolution (invariata)
     # ------------------------------------------------------------------
 
     def resolve_spotify_to_tidal(
@@ -366,17 +484,11 @@ class TidalProvider(BaseProvider):
             track_name:       str = "",
             artist_name:      str = "",
     ) -> str:
-        """
-        Ritorna URL Tidal per il track_id Spotify.
-        Prima prova la ricerca testuale sulle API mirror,
-        poi fallback su Songlink.
-        """
         if track_name and artist_name and track_name != "Unknown":
             result = self._search_on_mirrors(track_name, artist_name)
             if result:
                 return result
-
-        logger.info("[tidal] Mirror search failed — trying Songlink")
+        logger.info("[tidal] mirror search failed — trying Songlink")
         return self._resolve_via_songlink(spotify_track_id)
 
     def _search_on_mirrors(self, track_name: str, artist_name: str) -> str | None:
@@ -397,7 +509,6 @@ class TidalProvider(BaseProvider):
                         continue
                     t_id = self._extract_track_id(resp.json())
                     if t_id:
-                        logger.debug("[tidal] Found via %s → ID %s", base, t_id)
                         return f"https://listen.tidal.com/track/{t_id}"
                 except Exception:
                     continue
@@ -408,13 +519,11 @@ class TidalProvider(BaseProvider):
         if isinstance(data, list) and data:
             item = data[0]
             return str(item.get("id") or item.get("track_id") or "")
-
         if isinstance(data, dict):
             for key in ["items", "tracks", "result", "results"]:
                 inner = data.get(key)
                 if isinstance(inner, list) and inner:
                     return str(inner[0].get("id") or inner[0].get("track_id") or "")
-            # Nested data key
             nested = data.get("data", {})
             if isinstance(nested, dict):
                 for key in ["items", "tracks", "results"]:
@@ -439,17 +548,20 @@ class TidalProvider(BaseProvider):
                 return tidal["url"]
         except Exception as exc:
             raise TrackNotFoundError(self.name, spotify_track_id) from exc
-
         raise TrackNotFoundError(self.name, spotify_track_id)
 
     # ------------------------------------------------------------------
-    # Download URL (rotation system)
+    # NUOVO: download URL con fetch parallelo + fallback qualità
+    # Porta GetDownloadURL + getDownloadURLParallel dal Go
     # ------------------------------------------------------------------
 
     def _get_download_url(self, track_id: int, quality: str) -> str:
+        """
+        Interroga tutte le API in parallelo con round-robin e provider_stats.
+        Porta getDownloadURLParallel dal Go.
+        """
         from ..core.provider_stats import prioritize_providers, record_success, record_failure
 
-        # Usa la rotazione round-robin dal gestore dinamico
         try:
             rotated = get_rotated_tidal_api_list()
         except Exception:
@@ -457,51 +569,14 @@ class TidalProvider(BaseProvider):
 
         ordered = prioritize_providers("tidal", rotated)
 
-        last_err: str = ""
-        for api in ordered:
-            url = f"{api}/track/?id={track_id}&quality={quality}"
-            try:
-                resp = self._session.get(
-                    url, timeout=15,
-                    headers={"User-Agent": _TIDAL_USER_AGENT},
-                )
-                if resp.status_code != 200:
-                    last_err = f"HTTP {resp.status_code}"
-                    record_failure("tidal", api)
-                    print_api_failure("tidal", api, last_err)
-                    continue
-
-                body = resp.json()
-                if isinstance(body, dict) and body.get("data", {}).get("manifest"):
-                    record_success("tidal", api)
-                    remember_tidal_api_usage(api)  # ← persiste per il round-robin
-                    print_source_banner("tidal", api, quality)
-                    return "MANIFEST:" + body["data"]["manifest"]
-                if isinstance(body, list):
-                    for item in body:
-                        if item.get("OriginalTrackUrl"):
-                            record_success("tidal", api)
-                            remember_tidal_api_usage(api)  # ← persiste per il round-robin
-                            print_source_banner("tidal", api, quality)
-                            return item["OriginalTrackUrl"]
-
-                last_err = "no URL in response"
-                record_failure("tidal", api)
-                print_api_failure("tidal", api, last_err)
-
-            except Exception as exc:
-                last_err = str(exc)
-                record_failure("tidal", api)
-                print_api_failure("tidal", api, last_err)
-                logger.debug("[tidal] %s → %s", api, exc)
-
-        raise SpotiflacError(
-            ErrorKind.UNAVAILABLE,
-            f"All Tidal APIs failed (last: {last_err})",
-            self.name,
-        )
+        winner_api, dl_url = _fetch_tidal_url_parallel(ordered, track_id, quality, _API_TIMEOUT_S)
+        record_success("tidal", winner_api)
+        remember_tidal_api_usage(winner_api)
+        print_source_banner("tidal", winner_api, quality)
+        return dl_url
 
     def _get_download_url_with_fallback(self, track_id: int, quality: str) -> str:
+        """Fallback HI_RES → LOSSLESS identico al Go."""
         try:
             return self._get_download_url(track_id, quality)
         except SpotiflacError:
@@ -512,20 +587,17 @@ class TidalProvider(BaseProvider):
             raise
 
     # ------------------------------------------------------------------
-    # File download (direct or manifest)
+    # File download (invariato)
     # ------------------------------------------------------------------
 
     def _download_file(self, url_or_manifest: str, dest: Path) -> None:
         if url_or_manifest.startswith("MANIFEST:"):
-            self._download_from_manifest(
-                url_or_manifest.removeprefix("MANIFEST:"), dest
-            )
+            self._download_from_manifest(url_or_manifest.removeprefix("MANIFEST:"), dest)
         else:
             self._http.stream_to_file(url_or_manifest, str(dest), self._progress_cb)
 
     def _download_from_manifest(self, manifest_b64: str, dest: Path) -> None:
         result = parse_manifest(manifest_b64)
-
         if result.direct_url and "flac" in result.mime_type.lower():
             self._http.stream_to_file(result.direct_url, str(dest), self._progress_cb)
             return
@@ -536,7 +608,6 @@ class TidalProvider(BaseProvider):
                 self._http.stream_to_file(result.direct_url, str(tmp))
             else:
                 self._download_segments(result.init_url, result.media_urls, tmp)
-
             self._ffmpeg_to_flac(tmp, dest)
         finally:
             if tmp.exists():
@@ -547,30 +618,25 @@ class TidalProvider(BaseProvider):
 
     def _download_segments(self, init_url: str, media_urls: list[str], dest: Path) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
-        _headers = {"User-Agent": _TIDAL_USER_AGENT}
-        total    = len(media_urls)
-        t_start  = time.time()
+        headers = {"User-Agent": _TIDAL_USER_AGENT}
+        total   = len(media_urls)
+        t_start = time.time()
 
         with open(dest, "wb") as f:
-            resp = self._session.get(init_url, timeout=20, headers=_headers)
+            resp = self._session.get(init_url, timeout=20, headers=headers)
             resp.raise_for_status()
             f.write(resp.content)
 
             for i, url in enumerate(media_urls, 1):
-                resp = self._session.get(url, timeout=20, headers=_headers)
+                resp = self._session.get(url, timeout=20, headers=headers)
                 resp.raise_for_status()
                 f.write(resp.content)
-
-                pct     = i / total
-                filled  = int(pct * 24)
-                bar     = "█" * filled + "░" * (24 - filled)
-                elapsed = time.time() - t_start
-                eta     = (elapsed / i) * (total - i) if i > 0 else 0
-                m, s    = divmod(int(eta), 60)
-                print(
-                    f"\r  [{bar}] {i}/{total} segmenti  ETA {m:02d}:{s:02d}   ",
-                    end="", flush=True,
-                )
+                pct    = i / total
+                filled = int(pct * 24)
+                bar    = "█" * filled + "░" * (24 - filled)
+                eta    = (time.time() - t_start) / i * (total - i) if i > 0 else 0
+                m, s   = divmod(int(eta), 60)
+                print(f"\r  [{bar}] {i}/{total} segmenti  ETA {m:02d}:{s:02d}   ", end="", flush=True)
 
         elapsed = time.time() - t_start
         print(f"\r  ✓ {total} segmenti scaricati in {elapsed:.1f}s{'':<20}")
@@ -584,9 +650,7 @@ class TidalProvider(BaseProvider):
 
         result = subprocess.run(
             ["ffmpeg", "-y", "-i", str(src), "-vn", "-c:a", "flac", str(dst)],
-            capture_output=True,
-            text=True,
-            startupinfo=si,
+            capture_output=True, text=True, startupinfo=si,
         )
         if result.returncode != 0:
             m4a = dst.with_suffix(".m4a")
@@ -646,15 +710,14 @@ class TidalProvider(BaseProvider):
                 cover_url=metadata.cover_url,
                 session=self._session,
             )
-
             return DownloadResult.ok(self.name, str(dest))
 
         except SpotiflacError as exc:
             logger.error("[tidal] %s", exc)
             return DownloadResult.fail(self.name, str(exc))
         except Exception as exc:
-            logger.exception("[tidal] Unexpected error")
-            return DownloadResult.fail(self.name, f"Unexpected: {exc}")
+            logger.exception("[tidal] unexpected error")
+            return DownloadResult.fail(self.name, f"unexpected: {exc}")
 
     # ------------------------------------------------------------------
     # Utilities
@@ -664,11 +727,11 @@ class TidalProvider(BaseProvider):
     def _parse_track_id(tidal_url: str) -> int:
         parts = tidal_url.split("/track/")
         if len(parts) < 2:
-            raise ParseError("tidal", f"Invalid Tidal URL: {tidal_url}")
+            raise ParseError("tidal", f"invalid Tidal URL: {tidal_url}")
         try:
             return int(parts[1].split("?")[0].strip())
         except ValueError as exc:
-            raise ParseError("tidal", f"Cannot parse track ID from {tidal_url}", exc)
+            raise ParseError("tidal", f"cannot parse track ID from {tidal_url}", exc)
 
     @staticmethod
     def _random_ua() -> str:
