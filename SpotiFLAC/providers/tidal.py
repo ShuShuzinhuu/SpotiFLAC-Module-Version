@@ -175,16 +175,19 @@ def prime_tidal_api_list() -> None:
     try:
         refresh_tidal_api_list(force=True)
     except Exception as exc:
-        logger.warning("[tidal] failed to refresh API list from gist: %s", exc)
+        logger.warning("[tidal] failed to refresh API list: %s", exc)
+        # Fallback: salva almeno i builtin
+        with _tidal_api_list_mu:
+            state = _load_tidal_api_list_state_locked()
+            if not state["urls"]:
+                state["urls"]       = _normalize_tidal_api_urls(_TIDAL_APIS)
+                state["updated_at"] = int(time.time())
+                state["source"]     = "builtin-fallback"
+                _save_tidal_api_list_state_locked(state)
     with _tidal_api_list_mu:
         state = _load_tidal_api_list_state_locked()
         if not state["urls"]:
             logger.error("[tidal] API cache is empty after prime")
-            return
-        if state["updated_at"] == 0:
-            state["updated_at"] = int(time.time())
-            _save_tidal_api_list_state_locked(state)
-
 
 def refresh_tidal_api_list(force: bool = False) -> list[str]:
     with _tidal_api_list_mu:
@@ -192,16 +195,22 @@ def refresh_tidal_api_list(force: bool = False) -> list[str]:
         if not force and state["urls"]:
             return list(state["urls"])
         try:
-            urls = _fetch_tidal_api_urls_from_gist()
+            gist_urls = _fetch_tidal_api_urls_from_gist()
         except Exception as exc:
             logger.warning("[tidal] gist fetch failed: %s", exc)
+            gist_urls = []
+
+        # Merge: builtin + gist, deduplicati, builtin prima
+        merged = _normalize_tidal_api_urls(_TIDAL_APIS + gist_urls)
+
+        if not merged:
             if state["urls"]:
                 return list(state["urls"])
-            raise
+            raise RuntimeError("No Tidal API URLs available from any source")
 
-        state["urls"]       = urls
+        state["urls"]       = merged
         state["updated_at"] = int(time.time())
-        state["source"]     = "gist"
+        state["source"]     = "builtin+gist"
         if state["last_used_url"] not in state["urls"]:
             state["last_used_url"] = ""
         _save_tidal_api_list_state_locked(state)
