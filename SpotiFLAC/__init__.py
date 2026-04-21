@@ -28,7 +28,7 @@ from .providers import (
 )
 from .core import TrackMetadata, DownloadResult
 
-__version__ = "2.0.0"
+__version__ = "0.3.3"
 
 __all__ = [
     "SpotiFLAC",
@@ -54,6 +54,12 @@ def SpotiFLAC(
     quality:               str              = "LOSSLESS",
     first_artist_only:     bool             = False,
     log_level:             int              = logging.WARNING,
+    embed_lyrics:            bool      = False,
+    lyrics_providers:        list[str] = None,
+    lyrics_spotify_token:    str       = "",
+    lyrics_musixmatch_token: str       = "",
+    enrich_metadata:         bool      = False,
+    enrich_providers:        list[str] = None,
 ) -> None:
     """
     Scarica tracce Spotify in FLAC dai provider configurati.
@@ -87,6 +93,12 @@ def SpotiFLAC(
         use_album_subfolders  = use_album_subfolders,
         quality               = quality,
         first_artist_only     = first_artist_only,
+        embed_lyrics            = embed_lyrics,
+        lyrics_providers        = lyrics_providers or ["spotify", "musixmatch", "apple", "amazon", "lrclib"],
+        lyrics_spotify_token    = lyrics_spotify_token,
+        lyrics_musixmatch_token = lyrics_musixmatch_token,
+        enrich_metadata         = enrich_metadata,
+        enrich_providers        = enrich_providers or ["deezer", "apple", "qobuz", "tidal"]
     )
 
     try:

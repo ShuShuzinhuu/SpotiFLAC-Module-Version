@@ -677,6 +677,12 @@ class TidalProvider(BaseProvider):
             first_artist_only:   bool = False,
             allow_fallback:      bool = True,
             quality:             str  = "LOSSLESS",
+            embed_lyrics:            bool = False,
+            lyrics_providers:        list[str] | None = None,
+            lyrics_spotify_token:    str = "",
+            lyrics_musixmatch_token: str = "",
+            enrich_metadata:         bool = False,
+            enrich_providers:        list[str] | None = None,
     ) -> DownloadResult:
         try:
             tidal_url = self.resolve_spotify_to_tidal(
@@ -709,6 +715,12 @@ class TidalProvider(BaseProvider):
                 first_artist_only=first_artist_only,
                 cover_url=metadata.cover_url,
                 session=self._session,
+                embed_lyrics            = embed_lyrics,
+                lyrics_providers        = lyrics_providers,
+                lyrics_spotify_token    = lyrics_spotify_token,
+                lyrics_musixmatch_token = lyrics_musixmatch_token,
+                enrich                  = enrich_metadata,
+                enrich_providers        = enrich_providers,
             )
             return DownloadResult.ok(self.name, str(dest))
 

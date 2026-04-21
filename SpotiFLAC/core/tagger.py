@@ -1,6 +1,6 @@
+# SpotiFLAC/core/tagger.py
 """
-Tagger FLAC centralizzato.
-Rimuove la duplicazione di _embed_metadata presente in qobuzDL, tidalDL, spotidownloaderDL.
+Tagger FLAC centralizzato — con metadata enrichment multi-provider e lyrics multi-provider.
 """
 from __future__ import annotations
 import logging
@@ -19,61 +19,128 @@ SOURCE_TAG = "https://github.com/ShuShuzinhuu/SpotiFLAC-Module-Version"
 
 
 def embed_metadata(
-    filepath:          str | Path,
-    metadata:          TrackMetadata,
-    *,
-    first_artist_only: bool  = False,
-    cover_url:         str   = "",
-    cover_data:        bytes | None = None,
-    session:           requests.Session | None = None,
-    extra_tags:        dict[str, str] | None = None,
-    multi_artist:      bool  = True,
-    embed_lyrics:      bool = False,
+        filepath:          str | Path,
+        metadata:          TrackMetadata,
+        *,
+        first_artist_only: bool  = False,
+        cover_url:         str   = "",
+        cover_data:        bytes | None = None,
+        session:           requests.Session | None = None,
+        extra_tags:        dict[str, str] | None = None,
+        multi_artist:      bool  = True,
+        # Lyrics options
+        embed_lyrics:         bool = False,
+        lyrics_providers:     list[str] | None = None,
+        lyrics_spotify_token: str = "",
+        lyrics_musixmatch_token: str = "",
+        # Metadata enrichment options
+        enrich:           bool = False,
+        enrich_providers: list[str] | None = None,
 ) -> None:
     """
-    Scrive i tag Vorbis Comment in un file FLAC e opzionalmente
-    embeds la copertina da URL o da bytes già scaricati.
+    Scrive i tag Vorbis Comment in un file FLAC, opzionalmente embed cover,
+    testi (da più provider) e metadati arricchiti (label, BPM, genere…).
 
-    Raises SpotiflacError(FILE_IO) se mutagen fallisce.
+    Args:
+        filepath:                Path del file FLAC.
+        metadata:                TrackMetadata Spotify.
+        first_artist_only:       Usa solo il primo artista.
+        cover_url:               URL copertina (scaricata se cover_data è None).
+        cover_data:              Byte della copertina (già scaricata).
+        session:                 requests.Session riutilizzabile.
+        extra_tags:              Tag aggiuntivi liberi.
+        multi_artist:            Scrivi ARTIST/ALBUMARTIST multipli.
+        embed_lyrics:            Abilita fetch testi multi-provider.
+        lyrics_providers:        Lista provider testi in ordine.
+                                 Default: ["spotify","musixmatch","apple","amazon","lrclib"]
+        lyrics_spotify_token:    Cookie sp_dc Spotify (per lyrics Spotify).
+        lyrics_musixmatch_token: Token Musixmatch desktop.
+        enrich:                  Abilita metadata enrichment multi-provider.
+        enrich_providers:        Lista provider enrichment in ordine.
+                                 Default: ["deezer","apple","qobuz","tidal"]
     """
     path = Path(filepath)
     if not path.exists():
         raise SpotiflacError(ErrorKind.FILE_IO, f"File not found: {path}")
 
-    # Scarica cover se necessario
-    if not cover_data and cover_url:
-        cover_data = _fetch_cover(cover_url, session)
+    # ------------------------------------------------------------------ #
+    # 1. Metadata enrichment                                               #
+    # ------------------------------------------------------------------ #
+    enriched_tags: dict[str, str] = {}
+    enriched_cover_url: str = ""
 
+    if enrich:
+        try:
+            from .metadata_enrichment import enrich_metadata as _enrich
+            enriched = _enrich(
+                track_name  = metadata.title,
+                artist_name = metadata.first_artist,
+                isrc        = metadata.isrc,
+                providers   = enrich_providers,
+            )
+            enriched_tags      = enriched.as_tags()
+            enriched_cover_url = enriched.cover_url_hd
+            logger.debug("[tagger] enriched: %s", list(enriched_tags.keys()))
+        except Exception as exc:
+            logger.warning("[tagger] enrichment failed: %s", exc)
+
+    # ------------------------------------------------------------------ #
+    # 2. Cover art                                                         #
+    # ------------------------------------------------------------------ #
+    if not cover_data:
+        # Preferisci cover HD dall'enrichment, poi quella di Spotify
+        best_cover = enriched_cover_url or cover_url or metadata.cover_url
+        if best_cover:
+            cover_data = _fetch_cover(best_cover, session)
+
+    # ------------------------------------------------------------------ #
+    # 3. Lyrics                                                            #
+    # ------------------------------------------------------------------ #
+    lyrics: str | None = None
+
+    if embed_lyrics and metadata.title and metadata.first_artist:
+        try:
+            from .lyrics import fetch_lyrics
+            lyrics = fetch_lyrics(
+                track_name       = metadata.title,
+                artist_name      = metadata.first_artist,
+                album_name       = metadata.album,
+                duration_s       = metadata.duration_ms // 1000,
+                track_id         = metadata.id,
+                isrc             = metadata.isrc,
+                providers        = lyrics_providers,
+                spotify_token    = lyrics_spotify_token,
+                musixmatch_token = lyrics_musixmatch_token,
+            )
+        except Exception as exc:
+            logger.warning("[tagger] lyrics fetch failed: %s", exc)
+
+    # ------------------------------------------------------------------ #
+    # 4. Write FLAC tags                                                   #
+    # ------------------------------------------------------------------ #
     try:
         audio = FLAC(str(path))
-        audio.delete()  # rimuove tag preesistenti
+        audio.delete()
 
         tags = metadata.as_flac_tags(first_artist_only=first_artist_only)
         tags["DESCRIPTION"] = SOURCE_TAG
 
-        lyrics: str | None = None
-        if embed_lyrics and metadata.title and metadata.first_artist:
-            from .lyrics import fetch_lyrics
-            try:
-                lyrics = fetch_lyrics(
-                    metadata.title,
-                    metadata.first_artist,
-                    metadata.album,
-                    metadata.duration_ms // 1000,
-                )
-            except Exception as exc:
-                logger.warning("Lyrics fetch failed for %s: %s", path.name, exc)
+        # Enriched tags hanno precedenza su extra_tags solo per campi assenti
+        merged_extra: dict[str, str] = {**enriched_tags}
+        if extra_tags:
+            merged_extra.update(extra_tags)  # extra_tags espliciti vincono sempre
+
         if lyrics:
             tags["LYRICS"] = lyrics
-            logger.debug("Lyrics embedded: %s chars", len(lyrics))
+            logger.debug("[tagger] lyrics embedded (%d chars)", len(lyrics))
 
-        if extra_tags:
-            tags.update(extra_tags)
+        if merged_extra:
+            tags.update(merged_extra)
+
         for key, val in tags.items():
-        # ARTIST e ALBUMARTIST: scrivi un tag per artista se multi_artist=True
             if multi_artist and key in ("ARTIST", "ALBUMARTIST") and "," in val:
                 artists = [a.strip() for a in val.split(",") if a.strip()]
-                audio[key] = artists      # mutagen accetta lista → tag multipli
+                audio[key] = artists
             else:
                 audio[key] = val
 
@@ -85,7 +152,7 @@ def embed_metadata(
             audio.add_picture(pic)
 
         audio.save()
-        logger.debug("Metadata embedded: %s", path.name)
+        logger.debug("[tagger] metadata embedded: %s", path.name)
 
     except SpotiflacError:
         raise
@@ -98,10 +165,6 @@ def embed_metadata(
 
 
 def _fetch_cover(url: str, session: requests.Session | None) -> bytes | None:
-    """
-    Scarica la cover art. Ritorna None silenziosamente in caso di errore
-    (la cover mancante non deve bloccare il download).
-    """
     if not url:
         return None
     try:
@@ -109,16 +172,14 @@ def _fetch_cover(url: str, session: requests.Session | None) -> bytes | None:
         res = s.get(url, timeout=15)
         if res.status_code == 200:
             return res.content
-        logger.warning("Cover download returned HTTP %s for %s", res.status_code, url)
+        logger.warning("[tagger] cover HTTP %s for %s", res.status_code, url)
     except Exception as exc:
-        logger.warning("Cover download failed (%s): %s", url, exc)
+        logger.warning("[tagger] cover download failed (%s): %s", url, exc)
     return None
 
 
 def max_resolution_spotify_cover(url: str) -> str:
-    """
-    Converte un URL immagine Spotify nella variante a massima risoluzione.
-    """
+    """Converte URL immagine Spotify alla variante massima risoluzione."""
     import re
     if "i.scdn.co/image/" in url:
         return re.sub(r"(ab67616d0000)[a-z0-9]+", r"\g<1>b273", url)
