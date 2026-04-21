@@ -1,13 +1,3 @@
-"""
-QobuzProvider — migliorato rispetto all'implementazione Go di riferimento.
-
-Principali miglioramenti vs versione originale:
-1. Fetch parallelo degli stream URL (ThreadPoolExecutor, prima risposta vince)
-2. Catena fallback qualità: 27 → 7 → 6 (allineata al Go GetDownloadURL)
-3. Retry con backoff esponenziale per ogni singola API
-4. Parsing risposta più robusto (download_url / url / link / data.url)
-5. record_success/record_failure applicati correttamente dopo il fetch parallelo
-"""
 from __future__ import annotations
 
 import hashlib
@@ -19,7 +9,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from dataclasses import dataclass, field
-from typing import Callable
 
 import requests
 
@@ -54,7 +43,7 @@ _DEFAULT_UA = (
 )
 _CREDS_TTL        = 24 * 3600
 _PROBE_ISRC       = "USUM71703861"
-_OPEN_URL         = "https://open.qobuz.com/track/1"
+_OPEN_URL         = "https://open.qobuz.com/track/"
 _CREDS_CACHE_FILE = os.path.join(
     os.path.expanduser("~"), ".cache", "spotiflac", "qobuz-credentials.json"
 )
@@ -66,14 +55,22 @@ _API_CONFIG_RE = re.compile(
     r'app_id:"(?P<app_id>\d{9})",app_secret:"(?P<app_secret>[a-f0-9]{32})"'
 )
 
+# Lista completa delle API (GET + POST)
 _STREAM_APIS: list[str] = [
     "https://dab.yeet.su/api/stream?trackId=",
     "https://dabmusic.xyz/api/stream?trackId=",
     "https://qbz.afkarxyz.qzz.io/api/track/",
     "https://qobuz.spotbye.qzz.io/api/track/",
+    "https://qobuz.squid.wtf/api/download-music?country=US&track_id=",
+    "https://dl.musicdl.me/qobuz/download",
+    "https://api.zarz.moe/dl/qbz",
 ]
 
-# Catena fallback qualità allineata 1:1 al Go (normalizeQobuzQualityCode + GetDownloadURL)
+_MUSICDL_APIS = {
+    "https://dl.musicdl.me/qobuz/download",
+    "https://api.zarz.moe/dl/qbz",
+}
+
 _QUALITY_FALLBACK: dict[str, list[str]] = {
     "27": ["27", "7", "6"],
     "7":  ["7", "6"],
@@ -90,7 +87,6 @@ _RETRY_DELAY_S = 0.5
 # ---------------------------------------------------------------------------
 # Credentials
 # ---------------------------------------------------------------------------
-
 @dataclass
 class QobuzCredentials:
     app_id:          str
@@ -153,7 +149,7 @@ def _save_cached_credentials(creds: QobuzCredentials) -> None:
 
 def _scrape_credentials(session: requests.Session) -> QobuzCredentials:
     headers = {"User-Agent": _DEFAULT_UA}
-    resp    = session.get(_OPEN_URL, headers=headers, timeout=15)
+    resp    = session.get(f"{_OPEN_URL}1", headers=headers, timeout=15)
     resp.raise_for_status()
 
     m = _BUNDLE_RE.search(resp.text)
@@ -179,9 +175,8 @@ def _scrape_credentials(session: requests.Session) -> QobuzCredentials:
 
 
 # ---------------------------------------------------------------------------
-# Signature (invariata)
+# Signature & API Helpers
 # ---------------------------------------------------------------------------
-
 def _compute_signature(path: str, params: dict, timestamp: str, secret: str) -> str:
     normalized = path.strip("/").replace("/", "")
     excluded   = {"app_id", "request_ts", "request_sig"}
@@ -203,17 +198,18 @@ def _build_stream_url(api_base: str, track_id: int, quality: str) -> str:
     return f"{api_base}{track_id}?quality={quality}"
 
 
-# ---------------------------------------------------------------------------
-# NUOVO: fetch singola API con retry + backoff esponenziale
-# Equivalente a fetchQobuzURLSingleAttempt nel Go
-# ---------------------------------------------------------------------------
+def _map_musicdl_quality(quality: str) -> str:
+    if quality == "27":
+        return "hi-res-max"
+    if quality == "7":
+        return "hi-res"
+    return "cd"
 
+
+# ---------------------------------------------------------------------------
+# Fetch logica per API miste (GET / POST)
+# ---------------------------------------------------------------------------
 def _extract_stream_url_from_json(data: dict) -> str | None:
-    """
-    Estrae lo stream URL da un payload JSON nel formato usato dalle varie API.
-    Porta il pattern extractQobuzDownloadURLFromBody del Go che controlla
-    download_url / url / link sia al livello root che dentro 'data'.
-    """
     for key in ("download_url", "url", "link"):
         val = data.get(key)
         if isinstance(val, str) and val.strip():
@@ -235,15 +231,8 @@ def _fetch_stream_url_once(
         quality:   str,
         timeout_s: int = _API_TIMEOUT_S,
 ) -> str:
-    """
-    Interroga una singola API con retry esponenziale.
-    Porta fetchQobuzURLSingleAttempt dal Go:
-      - retry su 5xx, 429, timeout, connection reset
-      - no retry su 4xx diversi da 429
-      - backoff 0.5s → 1s → 2s
-    """
-    url       = _build_stream_url(api_base, track_id, quality)
-    delay     = _RETRY_DELAY_S
+    is_musicdl = api_base in _MUSICDL_APIS
+    delay      = _RETRY_DELAY_S
     last_err: Exception = RuntimeError("no attempts made")
 
     for attempt in range(_MAX_RETRIES + 1):
@@ -253,11 +242,25 @@ def _fetch_stream_url_once(
             delay *= 2
 
         try:
-            resp = requests.get(
-                url,
-                headers={"User-Agent": _DEFAULT_UA},
-                timeout=timeout_s,
-            )
+            if is_musicdl:
+                payload = {
+                    "quality": _map_musicdl_quality(quality),
+                    "upload_to_r2": False,
+                    "url": f"{_OPEN_URL}{track_id}"
+                }
+                resp = requests.post(
+                    api_base,
+                    json=payload,
+                    headers={"User-Agent": _DEFAULT_UA},
+                    timeout=timeout_s,
+                )
+            else:
+                url = _build_stream_url(api_base, track_id, quality)
+                resp = requests.get(
+                    url,
+                    headers={"User-Agent": _DEFAULT_UA},
+                    timeout=timeout_s,
+                )
 
             if resp.status_code >= 500:
                 last_err = RuntimeError(f"HTTP {resp.status_code}")
@@ -267,7 +270,6 @@ def _fetch_stream_url_once(
                 last_err = RuntimeError("rate limited")
                 continue
             if resp.status_code != 200:
-                # 4xx non retryabile
                 raise RuntimeError(f"HTTP {resp.status_code}")
 
             text = resp.text.strip()
@@ -275,7 +277,6 @@ def _fetch_stream_url_once(
                 last_err = RuntimeError("empty response body")
                 continue
             if text.startswith("<"):
-                # HTML di errore invece di JSON
                 raise RuntimeError("received HTML instead of JSON")
 
             try:
@@ -288,7 +289,6 @@ def _fetch_stream_url_once(
                 last_err = RuntimeError("unexpected JSON type")
                 continue
 
-            # Controlla errori applicativi espliciti
             if isinstance(data.get("error"), str) and data["error"].strip():
                 raise RuntimeError(data["error"].strip())
             if isinstance(data.get("detail"), str) and data["detail"].strip():
@@ -315,24 +315,12 @@ def _fetch_stream_url_once(
     raise last_err
 
 
-# ---------------------------------------------------------------------------
-# NUOVO: fetch parallelo di tutte le API (prima risposta vince)
-# Equivalente a getQobuzDownloadURLParallel nel Go
-# ---------------------------------------------------------------------------
-
 def _fetch_stream_url_parallel(
         apis:      list[str],
         track_id:  int,
         quality:   str,
         timeout_s: int = _API_TIMEOUT_S,
 ) -> tuple[str, str]:
-    """
-    Interroga tutte le API simultaneamente e ritorna (api_url, stream_url)
-    della prima risposta valida. Le future rimanenti vengono cancellate.
-
-    Porta getQobuzDownloadURLParallel dal Go:
-      goroutine per ogni API → resultChan → prima risposta vince.
-    """
     if not apis:
         raise SpotiflacError(ErrorKind.UNAVAILABLE, "no stream APIs configured", "qobuz")
 
@@ -352,7 +340,7 @@ def _fetch_stream_url_parallel(
                 logger.debug("[qobuz] parallel: got URL from %s in %.2fs", api, time.time() - start)
                 for other in futures:
                     if other is not fut:
-                        other.cancel()
+                        other.cancel() # Fix 1: Lasciato intatto
                 return api, stream_url
             except Exception as exc:
                 err_msg = str(exc)[:80]
@@ -370,7 +358,6 @@ def _fetch_stream_url_parallel(
 # ---------------------------------------------------------------------------
 # QobuzProvider
 # ---------------------------------------------------------------------------
-
 class QobuzProvider(BaseProvider):
     name = "qobuz"
 
@@ -384,37 +371,36 @@ class QobuzProvider(BaseProvider):
         self._creds:      QobuzCredentials | None = None
         self._creds_lock = threading.Lock()
 
-    # ------------------------------------------------------------------
-    # Credential management
-    # ------------------------------------------------------------------
-
     def _get_credentials(self, force_refresh: bool = False) -> QobuzCredentials:
+        # Fix 3: Lock rilasciato durante lo scrape
         with self._creds_lock:
             if not force_refresh and self._creds and self._creds.is_fresh():
                 return self._creds
-
             disk = _load_cached_credentials()
             if not force_refresh and disk and disk.is_fresh():
                 self._creds = disk
                 return self._creds
 
-            try:
-                scraped = _scrape_credentials(self._session)
-                if self._probe_credentials(scraped):
-                    self._creds = scraped
-                    _save_cached_credentials(scraped)
-                    logger.info("[qobuz] fresh credentials (app_id=%s)", scraped.app_id)
-                    return self._creds
-                raise RuntimeError("scraped credentials failed probe")
-            except Exception as exc:
-                logger.warning("[qobuz] credential refresh failed: %s", exc)
+        # Scrape fuori dal lock (può essere lento)
+        scraped: QobuzCredentials | None = None
+        try:
+            candidate = _scrape_credentials(self._session)
+            if self._probe_credentials(candidate):
+                scraped = candidate
+                _save_cached_credentials(scraped)
+                logger.info("[qobuz] fresh credentials (app_id=%s)", scraped.app_id)
+        except Exception as exc:
+            logger.warning("[qobuz] credential refresh failed: %s", exc)
 
+        with self._creds_lock:
+            if scraped:
+                self._creds = scraped
+                return self._creds
             if disk:
                 self._creds = disk
                 return self._creds
             if self._creds:
                 return self._creds
-
             logger.warning("[qobuz] using embedded fallback credentials")
             self._creds = QobuzCredentials.default()
             return self._creds
@@ -426,10 +412,6 @@ class QobuzProvider(BaseProvider):
         except Exception:
             return False
 
-    # ------------------------------------------------------------------
-    # Signed request
-    # ------------------------------------------------------------------
-
     def _do_signed_get(
             self,
             path:               str,
@@ -437,6 +419,7 @@ class QobuzProvider(BaseProvider):
             creds:              QobuzCredentials | None = None,
             force_refresh:      bool = False,
             use_fallback_token: bool = False,
+            _depth:             int  = 0,         # Fix 4: guardia anti-loop
     ) -> requests.Response:
         if creds is None:
             creds = self._get_credentials(force_refresh=force_refresh)
@@ -456,19 +439,20 @@ class QobuzProvider(BaseProvider):
 
         resp = self._session.get(url, params=req_params, headers=headers, timeout=20)
 
-        if resp.status_code in (400, 401):
+        # Fix 4: controllo _depth
+        if resp.status_code in (400, 401) and _depth < 2:
             if creds.user_auth_token and not use_fallback_token and not force_refresh:
-                return self._do_signed_get(path, params, creds=creds,
-                                           force_refresh=False, use_fallback_token=True)
+                return self._do_signed_get(
+                    path, params, creds=creds,
+                    force_refresh=False, use_fallback_token=True, _depth=_depth + 1,
+                )
             if not force_refresh:
-                return self._do_signed_get(path, params,
-                                           force_refresh=True,
-                                           use_fallback_token=use_fallback_token)
+                return self._do_signed_get(
+                    path, params,
+                    force_refresh=True, use_fallback_token=use_fallback_token,
+                    _depth=_depth + 1,
+                )
         return resp
-
-    # ------------------------------------------------------------------
-    # Track lookup
-    # ------------------------------------------------------------------
 
     def _search_by_isrc(self, isrc: str) -> dict:
         if isrc.startswith("qobuz_"):
@@ -495,19 +479,10 @@ class QobuzProvider(BaseProvider):
             raise TrackNotFoundError(self.name, isrc)
         return items[0]
 
-    # ------------------------------------------------------------------
-    # NUOVO: stream URL con fetch parallelo + fallback catena qualità
-    # Equivalente a GetDownloadURL() nel Go
-    # ------------------------------------------------------------------
-
     def _get_stream_url(self, track_id: int, quality: str, allow_fallback: bool) -> str:
-        """
-        1. Ottiene le API ordinate per score (provider_stats)
-        2. Le interroga tutte in parallelo per la qualità richiesta
-        3. Se tutte falliscono e allow_fallback=True, scala 27→7→6
-        """
-        chain        = _QUALITY_FALLBACK.get(quality, [quality])
-        ordered_apis = prioritize_providers("qobuz", _STREAM_APIS)
+        chain = _QUALITY_FALLBACK.get(quality, [quality])
+        # Fix 2: Copia difensiva list(_STREAM_APIS)
+        ordered_apis = prioritize_providers("qobuz", list(_STREAM_APIS))
         if not allow_fallback:
             chain = chain[:1]
 
@@ -530,10 +505,6 @@ class QobuzProvider(BaseProvider):
             f"all quality levels exhausted for track {track_id}",
             self.name,
         )
-
-    # ------------------------------------------------------------------
-    # Public download interface
-    # ------------------------------------------------------------------
 
     def download_track(
             self,
@@ -598,10 +569,6 @@ class QobuzProvider(BaseProvider):
         except Exception as exc:
             logger.exception("[qobuz] unexpected error")
             return DownloadResult.fail(self.name, f"unexpected: {exc}")
-
-    # ------------------------------------------------------------------
-    # Utilities
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _raise_api_error(resp: requests.Response, endpoint: str) -> None:
