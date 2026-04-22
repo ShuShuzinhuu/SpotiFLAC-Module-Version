@@ -32,6 +32,7 @@ from ..core.errors import (
 )
 from ..core.http import HttpClient, RetryConfig
 from ..core.models import TrackMetadata, DownloadResult
+from ..core.musicbrainz import AsyncMBFetch
 from ..core.tagger import embed_metadata
 from .base import BaseProvider
 from ..core.console import (
@@ -690,6 +691,11 @@ class TidalProvider(BaseProvider):
             )
             track_id = self._parse_track_id(tidal_url)
 
+            mb_fetcher = None
+            if enrich_metadata and metadata.isrc:
+                # Avviamo la ricerca mentre Tidal si prepara al download
+                mb_fetcher = AsyncMBFetch(metadata.isrc)
+
             dest = self._build_output_path(
                 metadata, output_dir, filename_format,
                 position, include_track_num, use_album_track_num, first_artist_only,
@@ -710,11 +716,47 @@ class TidalProvider(BaseProvider):
             if not valid:
                 raise SpotiflacError(ErrorKind.UNAVAILABLE, err_msg, self.name)
 
+            mb_tags = {}
+            if mb_fetcher:
+                res = mb_fetcher.result()
+
+            mapping = {
+                "mbid_track":    "MUSICBRAINZ_TRACKID",
+                "mbid_album":    "MUSICBRAINZ_ALBUMID",
+                "mbid_artist":   "MUSICBRAINZ_ARTISTID",
+                "mbid_relgroup": "MUSICBRAINZ_RELEASEGROUPID",
+                "barcode":       "BARCODE",
+                "label":         "LABEL",
+                "organization":  "ORGANIZATION",
+                "country":       "RELEASECOUNTRY",
+                "script":        "SCRIPT",
+                "status":        "RELEASESTATUS",
+                "media":         "MEDIA",
+                "type":          "RELEASETYPE",
+                "artist_sort":   "ARTISTSORT",
+                "bpm":           "BPM",
+                "genre":         "GENRE"
+            }
+
+            for mb_key, tag_name in mapping.items():
+                val = res.get(mb_key)
+                if val:
+                    mb_tags[tag_name] = str(val)
+
+            # Gestione speciale DATA ORIGINALE
+            # Come richiesto, l'anno originale va nel campo DATE (sovrascrivendo quello Spotify)
+            if res.get("original_date"):
+                mb_tags["DATE"]         = res["original_date"]
+                mb_tags["ORIGINALDATE"] = res["original_date"]
+                mb_tags["ORIGINALYEAR"] = res["original_date"][:4]
+
+            # 6. Scrittura Metadati finali
             embed_metadata(
                 dest, metadata,
                 first_artist_only=first_artist_only,
                 cover_url=metadata.cover_url,
                 session=self._session,
+                extra_tags              = mb_tags,  # <--- Passiamo i tag MB qui
                 embed_lyrics            = embed_lyrics,
                 lyrics_providers        = lyrics_providers,
                 lyrics_spotify_token    = lyrics_spotify_token,

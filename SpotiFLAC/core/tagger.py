@@ -139,6 +139,35 @@ def embed_metadata(
         merged_extra: dict[str, str] = {**enriched_tags}
         if extra_tags:
             merged_extra.update(extra_tags)  # extra_tags espliciti vincono sempre
+        if merged_extra:
+            # 1. Gestione DATA: Se è presente original_date, sovrascriviamo la data di Spotify
+            if "original_date" in merged_extra and merged_extra["original_date"]:
+                tags["DATE"] = merged_extra["original_date"]
+                tags["ORIGINALDATE"] = merged_extra["original_date"]
+                tags["ORIGINALYEAR"] = merged_extra["original_date"][:4]
+
+            # 2. Mappatura ID MusicBrainz e altri metadati tecnici
+            mb_mapping = {
+                "mbid_track":    "MUSICBRAINZ_TRACKID",
+                "mbid_album":    "MUSICBRAINZ_ALBUMID",
+                "mbid_artist":   "MUSICBRAINZ_ARTISTID",
+                "mbid_relgroup": "MUSICBRAINZ_RELEASEGROUPID",
+                "barcode":       "BARCODE",
+                "label":         "LABEL",
+                "country":       "RELEASECOUNTRY",
+                "status":        "RELEASESTATUS",
+                "media":         "MEDIA",
+                "type":          "RELEASETYPE",
+                "artist_sort":   "ARTISTSORT",
+                "script":        "SCRIPT",
+                "bpm":           "BPM",
+                "genre":         "GENRE"
+            }
+
+            for mb_key, tag_name in mb_mapping.items():
+                val = merged_extra.get(mb_key)
+                if val:
+                    tags[tag_name] = str(val)
 
         if lyrics:
             tags["LYRICS"] = lyrics

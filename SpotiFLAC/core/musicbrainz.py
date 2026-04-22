@@ -103,98 +103,98 @@ def _query_recordings(query: str) -> dict:
 
     raise last_err
 
-def fetch_genre_sync(isrc: str, use_single_genre: bool = True, separator: str = "; ") -> str:
-    """
-    Logica core tradotta dal Go. Usa l'in-flight deduplication per evitare
-    che thread multipli chiamino l'API per lo stesso ISRC.
-    """
+def fetch_mb_metadata(isrc: str) -> dict:
+    """Recupera tutti i metadati disponibili da MusicBrainz via ISRC."""
     if not isrc:
-        return ""
+        return {}
 
-    cache_key = f"{isrc.strip().upper()}|{use_single_genre}|{separator}"
-
-    # 1. Controlla la Cache
+    # 1. Controllo cache (semplificato)
+    cache_key = isrc.strip().upper()
     if cache_key in _mb_cache:
         return _mb_cache[cache_key]
 
-    # 2. In-flight Deduplication (Se un altro thread sta già cercando questo ISRC, aspetta lui)
-    with _mb_inflight_mu:
-        if cache_key in _mb_inflight:
-            event = _mb_inflight[cache_key]
-            _mb_inflight_mu.release()
-            event.wait() # Aspetta che l'altro thread finisca
-            res = _mb_inflight_results.get(cache_key, "")
-            if isinstance(res, Exception):
-                return ""
-            return res
+    res = {
+        "genre": "", "original_date": "", "bpm": "", "mbid_track": "",
+        "mbid_album": "", "mbid_artist": "", "mbid_relgroup": "",
+        "label": "", "barcode": "", "organization": "",
+        "country": "", "script": "", "status": "",
+        "media": "", "type": "", "artist_sort": ""
+    }
 
-        # Siamo il primo thread a cercare questo ISRC
-        event = threading.Event()
-        _mb_inflight[cache_key] = event
-
-    # 3. Fetch Effettivo
-    final_genre = ""
-    result_err = None
     try:
         data = _query_recordings(f"isrc:{isrc}")
-        recordings = data.get("recordings", [])
-        if not recordings:
-            raise Exception("No recordings found")
+        recs = data.get("recordings", [])
+        if not recs:
+            return {}
 
-        tags = recordings[0].get("tags", [])
+        rec = recs[0]
+        res["mbid_track"] = rec.get("id", "")
+        res["original_date"] = rec.get("first-release-date", "")
+        res["bpm"] = str(rec.get("bpm", "")) if rec.get("bpm") else ""
 
-        if use_single_genre:
-            # Trova il tag con il "count" più alto
-            best_tag = ""
-            max_count = -1
-            for t in tags:
-                count = t.get("count", 0)
-                if count > max_count:
-                    max_count = count
-                    best_tag = t.get("name", "")
-            if best_tag:
-                final_genre = best_tag.title()
-        else:
-            # Prendi i primi 5 tags
+        credits = rec.get("artist-credit", [])
+        if credits:
+            artist_obj = credits[0].get("artist", {})
+            res["mbid_artist"] = artist_obj.get("id", "")
+            res["artist_sort"] = artist_obj.get("sort-name", "")
+
+        # Generi
+        all_tags = rec.get("tags", [])
+        for c in credits:
+            all_tags.extend(c.get("artist", {}).get("tags", []))
+        if all_tags:
+            sorted_tags = sorted(all_tags, key=lambda x: x.get("count", 0), reverse=True)
             genres = []
-            for t in tags:
-                genres.append(t.get("name", "").title())
-            if genres:
-                final_genre = separator.join(genres[:5])
+            for t in sorted_tags:
+                name = t.get("name", "").title()
+                if name and name not in genres: genres.append(name)
+            res["genre"] = "; ".join(genres[:5])
 
-        if final_genre:
-            _mb_cache[cache_key] = final_genre
+        # Release data
+        releases = rec.get("releases", [])
+        if releases:
+            rel = releases[0]
+            res["mbid_album"] = rel.get("id", "")
+            res["mbid_relgroup"] = rel.get("release-group", {}).get("id", "")
+            res["barcode"] = rel.get("barcode", "")
+            res["status"] = rel.get("status", "")
+            res["type"] = rel.get("release-group", {}).get("primary-type", "")
+            lbl_info = rel.get("label-info", [])
+            if lbl_info:
+                res["label"] = lbl_info[0].get("label", {}).get("name", "")
+                res["organization"] = res["label"]
+            res["country"] = rel.get("country", "")
+            res["script"] = rel.get("text-representation", {}).get("script", "")
+            media = rel.get("media", [])
+            if media: res["media"] = media[0].get("format", "")
 
+        _mb_cache[cache_key] = res
     except Exception as e:
-        result_err = e
-        logger.debug("[musicbrainz] Lookup failed for %s: %s", isrc, e)
+        logger.debug("[musicbrainz] lookup failed: %s", e)
 
-    finally:
-        # 4. Libera i thread in attesa
-        with _mb_inflight_mu:
-            _mb_inflight_results[cache_key] = result_err if result_err else final_genre
-            del _mb_inflight[cache_key]
-            event.set()
-
-    return final_genre
+    return res
 
 # =====================================================================
-# Wrapper Asincrono usato da Qobuz.py e Tidal.py
+# Wrapper Asincrono aggiornato per Metadati Completi
 # =====================================================================
-class AsyncGenreFetch:
+class AsyncMBFetch:
     """
-    Avvia la ricerca di MusicBrainz in background per non bloccare i download,
-    sfruttando sotto il cofano il potente motore di cache e rate-limit.
+    Avvia la ricerca di MusicBrainz in background.
+    Ora restituisce un dizionario completo con tutti i metadati professionali.
     """
-    # Usiamo un thread pool condiviso per tutte le ricerche
+    # Thread pool condiviso
     _executor = ThreadPoolExecutor(max_workers=4)
 
-    def __init__(self, isrc: str, use_single_genre: bool = True, separator: str = "; "):
+    def __init__(self, isrc: str):
         self.isrc = isrc
-        self.future = self._executor.submit(fetch_genre_sync, isrc, use_single_genre, separator)
+        # Chiama la nuova funzione fetch_mb_metadata che restituisce il dict
+        self.future = self._executor.submit(fetch_mb_metadata, isrc)
 
-    def result(self) -> str:
+    def result(self) -> dict:
+        """Ritorna il dizionario dei metadati. Se fallisce, ritorna un dict vuoto."""
         try:
+            # Aspettiamo il risultato (max 15 secondi)
             return self.future.result(timeout=15)
-        except Exception:
-            return ""
+        except Exception as e:
+            logger.debug("[musicbrainz] Async fetch failed: %s", e)
+            return {}

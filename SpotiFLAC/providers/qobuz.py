@@ -21,7 +21,7 @@ from ..core.models import TrackMetadata, DownloadResult
 from ..core.tagger import embed_metadata
 from ..core.provider_stats import record_success, record_failure, prioritize_providers
 from .base import BaseProvider
-from ..core.musicbrainz import AsyncGenreFetch
+from ..core.musicbrainz import AsyncMBFetch
 from ..core.download_validation import validate_downloaded_track
 from ..core.console import (
     print_source_banner, print_api_failure, print_quality_fallback,
@@ -535,16 +535,18 @@ class QobuzProvider(BaseProvider):
             if not metadata.isrc:
                 raise TrackNotFoundError(self.name, "no ISRC provided")
 
-            genre_fetch = (
-                AsyncGenreFetch(metadata.isrc, use_single_genre=single_genre)
-                if embed_genre else None
-            )
+            # 1. Avvio Fetch MusicBrainz in parallelo (se richiesto l'arricchimento)
+            mb_fetcher = None
+            if (enrich_metadata or embed_genre) and metadata.isrc:
+                mb_fetcher = AsyncMBFetch(metadata.isrc)
 
+            # 2. Ricerca traccia su Qobuz
             track    = self._search_by_isrc(metadata.isrc)
             track_id = track.get("id")
             if not track_id:
                 raise TrackNotFoundError(self.name, metadata.isrc)
 
+            # 3. Costruzione percorso e controllo esistenza
             dest = self._build_output_path(
                 metadata, output_dir, filename_format,
                 position, include_track_num, use_album_track_num, first_artist_only,
@@ -552,24 +554,56 @@ class QobuzProvider(BaseProvider):
             if self._file_exists(dest):
                 return DownloadResult.ok(self.name, str(dest))
 
+            # 4. Ottenimento URL e download effettivo
             stream_url = self._get_stream_url(track_id, quality, allow_fallback)
             self._http.stream_to_file(stream_url, str(dest), self._progress_cb)
 
+            # 5. Validazione integrità file
             expected_s = metadata.duration_ms // 1000
             valid, err = validate_downloaded_track(str(dest), expected_s)
             if not valid:
                 raise SpotiflacError(ErrorKind.UNAVAILABLE, err, self.name)
 
-            genre = genre_fetch.result() if genre_fetch else ""
-            if genre:
-                logger.debug("[qobuz] genre from MusicBrainz: %s", genre)
+            # 6. RECUPERO DATI MUSICBRAINZ E MAPPATURA TAG
+            mb_tags = {}
+            if mb_fetcher:
+                res = mb_fetcher.result()
+                if res:
+                    mapping = {
+                        "mbid_track":    "MUSICBRAINZ_TRACKID",
+                        "mbid_album":    "MUSICBRAINZ_ALBUMID",
+                        "mbid_artist":   "MUSICBRAINZ_ARTISTID",
+                        "mbid_relgroup": "MUSICBRAINZ_RELEASEGROUPID",
+                        "barcode":       "BARCODE",
+                        "label":         "LABEL",
+                        "organization":  "ORGANIZATION",
+                        "country":       "RELEASECOUNTRY",
+                        "script":        "SCRIPT",
+                        "status":        "RELEASESTATUS",
+                        "media":         "MEDIA",
+                        "type":          "RELEASETYPE",
+                        "artist_sort":   "ARTISTSORT",
+                        "bpm":           "BPM",
+                        "genre":         "GENRE"
+                    }
 
+                    for mb_key, tag_name in mapping.items():
+                        val = res.get(mb_key)
+                        if val:
+                            mb_tags[tag_name] = str(val)
+
+                    if res.get("original_date"):
+                        mb_tags["DATE"]         = res["original_date"]
+                        mb_tags["ORIGINALDATE"] = res["original_date"]
+                        mb_tags["ORIGINALYEAR"] = res["original_date"][:4]
+
+            # 7. Scrittura Metadati finali
             embed_metadata(
                 dest, metadata,
-                first_artist_only = first_artist_only,
-                cover_url         = metadata.cover_url,
-                session           = self._session,
-                extra_tags        = {"GENRE": genre} if genre else None,
+                first_artist_only       = first_artist_only,
+                cover_url               = metadata.cover_url,
+                session                 = self._session,
+                extra_tags              = mb_tags,
                 embed_lyrics            = embed_lyrics,
                 lyrics_providers        = lyrics_providers,
                 lyrics_spotify_token    = lyrics_spotify_token,
