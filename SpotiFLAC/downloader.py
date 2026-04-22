@@ -38,7 +38,7 @@ class DownloadOptions:
     use_artist_subfolders: bool           = False
     use_album_subfolders:  bool           = False
     first_artist_only:    bool            = False
-    quality:              str             = "LOSSLESS"
+    quality:              str             = "HI-RES"
     allow_fallback:       bool            = True
     inter_track_delay_s:  float           = 1.5
 
