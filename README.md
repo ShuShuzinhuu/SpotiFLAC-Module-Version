@@ -240,7 +240,7 @@ chmod +x SpotiFLAC-Linux-arm64
 | **`loop`** | `int` | `None` | Duration in minutes to keep retrying failed downloads. |
 | **`quality`** | `str` | `"LOSSLESS"` | Download quality (e.g., "LOSSLESS", "HI_RES"). |
 | **`embed_lyrics`** | `bool` | `False` | Whether to fetch and embed synchronized lyrics (LRC) into the audio file. |
-| **`lyrics_providers`** | `list` | `["spotify", "musixmatch", "apple", "amazon", "lrclib"]` | Priority order of lyrics providers to attempt. |
+| **`lyrics_providers`** | `list` | `["spotify", "musixmatch", "amazon", "lrclib"]` | Priority order of lyrics providers to attempt. |
 | **`lyrics_spotify_token`** | `str` | `""` | Spotify `sp_dc` cookie required for Spotify lyrics. |
 | **`lyrics_musixmatch_token`** | `str` | `""` | Musixmatch `usertoken` required for Musixmatch lyrics. |
 | **`enrich_metadata`** | `bool` | `False` | Enables multi-provider metadata enrichment (High-res covers, BPM, Labels, etc.). |
