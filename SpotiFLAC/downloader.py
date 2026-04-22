@@ -42,6 +42,20 @@ class DownloadOptions:
     allow_fallback:       bool            = True
     inter_track_delay_s:  float           = 1.5
 
+    # ── Lyrics ────────────────────────────────────────────────────────
+    embed_lyrics:            bool          = False
+    lyrics_providers:        list[str]     = field(
+        default_factory=lambda: ["spotify", "musixmatch", "apple", "amazon", "lrclib"]
+    )
+    lyrics_spotify_token:    str           = ""   # cookie sp_dc
+    lyrics_musixmatch_token: str           = ""   # token desktop Musixmatch
+
+    # ── Metadata enrichment ───────────────────────────────────────────
+    enrich_metadata:    bool           = False
+    enrich_providers:   list[str]      = field(
+        default_factory=lambda: ["deezer", "apple", "qobuz", "tidal"]
+    )
+
 
 # ---------------------------------------------------------------------------
 # Provider factory
@@ -61,9 +75,9 @@ def _build_provider(name: str) -> BaseProvider | None:
         return native[name]()
 
     adapters = {
-        "amazon":  ("providers.amazon_adapter",  "AmazonProvider"),
-        "deezer":  ("providers.deezer_adapter",  "DeezerProvider"),
-        "youtube": ("providers.youtube_adapter", "YouTubeProvider"),
+        "amazon":  ("providers.amazon",  "AmazonProvider"),
+        "deezer":  ("providers.deezer",  "DeezerProvider"),
+        "youtube": ("providers.youtube", "YouTubeProvider"),
     }
     if name not in adapters:
         logger.warning("Unknown provider: %s", name)
@@ -116,6 +130,13 @@ def download_one(
             use_album_track_num = opts.use_track_numbers,
             first_artist_only   = opts.first_artist_only,
             allow_fallback      = opts.allow_fallback,
+
+            embed_lyrics            = opts.embed_lyrics,
+            lyrics_providers        = opts.lyrics_providers,
+            lyrics_spotify_token    = opts.lyrics_spotify_token,
+            lyrics_musixmatch_token = opts.lyrics_musixmatch_token,
+            enrich_metadata         = opts.enrich_metadata,
+            enrich_providers        = opts.enrich_providers,
         )
 
         if result.success:

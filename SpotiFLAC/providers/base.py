@@ -57,9 +57,15 @@ class BaseProvider(ABC):
         use_album_track_num: bool = False,
         first_artist_only:   bool = False,
         allow_fallback:      bool = True,
+        embed_lyrics: bool = False,
+        lyrics_providers: list[str] | None = None,
+        lyrics_spotify_token: str = "",
+        lyrics_musixmatch_token: str = "",
+        enrich_metadata: bool = False,
+        enrich_providers: list[str] | None = None,
     ) -> DownloadResult:
         """Scarica la traccia e ritorna un DownloadResult (mai eccezioni al caller)."""
-        ...
+        raise NotImplementedError
 
     # ------------------------------------------------------------------
     # Shared helpers
