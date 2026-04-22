@@ -36,6 +36,7 @@ def embed_metadata(
         # Metadata enrichment options
         enrich:           bool = False,
         enrich_providers: list[str] | None = None,
+        enrich_qobuz_token: str  = "",
 ) -> None:
     """
     Scrive i tag Vorbis Comment in un file FLAC, opzionalmente embed cover,
@@ -52,12 +53,13 @@ def embed_metadata(
         multi_artist:            Scrivi ARTIST/ALBUMARTIST multipli.
         embed_lyrics:            Abilita fetch testi multi-provider.
         lyrics_providers:        Lista provider testi in ordine.
-                                 Default: ["spotify","musixmatch","apple","amazon","lrclib"]
+                                 Default: ["spotify","musixmatch","amazon","lrclib"]
         lyrics_spotify_token:    Cookie sp_dc Spotify (per lyrics Spotify).
         lyrics_musixmatch_token: Token Musixmatch desktop.
         enrich:                  Abilita metadata enrichment multi-provider.
         enrich_providers:        Lista provider enrichment in ordine.
                                  Default: ["deezer","apple","qobuz","tidal"]
+        enrich_qobuz_token:      Token per l'API di Qobuz.
     """
     path = Path(filepath)
     if not path.exists():
@@ -77,6 +79,7 @@ def embed_metadata(
                 artist_name = metadata.first_artist,
                 isrc        = metadata.isrc,
                 providers   = enrich_providers,
+                qobuz_token = enrich_qobuz_token,
             )
             enriched_tags      = enriched.as_tags()
             enriched_cover_url = enriched.cover_url_hd

@@ -45,7 +45,7 @@ class DownloadOptions:
     # ── Lyrics ────────────────────────────────────────────────────────
     embed_lyrics:            bool          = False
     lyrics_providers:        list[str]     = field(
-        default_factory=lambda: ["spotify", "musixmatch", "apple", "amazon", "lrclib"]
+        default_factory=lambda: ["spotify", "musixmatch", "amazon", "lrclib"]
     )
     lyrics_spotify_token:    str           = ""   # cookie sp_dc
     lyrics_musixmatch_token: str           = ""   # token desktop Musixmatch
@@ -55,24 +55,21 @@ class DownloadOptions:
     enrich_providers:   list[str]      = field(
         default_factory=lambda: ["deezer", "apple", "qobuz", "tidal"]
     )
+    qobuz_token:        str | None     = None
 
 
 # ---------------------------------------------------------------------------
 # Provider factory
 # ---------------------------------------------------------------------------
 
-def _build_provider(name: str) -> BaseProvider | None:
-    """
-    Factory centralizzata per i provider.
-    Provider nativi implementano BaseProvider direttamente.
-    Provider legacy (amazon, deezer, youtube) sono avvolti da adapter.
-    """
+def _build_provider(name: str, opts: DownloadOptions) -> BaseProvider | None:
     from .providers.tidal import TidalProvider
     from .providers.qobuz import QobuzProvider
 
-    native = {"tidal": TidalProvider, "qobuz": QobuzProvider}
-    if name in native:
-        return native[name]()
+    if name == "tidal":
+        return TidalProvider()
+    if name == "qobuz":
+        return QobuzProvider(qobuz_token=opts.qobuz_token)
 
     adapters = {
         "amazon":  ("providers.amazon",  "AmazonProvider"),
@@ -186,7 +183,7 @@ class DownloadWorker:
     def _build_providers(self) -> list[BaseProvider]:
         result = []
         for name in self._opts.services:
-            p = _build_provider(name)
+            p = _build_provider(name, self._opts)
             if p:
                 result.append(p)
         if not result:

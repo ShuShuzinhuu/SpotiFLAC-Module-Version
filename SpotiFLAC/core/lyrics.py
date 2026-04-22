@@ -280,30 +280,6 @@ def _richsync_to_lrc(richsync_body: str) -> str:
     except Exception:
         return ""
 
-
-# --------------------------------------------------------------------------- #
-# Provider 3 — Apple Music (iTunes affiliate endpoint)                         #
-# --------------------------------------------------------------------------- #
-
-def _fetch_apple_music(
-        track_name:  str,
-        artist_name: str,
-        timeout:     int = 10,
-) -> str:
-    """
-    Apple Music non espone testi via API pubblica.
-    Questo provider usa l'iTunes Search API per verificare la presenza del brano
-    ma non può restituire il testo effettivo senza chiave MusicKit developer.
-    Ritorna "" — placeholder per futura integrazione con token MusicKit.
-    """
-    # TODO: Implementa con Apple MusicKit API se hai un developer token Apple.
-    # Endpoint: https://api.music.apple.com/v1/catalog/{storefront}/songs
-    # Header: Authorization: Bearer {developer_token}
-    #         Music-User-Token: {music_user_token}
-    logger.debug("[lyrics/apple] Apple Music lyrics richiedono MusicKit token — skipping")
-    return ""
-
-
 # --------------------------------------------------------------------------- #
 # Provider 4 — Amazon Music (via afkar API)                                   #
 # --------------------------------------------------------------------------- #
@@ -452,9 +428,6 @@ def fetch_lyrics(
                     track_name, artist_name, album_name, duration_s,
                     token=musixmatch_token,
                 )
-
-            elif provider == "apple":
-                result = _fetch_apple_music(track_name, artist_name)
 
             elif provider == "amazon":
                 result = _fetch_amazon(track_name, artist_name, isrc=isrc)

@@ -60,6 +60,7 @@ def SpotiFLAC(
     lyrics_musixmatch_token: str       = "",
     enrich_metadata:         bool      = False,
     enrich_providers:        list[str] = None,
+    qobuz_token:             str | None     = None,
 ) -> None:
     """
     Scarica tracce Spotify in FLAC dai provider configurati.
@@ -78,6 +79,7 @@ def SpotiFLAC(
         quality:               Qualità per Tidal ("LOSSLESS", "HI_RES") e Qobuz ("6", "7", "27").
         first_artist_only:     Usa solo il primo artista nei tag e filename.
         log_level:             Livello di logging (default: WARNING).
+        qobuz_token:           Token utente Qobuz (x-user-auth-token). Fallback: env QOBUZ_AUTH_TOKEN.
     """
     logging.basicConfig(
         level  = log_level,
@@ -94,11 +96,12 @@ def SpotiFLAC(
         quality               = quality,
         first_artist_only     = first_artist_only,
         embed_lyrics            = embed_lyrics,
-        lyrics_providers        = lyrics_providers or ["spotify", "musixmatch", "apple", "amazon", "lrclib"],
+        lyrics_providers        = lyrics_providers or ["spotify", "musixmatch", "amazon", "lrclib"],
         lyrics_spotify_token    = lyrics_spotify_token,
         lyrics_musixmatch_token = lyrics_musixmatch_token,
         enrich_metadata         = enrich_metadata,
-        enrich_providers        = enrich_providers or ["deezer", "apple", "qobuz", "tidal"]
+        enrich_providers        = enrich_providers or ["deezer", "apple", "qobuz", "tidal"],
+        qobuz_token             = qobuz_token,
     )
 
     try:

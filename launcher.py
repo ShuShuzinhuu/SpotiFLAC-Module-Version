@@ -65,9 +65,9 @@ def parse_args() -> argparse.Namespace:
         nargs   = "+",
         default = None,
         dest    = "lyrics_providers",
-        choices = ["spotify", "musixmatch", "apple", "amazon", "lrclib"],
+        choices = ["spotify", "musixmatch", "amazon", "lrclib"],
         metavar = "PROVIDER",
-        help    = "Provider testi in ordine. Default: spotify musixmatch apple amazon lrclib",
+        help    = "Provider testi in ordine. Default: spotify musixmatch amazon lrclib",
     )
     lyrics_grp.add_argument(
         "--spotify-token",

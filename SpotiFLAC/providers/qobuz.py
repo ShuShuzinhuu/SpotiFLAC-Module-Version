@@ -361,7 +361,7 @@ def _fetch_stream_url_parallel(
 class QobuzProvider(BaseProvider):
     name = "qobuz"
 
-    def __init__(self, timeout_s: int = 30) -> None:
+    def __init__(self, timeout_s: int = 30, qobuz_token: str | None = None) -> None:
         super().__init__(
             timeout_s = timeout_s,
             retry     = RetryConfig(max_attempts=2),
@@ -370,15 +370,19 @@ class QobuzProvider(BaseProvider):
         self._session    = self._http._session
         self._creds:      QobuzCredentials | None = None
         self._creds_lock = threading.Lock()
+        self._qobuz_token = qobuz_token or os.environ.get("QOBUZ_AUTH_TOKEN")
 
     def _get_credentials(self, force_refresh: bool = False) -> QobuzCredentials:
-        # Fix 3: Lock rilasciato durante lo scrape
         with self._creds_lock:
             if not force_refresh and self._creds and self._creds.is_fresh():
+                if self._qobuz_token and not self._creds.user_auth_token:
+                    self._creds.user_auth_token = self._qobuz_token  # ← aggiunto
                 return self._creds
             disk = _load_cached_credentials()
             if not force_refresh and disk and disk.is_fresh():
                 self._creds = disk
+                if self._qobuz_token and not self._creds.user_auth_token:
+                    self._creds.user_auth_token = self._qobuz_token  # ← aggiunto
                 return self._creds
 
         # Scrape fuori dal lock (può essere lento)
@@ -395,14 +399,14 @@ class QobuzProvider(BaseProvider):
         with self._creds_lock:
             if scraped:
                 self._creds = scraped
-                return self._creds
-            if disk:
+            elif disk:
                 self._creds = disk
-                return self._creds
-            if self._creds:
-                return self._creds
-            logger.warning("[qobuz] using embedded fallback credentials")
-            self._creds = QobuzCredentials.default()
+            elif not self._creds:
+                logger.warning("[qobuz] using embedded fallback credentials")
+                self._creds = QobuzCredentials.default()
+
+            if self._qobuz_token and not self._creds.user_auth_token:
+                self._creds.user_auth_token = self._qobuz_token  # ← aggiunto
             return self._creds
 
     def _probe_credentials(self, creds: QobuzCredentials) -> bool:

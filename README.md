@@ -55,7 +55,7 @@ from SpotiFLAC import SpotiFLAC
 SpotiFLAC(
     url="https://open.spotify.com/album/41MnTivkwTO3UUJ8DrqEJJ",
     output_dir="./MusicLibrary",
-    services=["qobuz", "amazon", "tidal", "spoti", "youtube"],
+    services=["qobuz", "amazon", "tidal", "youtube"],
     filename_format="{year} - {album}/{track}. {title}",
     use_artist_subfolders=True,
     use_album_subfolders=True,
@@ -110,15 +110,6 @@ Musixmatch offers highly accurate word-level synchronized lyrics. To use it, you
 6. Look at the requests being made and inspect their Headers or Payload.
 7. Find the usertoken parameter and copy its alphanumeric value.
 
-## Apple Music Token (MusicKit JS Key) (Optional)
-Apple Music lyrics require an official Apple Developer Account.
-
-### How to Extract Your Token
-1. You must be enrolled in the Apple Developer Program (paid).
-2. Go to the Apple Developer Console.
-3. Create a **MusicKit JS Key**.
-4. Generate the developer token using your Key ID and Team ID.
-
 ## How to Apply Tokens in SpotiFLAC
 Once you have your Spotify or Musixmatch tokens, you can pass them to SpotiFLAC in several ways:
 
@@ -130,21 +121,18 @@ The recommended approach across all systems:
 export QOBUZ_AUTH_TOKEN="YOUR_TOKEN_HERE"
 export SPOTIFY_TOKEN="YOUR_SP_DC_COOKIE"
 export MUSIXMATCH_TOKEN="YOUR_USERTOKEN"
-export APPLE_TOKEN="YOUR_MUSICKIT_TOKEN"
 ```
 ### On Windows (Command Prompt):
 ```bash
 set QOBUZ_AUTH_TOKEN="YOUR_TOKEN_HERE"
 set SPOTIFY_TOKEN="YOUR_SP_DC_COOKIE"
 set MUSIXMATCH_TOKEN="YOUR_USERTOKEN"
-set APPLE_TOKEN="YOUR_MUSICKIT_TOKEN"
 ```
 ### On Windows (PowerShell):
 ```bash
 $env:QOBUZ_AUTH_TOKEN="YOUR_TOKEN_HERE"
 $env:SPOTIFY_TOKEN="YOUR_SP_DC_COOKIE"
 $env:MUSIXMATCH_TOKEN="YOUR_USERTOKEN"
-$env:APPLE_TOKEN="YOUR_MUSICKIT_TOKEN"
 ```
 > To make it permanent on Linux/macOS, add the export line to your **~/.bashrc, ~/.zshrc**, or equivalent shell config file.
 
@@ -156,7 +144,6 @@ If you prefer using a local configuration file for environment variables (highly
 QOBUZ_AUTH_TOKEN=YOUR_QOBUZ_TOKEN
 SPOTIFY_TOKEN=YOUR_SP_DC_COOKIE
 MUSIXMATCH_TOKEN=YOUR_USERTOKEN
-APPLE_TOKEN=YOUR_MUSICKIT_TOKEN
 ```
 
 You can load this file before running the script from the terminal:
@@ -176,9 +163,9 @@ services:
 ```bash
 python launcher.py "URL" ./downloads \
     --embed-lyrics \
+    --qobuz-auth-token "YOUR_QOBUZ_TOKEN" \
     --spotify-token "YOUR_SP_DC_COOKIE" \
     --musixmatch-token "YOUR_MUSIXMATCH_USERTOKEN" \
-    --apple-token "YOUR_MUSICKIT_TOKEN"
 ```
 
 ### Python
@@ -189,9 +176,9 @@ SpotiFLAC(
     url="URL",
     output_dir="./downloads",
     embed_lyrics=True,
+    qobuz-auth-token="YOUR_QOBUZ_TOKEN" \
     lyrics_spotify_token="YOUR_SP_DC_COOKIE",
     lyrics_musixmatch_token="YOUR_MUSIXMATCH_USERTOKEN",
-lyrics_apple_token="YOUR_MUSICKIT_TOKEN"
 )
 ```
 
@@ -201,7 +188,6 @@ lyrics_apple_token="YOUR_MUSICKIT_TOKEN"
     "qobuz_token": "IL_TUO_TOKEN_QOBUZ",
     "spotify_token": "IL_TUO_COOKIE_SP_DC",
     "musixmatch_token": "IL_TUO_USERTOKEN",
-    "apple_token": "IL_TUO_MUSICKIT_TOKEN",
     "embed_lyrics": true
 }
 ```
@@ -215,7 +201,7 @@ Program can also be ran by downloading the python files and calling <code>python
 ```bash
 ./SpotiFLAC-Windows.exe url
                         output_dir
-                        [--service tidal qobuz spoti youtube amazon]
+                        [--service tidal qobuz youtube amazon]
                         [--filename-format "{title} - {artist}"]
                         [--use-track-numbers] [--use-artist-subfolders]
                         [--use-album-subfolders]
@@ -229,7 +215,7 @@ Program can also be ran by downloading the python files and calling <code>python
 chmod +x SpotiFLAC-Linux-arm64
 ./SpotiFLAC-Linux-arm64 url
                         output_dir
-                        [--service tidal qobuz spoti youtube amazon]
+                        [--service tidal qobuz youtube amazon]
                         [--filename-format "{title} - {artist}"]
                         [--use-track-numbers] [--use-artist-subfolders]
                         [--use-album-subfolders]
@@ -257,7 +243,6 @@ chmod +x SpotiFLAC-Linux-arm64
 | **`lyrics_providers`** | `list` | `["spotify", "musixmatch", "apple", "amazon", "lrclib"]` | Priority order of lyrics providers to attempt. |
 | **`lyrics_spotify_token`** | `str` | `""` | Spotify `sp_dc` cookie required for Spotify lyrics. |
 | **`lyrics_musixmatch_token`** | `str` | `""` | Musixmatch `usertoken` required for Musixmatch lyrics. |
-| **`lyrics_apple_token`** | `str` | `""` | Apple MusicKit developer token required for Apple lyrics. |
 | **`enrich_metadata`** | `bool` | `False` | Enables multi-provider metadata enrichment (High-res covers, BPM, Labels, etc.). |
 | **`enrich_providers`** | `list` | `["deezer", "apple", "qobuz", "tidal"]` | Priority order of metadata providers to attempt. |
 | **`qobuz_token`** | `str` | `None` | Optional Qobuz user auth token used as fallback for metadata resolution. |
