@@ -72,7 +72,7 @@ _TIDAL_API_GIST_URL   = "https://gist.githubusercontent.com/afkarxyz/2ce772b9433
 _TIDAL_API_CACHE_FILE = "tidal-api-urls.json"
 
 # Timeout e retry allineati al Go (tidalAPITimeoutMobile, tidalMaxRetries)
-_API_TIMEOUT_S = 25
+_API_TIMEOUT_S = 15
 _MAX_RETRIES   = 2
 _RETRY_DELAY_S = 0.5
 
@@ -676,7 +676,7 @@ class TidalProvider(BaseProvider):
             use_album_track_num: bool = False,
             first_artist_only:   bool = False,
             allow_fallback:      bool = True,
-            quality:             str  = "HI-RES",
+            quality:             str  = "LOSSLESS",
             embed_lyrics:            bool = False,
             lyrics_providers:        list[str] | None = None,
             lyrics_spotify_token:    str = "",

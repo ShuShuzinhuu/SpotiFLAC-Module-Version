@@ -24,7 +24,7 @@ _DEFAULT_UA = (
 
 _MAX_RETRIES   = 2
 _RETRY_DELAY_S = 0.5
-_API_TIMEOUT_S = 25
+_API_TIMEOUT_S = 15
 
 # Cache (porta deezerCacheTTL / deezerCacheCleanupInterval dal Go)
 _CACHE_TTL_S             = 10 * 60   # 10 minuti

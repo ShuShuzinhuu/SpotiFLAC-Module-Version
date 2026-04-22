@@ -79,7 +79,7 @@ _QUALITY_FALLBACK: dict[str, list[str]] = {
     "":   ["6"],
 }
 
-_API_TIMEOUT_S = 25
+_API_TIMEOUT_S = 15
 _MAX_RETRIES   = 2
 _RETRY_DELAY_S = 0.5
 

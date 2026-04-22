@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--quality", "-q",
-        default = "HI-RES",
+        default = "LOSSLESS",
         help    = "Quality: LOSSLESS or HI_RES (Tidal), 6/7/27 (Qobuz). Default: LOSSLESS",
     )
     parser.add_argument("--use-track-numbers",     action="store_true", dest="use_track_numbers")

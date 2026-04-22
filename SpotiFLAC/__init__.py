@@ -51,7 +51,7 @@ def SpotiFLAC(
     use_artist_subfolders: bool             = False,
     use_album_subfolders:  bool             = False,
     loop:                  int | None       = None,
-    quality:               str              = "HI-RES",
+    quality:               str              = "LOSSLESS",
     first_artist_only:     bool             = False,
     log_level:             int              = logging.WARNING,
     embed_lyrics:            bool      = False,
