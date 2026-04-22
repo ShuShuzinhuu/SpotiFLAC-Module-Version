@@ -8,6 +8,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from ..core.tagger import _print_mb_summary
 from dataclasses import dataclass, field
 
 import requests
@@ -596,6 +597,7 @@ class QobuzProvider(BaseProvider):
                         mb_tags["DATE"]         = res["original_date"]
                         mb_tags["ORIGINALDATE"] = res["original_date"]
                         mb_tags["ORIGINALYEAR"] = res["original_date"][:4]
+            _print_mb_summary(mb_tags)
 
             # 7. Scrittura Metadati finali
             embed_metadata(

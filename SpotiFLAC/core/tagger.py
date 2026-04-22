@@ -1,6 +1,12 @@
 # SpotiFLAC/core/tagger.py
 """
 Tagger FLAC centralizzato — con metadata enrichment multi-provider e lyrics multi-provider.
+
+FIX v2:
+  - ARTIST/ALBUMARTIST scritti come stringa unica con virgola (non lista)
+    per compatibilità con tutti gli editor (beets, foobar2000, picard, ecc.)
+  - Aggiunto ARTISTS/ALBUMARTISTS come tag multi-valore separato
+    per editor avanzati che li supportano (MusicBrainz Picard standard)
 """
 from __future__ import annotations
 import logging
@@ -17,6 +23,64 @@ logger = logging.getLogger(__name__)
 
 SOURCE_TAG = "https://github.com/ShuShuzinhuu/SpotiFLAC-Module-Version"
 
+
+# ---------------------------------------------------------------------------
+# MusicBrainz summary helper
+# ---------------------------------------------------------------------------
+
+def _print_mb_summary(mb_tags: dict) -> None:
+    """
+    Stampa un riepilogo dei tag aggiunti da MusicBrainz,
+    in formato analogo al messaggio "Arricchito con: ..." del tagger.
+
+    Esempio output:
+      ✦ MusicBrainz: genere: Electronic; R&B, BPM: 128, label: Republic Records,
+                     data originale: 2016-11-25, paese: US, ID MusicBrainz (3 campi)
+    """
+    if not mb_tags:
+        return
+
+    _TAG_LABELS = {
+        "GENRE":                      "genere",
+        "BPM":                        "BPM",
+        "LABEL":                      "label",
+        "ORGANIZATION":               "etichetta",
+        "DATE":                       "data originale",
+        "ORIGINALDATE":               "data originale",
+        "MUSICBRAINZ_TRACKID":        "MB track",
+        "MUSICBRAINZ_ALBUMID":        "MB album",
+        "MUSICBRAINZ_ARTISTID":       "MB artist",
+        "MUSICBRAINZ_RELEASEGROUPID": "MB rel.group",
+        "BARCODE":                    "barcode",
+        "RELEASECOUNTRY":             "paese",
+        "RELEASESTATUS":              "stato release",
+        "MEDIA":                      "supporto",
+        "RELEASETYPE":                "tipo release",
+        "ARTISTSORT":                 "artista (sort)",
+        "SCRIPT":                     "script",
+    }
+
+    mb_ids     = {k: v for k, v in mb_tags.items() if k.startswith("MUSICBRAINZ_")}
+    skip_dupes = {"ORIGINALDATE", "ORIGINALYEAR"}  # alias di DATE, già mostrati tramite DATE
+    important  = {k: v for k, v in mb_tags.items()
+                  if k not in mb_ids and k not in skip_dupes}
+
+    parts = []
+    for tag, val in important.items():
+        label     = _TAG_LABELS.get(tag, tag.lower())
+        short_val = str(val)[:35] + ("…" if len(str(val)) > 35 else "")
+        parts.append(f"{label}: {short_val}")
+
+    if mb_ids:
+        parts.append(f"ID MusicBrainz ({len(mb_ids)} campi)")
+
+    if parts:
+        print(f"  ✦ MusicBrainz: {', '.join(parts)}")
+
+
+# ---------------------------------------------------------------------------
+# Main embed function
+# ---------------------------------------------------------------------------
 
 def embed_metadata(
         filepath:          str | Path,
@@ -38,29 +102,6 @@ def embed_metadata(
         enrich_providers: list[str] | None = None,
         enrich_qobuz_token: str  = "",
 ) -> None:
-    """
-    Scrive i tag Vorbis Comment in un file FLAC, opzionalmente embed cover,
-    testi (da più provider) e metadati arricchiti (label, BPM, genere…).
-
-    Args:
-        filepath:                Path del file FLAC.
-        metadata:                TrackMetadata Spotify.
-        first_artist_only:       Usa solo il primo artista.
-        cover_url:               URL copertina (scaricata se cover_data è None).
-        cover_data:              Byte della copertina (già scaricata).
-        session:                 requests.Session riutilizzabile.
-        extra_tags:              Tag aggiuntivi liberi.
-        multi_artist:            Scrivi ARTIST/ALBUMARTIST multipli.
-        embed_lyrics:            Abilita fetch testi multi-provider.
-        lyrics_providers:        Lista provider testi in ordine.
-                                 Default: ["spotify","musixmatch","amazon","lrclib"]
-        lyrics_spotify_token:    Cookie sp_dc Spotify (per lyrics Spotify).
-        lyrics_musixmatch_token: Token Musixmatch desktop.
-        enrich:                  Abilita metadata enrichment multi-provider.
-        enrich_providers:        Lista provider enrichment in ordine.
-                                 Default: ["deezer","apple","qobuz","tidal"]
-        enrich_qobuz_token:      Token per l'API di Qobuz.
-    """
     path = Path(filepath)
     if not path.exists():
         raise SpotiflacError(ErrorKind.FILE_IO, f"File not found: {path}")
@@ -98,7 +139,6 @@ def embed_metadata(
     # 2. Cover art                                                         #
     # ------------------------------------------------------------------ #
     if not cover_data:
-        # Preferisci cover HD dall'enrichment, poi quella di Spotify
         best_cover = enriched_cover_url or cover_url or metadata.cover_url
         if best_cover:
             cover_data = _fetch_cover(best_cover, session)
@@ -135,18 +175,16 @@ def embed_metadata(
         tags = metadata.as_flac_tags(first_artist_only=first_artist_only)
         tags["DESCRIPTION"] = SOURCE_TAG
 
-        # Enriched tags hanno precedenza su extra_tags solo per campi assenti
         merged_extra: dict[str, str] = {**enriched_tags}
         if extra_tags:
-            merged_extra.update(extra_tags)  # extra_tags espliciti vincono sempre
+            merged_extra.update(extra_tags)
+
         if merged_extra:
-            # 1. Gestione DATA: Se è presente original_date, sovrascriviamo la data di Spotify
             if "original_date" in merged_extra and merged_extra["original_date"]:
-                tags["DATE"] = merged_extra["original_date"]
+                tags["DATE"]         = merged_extra["original_date"]
                 tags["ORIGINALDATE"] = merged_extra["original_date"]
                 tags["ORIGINALYEAR"] = merged_extra["original_date"][:4]
 
-            # 2. Mappatura ID MusicBrainz e altri metadati tecnici
             mb_mapping = {
                 "mbid_track":    "MUSICBRAINZ_TRACKID",
                 "mbid_album":    "MUSICBRAINZ_ALBUMID",
@@ -161,7 +199,7 @@ def embed_metadata(
                 "artist_sort":   "ARTISTSORT",
                 "script":        "SCRIPT",
                 "bpm":           "BPM",
-                "genre":         "GENRE"
+                "genre":         "GENRE",
             }
 
             for mb_key, tag_name in mb_mapping.items():
@@ -178,8 +216,14 @@ def embed_metadata(
 
         for key, val in tags.items():
             if multi_artist and key in ("ARTIST", "ALBUMARTIST") and "," in val:
-                artists = [a.strip() for a in val.split(",") if a.strip()]
-                audio[key] = artists
+                parts = [a.strip() for a in val.split(",") if a.strip()]
+
+                # FIX: ARTIST = stringa unica "The Weeknd, Playboi Carti"
+                # (se fosse una lista, editor come beets/foobar2000 concatenano SENZA separatore)
+                audio[key] = val
+
+                # ARTISTS / ALBUMARTISTS = tag multi-valore per editor moderni (Picard standard)
+                audio[key + "S"] = parts
             else:
                 audio[key] = val
 

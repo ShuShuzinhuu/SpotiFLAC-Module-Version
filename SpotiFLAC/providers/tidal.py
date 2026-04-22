@@ -20,6 +20,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from ..core.tagger import _print_mb_summary
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
@@ -750,7 +751,7 @@ class TidalProvider(BaseProvider):
                 mb_tags["DATE"]         = res["original_date"]
                 mb_tags["ORIGINALDATE"] = res["original_date"]
                 mb_tags["ORIGINALYEAR"] = res["original_date"][:4]
-
+            _print_mb_summary(mb_tags)
             # 6. Scrittura Metadati finali
             embed_metadata(
                 dest, metadata,
