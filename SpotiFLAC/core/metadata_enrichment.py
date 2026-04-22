@@ -188,31 +188,59 @@ class _TidalMeta:
 
     _APIS = [
         "https://eu-central.monochrome.tf",
+        "https://us-west.monochrome.tf",
         "https://api.monochrome.tf",
+        "https://monochrome-api.samidy.com",
         "https://tidal-api.binimum.org",
+        "https://tidal.kinoplus.online",
+        "https://triton.squid.wtf",
+        "https://vogel.qqdl.site",
+        "https://maus.qqdl.site",
+        "https://hund.qqdl.site",
+        "https://katze.qqdl.site",
+        "https://wolf.qqdl.site",
+        "https://hifi-one.spotisaver.net",
+        "https://hifi-two.spotisaver.net",
     ]
+
+    _GIST_URL = "https://gist.githubusercontent.com/afkarxyz/2ce772b943321b9448b454f39403ce25/raw"
 
     def __init__(self) -> None:
         self._s = requests.Session()
         self._s.headers["User-Agent"] = _UA
+        self._merged_apis = list(self._APIS)
+        self._fetch_and_merge_apis()
+
+    def _fetch_and_merge_apis(self) -> None:
+        """Scarica le API dal gist e le unisce a quelle di base senza duplicati."""
+        try:
+            r = self._s.get(self._GIST_URL, timeout=8)
+            if r.ok:
+                gist_urls = r.json()
+                if isinstance(gist_urls, list):
+                    for url in gist_urls:
+                        clean_url = url.strip().rstrip("/")
+                        if clean_url and clean_url not in self._merged_apis:
+                            self._merged_apis.append(clean_url)
+            logger.debug("[meta/tidal] Total APIs loaded: %d", len(self._merged_apis))
+        except Exception as exc:
+            logger.debug("[meta/tidal] Failed to fetch gist APIs: %s", exc)
 
     def fetch(self, track_name: str, artist_name: str) -> EnrichedMetadata:
         out = EnrichedMetadata()
         track_data = self._search_track(track_name, artist_name)
         if not track_data:
             return out
-        # Album/label
         album = track_data.get("album", {})
         out.cover_url_hd = album.get("cover", "")
         out.explicit     = bool(track_data.get("explicit"))
         out.isrc         = track_data.get("isrc", "")
-        # Tidal non espone label/genre via queste API pubbliche
         return out
 
     def _search_track(self, title: str, artist: str) -> dict | None:
         from urllib.parse import quote
         q = quote(f"{artist} {title}")
-        for api in self._APIS:
+        for api in self._merged_apis:
             for endpoint in (
                     f"{api.rstrip('/')}/search/?s={q}&limit=5",
                     f"{api.rstrip('/')}/search?s={q}&limit=5",
