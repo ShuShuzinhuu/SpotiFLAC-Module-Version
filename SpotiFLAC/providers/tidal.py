@@ -717,6 +717,7 @@ class TidalProvider(BaseProvider):
                 raise SpotiflacError(ErrorKind.UNAVAILABLE, err_msg, self.name)
 
             mb_tags = {}
+            res: dict = {}
             if mb_fetcher:
                 res = mb_fetcher.result()
 

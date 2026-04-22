@@ -5,9 +5,8 @@ Multi-provider lyrics fetcher.
 Ordine di tentativo (configurabile):
   1. Spotify Web  — testo sincronizzato LRC (richiede sp_dc cookie)
   2. Musixmatch   — testo sincronizzato / plain (token configurabile)
-  3. Apple Music  — testo plain via iTunes affiliate endpoint
-  4. Amazon Music — testo plain via afkar API
-  5. LRCLIB       — testo sincronizzato / plain (nessuna auth)
+  3. Amazon Music — testo plain via afkar API
+  4. LRCLIB       — testo sincronizzato / plain (nessuna auth)
 
 Uso:
     from .lyrics import fetch_lyrics
@@ -44,11 +43,10 @@ _AMAZON_API_BASE = "https://amzn.afkarxyz.qzz.io/api"
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/145.0.0.0 Safari/537.36"
 )
 
-_DEFAULT_PROVIDERS = ["spotify", "musixmatch", "apple", "amazon", "lrclib"]
+_DEFAULT_PROVIDERS = ["spotify", "musixmatch", "amazon", "lrclib"]
 
 
 # --------------------------------------------------------------------------- #

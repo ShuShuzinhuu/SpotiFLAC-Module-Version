@@ -33,11 +33,9 @@ class TrackMetadata(BaseModel):
 
     @field_validator("title", "artists", "album", "album_artist", mode="before")
     @classmethod
-    def strip_str(cls, v: object, info: any) -> str:
-        """Pulisce le stringhe da spazi bianchi superflui."""
+    def strip_str(cls, v: object, info: ValidationInfo) -> str:
         if not v:
             return "Unknown"
-
         s = str(v).strip()
         
         if info.field_name in ("artists", "album_artist"):
@@ -47,7 +45,6 @@ class TrackMetadata(BaseModel):
             s = s.replace(" feat. ", ", ")
             s = s.replace(" ft. ", ", ")
 
-        # Pulizia profonda: evita doppie virgole e spazi residui
         # Esempio: "Artist A, Artist B & Artist C" -> "Artist A, Artist B, Artist C"
             parts = [p.strip() for p in s.split(",") if p.strip()]
             s = ", ".join(parts)
