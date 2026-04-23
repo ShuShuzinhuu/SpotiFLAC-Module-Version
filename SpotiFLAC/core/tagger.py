@@ -188,31 +188,9 @@ def embed_metadata(
                 tags["ORIGINALDATE"] = merged_extra["original_date"]
                 tags["ORIGINALYEAR"] = merged_extra["original_date"][:4]
 
-            # FIX: Aggiunta mappatura per i nuovi Tag estratti
-            mb_mapping = {
-                "mbid_track":       "MUSICBRAINZ_TRACKID",
-                "mbid_album":       "MUSICBRAINZ_ALBUMID",
-                "mbid_artist":      "MUSICBRAINZ_ARTISTID",
-                "mbid_albumartist": "MUSICBRAINZ_ALBUMARTISTID",
-                "mbid_relgroup":    "MUSICBRAINZ_RELEASEGROUPID",
-                "barcode":          "BARCODE",
-                "catalognumber":    "CATALOGNUMBER",
-                "label":            "LABEL",
-                "country":          "RELEASECOUNTRY",
-                "status":           "RELEASESTATUS",
-                "media":            "MEDIA",
-                "type":             "RELEASETYPE",
-                "artist_sort":      "ARTISTSORT",
-                "albumartist_sort": "ALBUMARTISTSORT",
-                "script":           "SCRIPT",
-                "bpm":              "BPM",
-                "genre":            "GENRE",
-            }
-
-            for mb_key, tag_name in mb_mapping.items():
-                val = merged_extra.get(mb_key)
-                if val:
-                    tags[tag_name] = str(val)
+            for key, val in merged_extra.items():
+                if key not in ("original_date", "original_year"):
+                    tags[key] = str(val)
 
         if lyrics:
             tags["LYRICS"] = lyrics
