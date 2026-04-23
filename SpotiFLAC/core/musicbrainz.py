@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 # Costanti allineate al Go
 _MB_API_BASE             = "https://musicbrainz.org/ws/2"
-_MB_TIMEOUT              = 10
-_MB_RETRIES              = 3
-_MB_RETRY_WAIT           = 3.0
+_MB_TIMEOUT              = 6
+_MB_RETRIES              = 2
+_MB_RETRY_WAIT           = 1.5
 _MB_MIN_REQ_INTERVAL     = 1.1  # 1100ms
 _MB_THROTTLE_COOLDOWN    = 5.0  # 5s su errore 503
 _MB_STATUS_SKIP_WINDOW   = 300  # 5 minuti

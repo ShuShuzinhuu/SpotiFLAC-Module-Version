@@ -251,7 +251,7 @@ def _fetch_cover(url: str, session: requests.Session | None) -> bytes | None:
         return None
     try:
         s   = session or requests.Session()
-        res = s.get(url, timeout=15)
+        res = s.get(url, timeout=8)
         if res.status_code == 200:
             return res.content
         logger.warning("[tagger] cover HTTP %s for %s", res.status_code, url)

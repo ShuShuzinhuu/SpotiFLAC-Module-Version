@@ -80,9 +80,9 @@ _QUALITY_FALLBACK: dict[str, list[str]] = {
     "":   ["6"],
 }
 
-_API_TIMEOUT_S = 15
-_MAX_RETRIES   = 2
-_RETRY_DELAY_S = 0.5
+_API_TIMEOUT_S = 8
+_MAX_RETRIES   = 1
+_RETRY_DELAY_S = 0.3
 
 
 # ---------------------------------------------------------------------------
@@ -328,26 +328,30 @@ def _fetch_stream_url_parallel(
     start  = time.time()
     errors: list[str] = []
 
-    futures: dict[Future, str] = {}
-    with ThreadPoolExecutor(max_workers=len(apis)) as pool:
-        for api in apis:
-            fut = pool.submit(_fetch_stream_url_once, api, track_id, quality, timeout_s)
-            futures[fut] = api
-
-        for fut in as_completed(futures):
+    pool = ThreadPoolExecutor(max_workers=min(len(apis), 8))
+    try:
+        futures: dict[Future, str] = {
+            pool.submit(_fetch_stream_url_once, api, track_id, quality, timeout_s): api
+            for api in apis
+        }
+        for fut in as_completed(futures, timeout=timeout_s + 2):
             api = futures[fut]
             try:
                 stream_url = fut.result()
                 logger.debug("[qobuz] parallel: got URL from %s in %.2fs", api, time.time() - start)
-                for other in futures:
-                    if other is not fut:
-                        other.cancel() # Fix 1: Lasciato intatto
+                pool.shutdown(wait=False, cancel_futures=True)
+                record_success("qobuz", api)
+                print_source_banner("qobuz", api, quality)
                 return api, stream_url
             except Exception as exc:
                 err_msg = str(exc)[:80]
                 errors.append(f"{api}: {err_msg}")
                 record_failure("qobuz", api)
                 print_api_failure("qobuz", api, err_msg)
+    except TimeoutError:
+        errors.append("global timeout exceeded")
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
     raise SpotiflacError(
         ErrorKind.UNAVAILABLE,
@@ -611,6 +615,7 @@ class QobuzProvider(BaseProvider):
                 lyrics_musixmatch_token = lyrics_musixmatch_token,
                 enrich                  = enrich_metadata,
                 enrich_providers        = enrich_providers,
+                enrich_qobuz_token      = self._qobuz_token or "",
             )
             return DownloadResult.ok(self.name, str(dest))
 

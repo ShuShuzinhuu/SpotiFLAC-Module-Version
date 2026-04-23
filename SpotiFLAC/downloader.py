@@ -40,7 +40,7 @@ class DownloadOptions:
     first_artist_only:    bool            = False
     quality:              str             = "LOSSLESS"
     allow_fallback:       bool            = True
-    inter_track_delay_s:  float           = 1.5
+    inter_track_delay_s:  float           = 0.5
 
     # ── Lyrics ────────────────────────────────────────────────────────
     embed_lyrics:            bool          = False
