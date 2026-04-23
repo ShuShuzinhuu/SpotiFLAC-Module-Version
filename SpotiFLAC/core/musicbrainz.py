@@ -108,14 +108,16 @@ def fetch_mb_metadata(isrc: str) -> dict:
     if not isrc:
         return {}
 
-    # 1. Controllo cache (semplificato)
+    # 1. Controllo cache
     cache_key = isrc.strip().upper()
     if cache_key in _mb_cache:
         return _mb_cache[cache_key]
 
+    # Inizializza dizionario con i nuovi campi richiesti
     res = {
         "genre": "", "original_date": "", "bpm": "", "mbid_track": "",
         "mbid_album": "", "mbid_artist": "", "mbid_relgroup": "",
+        "mbid_albumartist": "", "albumartist_sort": "", "catalognumber": "",
         "label": "", "barcode": "", "organization": "",
         "country": "", "script": "", "status": "",
         "media": "", "type": "", "artist_sort": ""
@@ -128,7 +130,7 @@ def fetch_mb_metadata(isrc: str) -> dict:
             return {}
 
         rec = recs[0]
-        res["mbid_track"] = rec.get("id", "")
+        res["mbid_track"] = rec.get("id", "") # ID Traccia
         res["original_date"] = rec.get("first-release-date", "")
         res["bpm"] = str(rec.get("bpm", "")) if rec.get("bpm") else ""
 
@@ -142,10 +144,8 @@ def fetch_mb_metadata(isrc: str) -> dict:
                 a_sort = artist_obj.get("sort-name", "")
                 phrase = c.get("joinphrase", "")
 
-                if a_id:
-                    artist_ids.append(a_id)
-                if a_sort:
-                    sort_names.append(a_sort + phrase)
+                if a_id: artist_ids.append(a_id)
+                if a_sort: sort_names.append(a_sort + phrase)
 
             res["mbid_artist"] = "; ".join(artist_ids)
             res["artist_sort"] = "".join(sort_names)
@@ -171,23 +171,38 @@ def fetch_mb_metadata(isrc: str) -> dict:
             res["status"] = rel.get("status", "")
             res["type"] = rel.get("release-group", {}).get("primary-type", "")
             res["country"] = rel.get("country", "")
-            res["script"] = rel.get("text-representation", {}).get("script", "")
+            res["script"] = rel.get("text-representation", {}).get("script", "") # Sistema di scrittura
             media = rel.get("media", [])
             if media: res["media"] = media[0].get("format", "")
 
-            # Cerca il primo codice a barre valido in tutte le edizioni (releases)
-            for r in releases:
-                if r.get("barcode"):
-                    res["barcode"] = r.get("barcode")
-                    break
+            # ---> FIX: Estrazione ID Album Artist e Album Artist Sort Name
+            rel_credits = rel.get("artist-credit", [])
+            if rel_credits:
+                aa_ids = []
+                aa_sort_names = []
+                for c in rel_credits:
+                    artist_obj = c.get("artist", {})
+                    a_id = artist_obj.get("id")
+                    a_sort = artist_obj.get("sort-name", "")
+                    phrase = c.get("joinphrase", "")
+                    if a_id: aa_ids.append(a_id)
+                    if a_sort: aa_sort_names.append(a_sort + phrase)
+                res["mbid_albumartist"] = "; ".join(aa_ids)
+                res["albumartist_sort"] = "".join(aa_sort_names)
 
-            # Cerca la prima etichetta valida in tutte le edizioni
+            # ---> FIX: Cerca il primo codice a barre, etichetta e numero di catalogo in tutte le releases
             for r in releases:
+                if not res.get("barcode") and r.get("barcode"):
+                    res["barcode"] = r.get("barcode")
+
                 lbl_info = r.get("label-info", [])
-                if lbl_info and lbl_info[0].get("label", {}).get("name"):
-                    res["label"] = lbl_info[0].get("label", {}).get("name", "")
-                    res["organization"] = res["label"]
-                    break
+                if lbl_info:
+                    for li in lbl_info:
+                        if not res.get("label") and li.get("label", {}).get("name"):
+                            res["label"] = li.get("label", {}).get("name", "")
+                            res["organization"] = res["label"]
+                        if not res.get("catalognumber") and li.get("catalog-number"):
+                            res["catalognumber"] = li.get("catalog-number", "")
 
         _mb_cache[cache_key] = res
     except Exception as e:
@@ -208,13 +223,11 @@ class AsyncMBFetch:
 
     def __init__(self, isrc: str):
         self.isrc = isrc
-        # Chiama la nuova funzione fetch_mb_metadata che restituisce il dict
         self.future = self._executor.submit(fetch_mb_metadata, isrc)
 
     def result(self) -> dict:
         """Ritorna il dizionario dei metadati. Se fallisce, ritorna un dict vuoto."""
         try:
-            # Aspettiamo il risultato (max 15 secondi)
             return self.future.result(timeout=15)
         except Exception as e:
             logger.debug("[musicbrainz] Async fetch failed: %s", e)

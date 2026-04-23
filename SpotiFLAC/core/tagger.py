@@ -32,10 +32,6 @@ def _print_mb_summary(mb_tags: dict) -> None:
     """
     Stampa un riepilogo dei tag aggiunti da MusicBrainz,
     in formato analogo al messaggio "Arricchito con: ..." del tagger.
-
-    Esempio output:
-      ✦ MusicBrainz: genere: Electronic; R&B, BPM: 128, label: Republic Records,
-                     data originale: 2016-11-25, paese: US, ID MusicBrainz (3 campi)
     """
     if not mb_tags:
         return
@@ -44,12 +40,14 @@ def _print_mb_summary(mb_tags: dict) -> None:
         "GENRE":                      "genere",
         "BPM":                        "BPM",
         "LABEL":                      "label",
+        "CATALOGNUMBER":              "catalogo",               # FIX: Aggiunto Numero di Catalogo
         "ORGANIZATION":               "etichetta",
         "DATE":                       "data originale",
         "ORIGINALDATE":               "data originale",
-        "MUSICBRAINZ_TRACKID":        "MB track",
+        "MUSICBRAINZ_TRACKID":        "MB track",               # FIX: ID Traccia
         "MUSICBRAINZ_ALBUMID":        "MB album",
         "MUSICBRAINZ_ARTISTID":       "MB artist",
+        "MUSICBRAINZ_ALBUMARTISTID":  "MB album artist",        # FIX: Aggiunto ID Album Artist
         "MUSICBRAINZ_RELEASEGROUPID": "MB rel.group",
         "BARCODE":                    "barcode",
         "RELEASECOUNTRY":             "paese",
@@ -57,7 +55,8 @@ def _print_mb_summary(mb_tags: dict) -> None:
         "MEDIA":                      "supporto",
         "RELEASETYPE":                "tipo release",
         "ARTISTSORT":                 "artista (sort)",
-        "SCRIPT":                     "script",
+        "ALBUMARTISTSORT":            "artista album (sort)",   # FIX: Aggiunto Album Artist Sort Name
+        "SCRIPT":                     "script",                 # FIX: Sistema di scrittura
     }
 
     mb_ids     = {k: v for k, v in mb_tags.items() if k.startswith("MUSICBRAINZ_")}
@@ -184,21 +183,25 @@ def embed_metadata(
                 tags["ORIGINALDATE"] = merged_extra["original_date"]
                 tags["ORIGINALYEAR"] = merged_extra["original_date"][:4]
 
+            # FIX: Aggiunta mappatura per i nuovi Tag estratti
             mb_mapping = {
-                "mbid_track":    "MUSICBRAINZ_TRACKID",
-                "mbid_album":    "MUSICBRAINZ_ALBUMID",
-                "mbid_artist":   "MUSICBRAINZ_ARTISTID",
-                "mbid_relgroup": "MUSICBRAINZ_RELEASEGROUPID",
-                "barcode":       "BARCODE",
-                "label":         "LABEL",
-                "country":       "RELEASECOUNTRY",
-                "status":        "RELEASESTATUS",
-                "media":         "MEDIA",
-                "type":          "RELEASETYPE",
-                "artist_sort":   "ARTISTSORT",
-                "script":        "SCRIPT",
-                "bpm":           "BPM",
-                "genre":         "GENRE",
+                "mbid_track":       "MUSICBRAINZ_TRACKID",
+                "mbid_album":       "MUSICBRAINZ_ALBUMID",
+                "mbid_artist":      "MUSICBRAINZ_ARTISTID",
+                "mbid_albumartist": "MUSICBRAINZ_ALBUMARTISTID",
+                "mbid_relgroup":    "MUSICBRAINZ_RELEASEGROUPID",
+                "barcode":          "BARCODE",
+                "catalognumber":    "CATALOGNUMBER",
+                "label":            "LABEL",
+                "country":          "RELEASECOUNTRY",
+                "status":           "RELEASESTATUS",
+                "media":            "MEDIA",
+                "type":             "RELEASETYPE",
+                "artist_sort":      "ARTISTSORT",
+                "albumartist_sort": "ALBUMARTISTSORT",
+                "script":           "SCRIPT",
+                "bpm":              "BPM",
+                "genre":            "GENRE",
             }
 
             for mb_key, tag_name in mb_mapping.items():
@@ -218,10 +221,9 @@ def embed_metadata(
                 parts = [a.strip() for a in val.split(",") if a.strip()]
 
                 # FIX: ARTIST = stringa unica "The Weeknd, Playboi Carti"
-                # (se fosse una lista, editor come beets/foobar2000 concatenano SENZA separatore)
                 audio[key] = val
 
-                # ARTISTS / ALBUMARTISTS = tag multi-valore per editor moderni (Picard standard)
+                # ARTISTS / ALBUMARTISTS = tag multi-valore per editor moderni
                 audio[key + "S"] = parts
             else:
                 audio[key] = val
@@ -245,7 +247,6 @@ def embed_metadata(
             cause=exc,
         )
 
-
 def _fetch_cover(url: str, session: requests.Session | None) -> bytes | None:
     if not url:
         return None
@@ -258,7 +259,6 @@ def _fetch_cover(url: str, session: requests.Session | None) -> bytes | None:
     except Exception as exc:
         logger.warning("[tagger] cover download failed (%s): %s", url, exc)
     return None
-
 
 def max_resolution_spotify_cover(url: str) -> str:
     """Converte URL immagine Spotify alla variante massima risoluzione."""
