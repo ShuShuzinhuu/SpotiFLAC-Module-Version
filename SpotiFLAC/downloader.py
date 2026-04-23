@@ -116,8 +116,6 @@ def download_one(
         cb = ProgressCallback(item_id=metadata.id)
         provider.set_progress_callback(cb)
 
-        ext = _provider_extension(provider.name)
-
         result = provider.download_track(
             metadata,
             output_dir,

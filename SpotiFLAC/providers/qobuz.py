@@ -8,6 +8,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from ..core.tagger import _print_mb_summary
 from dataclasses import dataclass, field
 
@@ -348,7 +349,7 @@ def _fetch_stream_url_parallel(
                 errors.append(f"{api}: {err_msg}")
                 record_failure("qobuz", api)
                 print_api_failure("qobuz", api, err_msg)
-    except TimeoutError:
+    except (TimeoutError, FuturesTimeoutError):
         errors.append("global timeout exceeded")
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
@@ -500,8 +501,6 @@ class QobuzProvider(BaseProvider):
         for i, q in enumerate(chain):
             try:
                 winner_api, stream_url = _fetch_stream_url_parallel(ordered_apis, track_id, q, _API_TIMEOUT_S)
-                record_success("qobuz", winner_api)
-                print_source_banner("qobuz", winner_api, q)
                 return stream_url
             except SpotiflacError as exc:
                 last_exc = exc

@@ -20,6 +20,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from ..core.tagger import _print_mb_summary
 from pathlib import Path
 from typing import NamedTuple
@@ -437,7 +438,7 @@ def _fetch_tidal_url_parallel(
                 err_msg = str(exc)[:80]
                 errors.append(f"{api}: {err_msg}")
                 print_api_failure("tidal", api, err_msg)
-    except TimeoutError:
+    except (TimeoutError, FuturesTimeoutError):
         errors.append("global timeout exceeded")
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
@@ -472,6 +473,7 @@ class TidalProvider(BaseProvider):
             logger.warning("[tidal] API list unavailable, using built-in fallback: %s", exc)
             self._apis = list(apis or _TIDAL_APIS)
 
+        self._qobuz_token: str | None = None
     # ------------------------------------------------------------------
     # Spotify → Tidal resolution (invariata)
     # ------------------------------------------------------------------
@@ -689,7 +691,7 @@ class TidalProvider(BaseProvider):
             track_id = self._parse_track_id(tidal_url)
 
             mb_fetcher = None
-            if enrich_metadata and metadata.isrc:
+            if metadata.isrc:
                 # Avviamo la ricerca mentre Tidal si prepara al download
                 mb_fetcher = AsyncMBFetch(metadata.isrc)
 

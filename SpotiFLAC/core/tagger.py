@@ -218,9 +218,6 @@ def embed_metadata(
             tags["LYRICS"] = lyrics
             logger.debug("[tagger] lyrics embedded (%d chars)", len(lyrics))
 
-        if merged_extra:
-            tags.update(merged_extra)
-
         for key, val in tags.items():
             if multi_artist and key in ("ARTIST", "ALBUMARTIST") and "," in val:
                 parts = [a.strip() for a in val.split(",") if a.strip()]

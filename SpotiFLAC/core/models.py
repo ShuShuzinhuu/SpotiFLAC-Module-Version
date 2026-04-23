@@ -203,7 +203,7 @@ def build_filename(
             result = f"{track_number:02d}. {result}"
 
     # Pulizia finale e aggiunta estensione
-    result = sanitize(result)
+    result = _WHITESPACE.sub(" ", result).strip() or "Unknown"
     if not result.lower().endswith(extension):
         result += extension
 
