@@ -69,7 +69,7 @@ def _note_throttle() -> None:
 
 def _query_recordings(query: str) -> dict:
     """Esegue la chiamata HTTP con retry logic."""
-    url = f"{_MB_API_BASE}/recording?query={urllib.parse.quote(query)}&fmt=json&inc=releases+artist-credits+tags+media+release-groups+labels"
+    url = f"{_MB_API_BASE}/recording?query={urllib.parse.quote(query)}&fmt=json&inc=releases+artist-credits+tags+media+release-groups+labels+label-info+isrcs"
     headers = {
         "User-Agent": _USER_AGENT,
         "Accept": "application/json"
@@ -162,47 +162,60 @@ def fetch_mb_metadata(isrc: str) -> dict:
                 if name and name not in genres: genres.append(name)
             res["genre"] = "; ".join(genres[:5])
 
-        # Release data
+            # Release data
         releases = rec.get("releases", [])
         if releases:
-            rel = releases[0]
-            res["mbid_album"] = rel.get("id", "")
-            res["mbid_relgroup"] = rel.get("release-group", {}).get("id", "")
-            res["status"] = rel.get("status", "")
-            res["type"] = rel.get("release-group", {}).get("primary-type", "")
-            res["country"] = rel.get("country", "")
-            res["script"] = rel.get("text-representation", {}).get("script", "") # Sistema di scrittura
-            media = rel.get("media", [])
-            if media: res["media"] = media[0].get("format", "")
+            # Preferisci la release con barcode e label-info già presenti
+            def _release_score(r: dict) -> int:
+                score = 0
+                if r.get("barcode"): score += 2
+                if r.get("label-info"): score += 2
+                if r.get("country"): score += 1
+                if r.get("status") == "Official": score += 1
+                return score
 
-            # ---> FIX: Estrazione ID Album Artist e Album Artist Sort Name
+            rel = max(releases, key=_release_score)
+
+            res["mbid_album"]    = rel.get("id", "")
+            res["mbid_relgroup"] = rel.get("release-group", {}).get("id", "")
+            res["status"]        = rel.get("status", "")
+            res["type"]          = rel.get("release-group", {}).get("primary-type", "")
+            res["country"]       = rel.get("country", "")
+            res["script"]        = rel.get("text-representation", {}).get("script", "")
+            media = rel.get("media", [])
+            if media:
+                res["media"] = media[0].get("format", "")
+
+            # Album artist IDs e sort name dalla release scelta
             rel_credits = rel.get("artist-credit", [])
             if rel_credits:
                 aa_ids = []
                 aa_sort_names = []
                 for c in rel_credits:
                     artist_obj = c.get("artist", {})
-                    a_id = artist_obj.get("id")
+                    a_id   = artist_obj.get("id")
                     a_sort = artist_obj.get("sort-name", "")
                     phrase = c.get("joinphrase", "")
-                    if a_id: aa_ids.append(a_id)
+                    if a_id:   aa_ids.append(a_id)
                     if a_sort: aa_sort_names.append(a_sort + phrase)
                 res["mbid_albumartist"] = "; ".join(aa_ids)
                 res["albumartist_sort"] = "".join(aa_sort_names)
 
-            # ---> FIX: Cerca il primo codice a barre, etichetta e numero di catalogo in tutte le releases
+            # Scansiona TUTTE le release per barcode, label, catalognumber
             for r in releases:
                 if not res.get("barcode") and r.get("barcode"):
-                    res["barcode"] = r.get("barcode")
+                    res["barcode"] = r["barcode"]
 
-                lbl_info = r.get("label-info", [])
-                if lbl_info:
-                    for li in lbl_info:
-                        if not res.get("label") and li.get("label", {}).get("name"):
-                            res["label"] = li.get("label", {}).get("name", "")
-                            res["organization"] = res["label"]
-                        if not res.get("catalognumber") and li.get("catalog-number"):
-                            res["catalognumber"] = li.get("catalog-number", "")
+                for li in r.get("label-info", []):
+                    lbl = li.get("label") or {}
+                    if not res.get("label") and lbl.get("name"):
+                        res["label"]        = lbl["name"]
+                        res["organization"] = lbl["name"]
+                    if not res.get("catalognumber") and li.get("catalog-number"):
+                        res["catalognumber"] = li["catalog-number"]
+                # Esci prima se abbiamo già tutto
+                if res.get("barcode") and res.get("label") and res.get("catalognumber"):
+                    break
 
         _mb_cache[cache_key] = res
     except Exception as e:
