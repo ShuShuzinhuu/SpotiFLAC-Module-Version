@@ -537,18 +537,12 @@ class TidalProvider(BaseProvider):
         return None
 
     def _resolve_via_songlink(self, spotify_track_id: str) -> str:
-        url = (
-            f"https://api.song.link/v1-alpha.1/links?"
-            f"url=https://open.spotify.com/track/{spotify_track_id}&userCountry=IT"
-        )
-        try:
-            resp = self._session.get(url, timeout=6)
-            resp.raise_for_status()
-            tidal = resp.json().get("linksByPlatform", {}).get("tidal")
-            if tidal and tidal.get("url"):
-                return tidal["url"]
-        except Exception as exc:
-            raise TrackNotFoundError(self.name, spotify_track_id) from exc
+        from ..core.link_resolver import LinkResolver
+        resolver = LinkResolver(self._http)
+        links = resolver.resolve_all(spotify_track_id)
+        tidal_url = links.get("tidal")
+        if tidal_url:
+            return tidal_url
         raise TrackNotFoundError(self.name, spotify_track_id)
 
     # ------------------------------------------------------------------
