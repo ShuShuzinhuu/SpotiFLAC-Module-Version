@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -268,15 +268,15 @@ class _QobuzMeta:
     Richiede le stesse credenziali usate per il download.
     """
 
-    def __init__(self) -> None:
-        # Import lazy per evitare import circolari
+    def __init__(self, qobuz_token: str | None = None) -> None:
         self._provider: Any = None
+        self._qobuz_token = qobuz_token  # ← aggiunto
 
     def _get_provider(self) -> Any:
         if self._provider is None:
             try:
                 from ..providers.qobuz import QobuzProvider
-                self._provider = QobuzProvider()
+                self._provider = QobuzProvider(qobuz_token=self._qobuz_token)  # ← aggiunto
             except Exception as exc:
                 logger.debug("[meta/qobuz] cannot init provider: %s", exc)
         return self._provider
@@ -326,6 +326,7 @@ def enrich_metadata(
         isrc:        str = "",
         providers:   list[str] | None = None,
         timeout_s:   float = 10.0,
+        qobuz_token: str | None = None,
 ) -> EnrichedMetadata:
     """
     Interroga i provider in parallelo e unisce i risultati.
@@ -351,7 +352,12 @@ def enrich_metadata(
         if cls is None:
             return name, EnrichedMetadata()
         try:
-            inst = cls()
+            # ← istanzia _QobuzMeta con il token, gli altri invariati
+            if name == "qobuz":
+                inst = cls(qobuz_token=qobuz_token)
+            else:
+                inst = cls()
+
             if name == "deezer":
                 return name, inst.fetch(isrc)
             elif name == "apple":
@@ -369,9 +375,14 @@ def enrich_metadata(
     with ThreadPoolExecutor(max_workers=len(providers)) as pool:
         futs = {pool.submit(_run_provider, p): p for p in providers}
         deadline = time.time() + timeout_s
-        for fut in as_completed(futs, timeout=max(1.0, deadline - time.time())):
-            name, data = fut.result()
-            results[name] = data
+        try:
+            for fut in as_completed(futs, timeout=max(1.0, deadline - time.time())):
+                name, data = fut.result()
+                results[name] = data
+        except TimeoutError:
+            # Trova quali provider non hanno finito in tempo
+            unfinished = [futs[fut] for fut in futs if not fut.done()]
+            logger.warning("[meta/enrich] Timeout! Provider lenti ignorati: %s", ", ".join(unfinished))
 
     # Merge in ordine di priorità
     for name in providers:

@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 # Costanti allineate al Go
 _MB_API_BASE             = "https://musicbrainz.org/ws/2"
-_MB_TIMEOUT              = 10
-_MB_RETRIES              = 3
-_MB_RETRY_WAIT           = 3.0
+_MB_TIMEOUT              = 6
+_MB_RETRIES              = 2
+_MB_RETRY_WAIT           = 1.5
 _MB_MIN_REQ_INTERVAL     = 1.1  # 1100ms
 _MB_THROTTLE_COOLDOWN    = 5.0  # 5s su errore 503
 _MB_STATUS_SKIP_WINDOW   = 300  # 5 minuti
@@ -69,7 +69,7 @@ def _note_throttle() -> None:
 
 def _query_recordings(query: str) -> dict:
     """Esegue la chiamata HTTP con retry logic."""
-    url = f"{_MB_API_BASE}/recording?query={urllib.parse.quote(query)}&fmt=json&inc=releases+artist-credits+tags+media+release-groups+labels"
+    url = f"{_MB_API_BASE}/recording?query={urllib.parse.quote(query)}&fmt=json&inc=releases+artist-credits+tags+media+release-groups+labels+label-info+isrcs"
     headers = {
         "User-Agent": _USER_AGENT,
         "Accept": "application/json"
@@ -103,98 +103,145 @@ def _query_recordings(query: str) -> dict:
 
     raise last_err
 
-def fetch_genre_sync(isrc: str, use_single_genre: bool = True, separator: str = "; ") -> str:
-    """
-    Logica core tradotta dal Go. Usa l'in-flight deduplication per evitare
-    che thread multipli chiamino l'API per lo stesso ISRC.
-    """
+def fetch_mb_metadata(isrc: str) -> dict:
+    """Recupera tutti i metadati disponibili da MusicBrainz via ISRC."""
     if not isrc:
-        return ""
+        return {}
 
-    cache_key = f"{isrc.strip().upper()}|{use_single_genre}|{separator}"
-
-    # 1. Controlla la Cache
+    # 1. Controllo cache
+    cache_key = isrc.strip().upper()
     if cache_key in _mb_cache:
         return _mb_cache[cache_key]
 
-    # 2. In-flight Deduplication (Se un altro thread sta già cercando questo ISRC, aspetta lui)
-    with _mb_inflight_mu:
-        if cache_key in _mb_inflight:
-            event = _mb_inflight[cache_key]
-            _mb_inflight_mu.release()
-            event.wait() # Aspetta che l'altro thread finisca
-            res = _mb_inflight_results.get(cache_key, "")
-            if isinstance(res, Exception):
-                return ""
-            return res
+    # Inizializza dizionario con i nuovi campi richiesti
+    res = {
+        "genre": "", "original_date": "", "bpm": "", "mbid_track": "",
+        "mbid_album": "", "mbid_artist": "", "mbid_relgroup": "",
+        "mbid_albumartist": "", "albumartist_sort": "", "catalognumber": "",
+        "label": "", "barcode": "", "organization": "",
+        "country": "", "script": "", "status": "",
+        "media": "", "type": "", "artist_sort": ""
+    }
 
-        # Siamo il primo thread a cercare questo ISRC
-        event = threading.Event()
-        _mb_inflight[cache_key] = event
-
-    # 3. Fetch Effettivo
-    final_genre = ""
-    result_err = None
     try:
         data = _query_recordings(f"isrc:{isrc}")
-        recordings = data.get("recordings", [])
-        if not recordings:
-            raise Exception("No recordings found")
+        recs = data.get("recordings", [])
+        if not recs:
+            return {}
 
-        tags = recordings[0].get("tags", [])
+        rec = recs[0]
+        res["mbid_track"] = rec.get("id", "") # ID Traccia
+        res["original_date"] = rec.get("first-release-date", "")
+        res["bpm"] = str(rec.get("bpm", "")) if rec.get("bpm") else ""
 
-        if use_single_genre:
-            # Trova il tag con il "count" più alto
-            best_tag = ""
-            max_count = -1
-            for t in tags:
-                count = t.get("count", 0)
-                if count > max_count:
-                    max_count = count
-                    best_tag = t.get("name", "")
-            if best_tag:
-                final_genre = best_tag.title()
-        else:
-            # Prendi i primi 5 tags
+        credits = rec.get("artist-credit", [])
+        if credits:
+            artist_ids = []
+            sort_names = []
+            for c in credits:
+                artist_obj = c.get("artist", {})
+                a_id = artist_obj.get("id")
+                a_sort = artist_obj.get("sort-name", "")
+                phrase = c.get("joinphrase", "")
+
+                if a_id: artist_ids.append(a_id)
+                if a_sort: sort_names.append(a_sort + phrase)
+
+            res["mbid_artist"] = "; ".join(artist_ids)
+            res["artist_sort"] = "".join(sort_names)
+
+        # Generi
+        all_tags = rec.get("tags", [])
+        for c in credits:
+            all_tags.extend(c.get("artist", {}).get("tags", []))
+        if all_tags:
+            sorted_tags = sorted(all_tags, key=lambda x: x.get("count", 0), reverse=True)
             genres = []
-            for t in tags:
-                genres.append(t.get("name", "").title())
-            if genres:
-                final_genre = separator.join(genres[:5])
+            for t in sorted_tags:
+                name = t.get("name", "").title()
+                if name and name not in genres: genres.append(name)
+            res["genre"] = "; ".join(genres[:5])
 
-        if final_genre:
-            _mb_cache[cache_key] = final_genre
+            # Release data
+        releases = rec.get("releases", [])
+        if releases:
+            # Preferisci la release con barcode e label-info già presenti
+            def _release_score(r: dict) -> int:
+                score = 0
+                if r.get("barcode"): score += 2
+                if r.get("label-info"): score += 2
+                if r.get("country"): score += 1
+                if r.get("status") == "Official": score += 1
+                return score
 
+            rel = max(releases, key=_release_score)
+
+            res["mbid_album"]    = rel.get("id", "")
+            res["mbid_relgroup"] = rel.get("release-group", {}).get("id", "")
+            res["status"]        = rel.get("status", "")
+            res["type"]          = rel.get("release-group", {}).get("primary-type", "")
+            res["country"]       = rel.get("country", "")
+            res["script"]        = rel.get("text-representation", {}).get("script", "")
+            media = rel.get("media", [])
+            if media:
+                res["media"] = media[0].get("format", "")
+
+            # Album artist IDs e sort name dalla release scelta
+            rel_credits = rel.get("artist-credit", [])
+            if rel_credits:
+                aa_ids = []
+                aa_sort_names = []
+                for c in rel_credits:
+                    artist_obj = c.get("artist", {})
+                    a_id   = artist_obj.get("id")
+                    a_sort = artist_obj.get("sort-name", "")
+                    phrase = c.get("joinphrase", "")
+                    if a_id:   aa_ids.append(a_id)
+                    if a_sort: aa_sort_names.append(a_sort + phrase)
+                res["mbid_albumartist"] = "; ".join(aa_ids)
+                res["albumartist_sort"] = "".join(aa_sort_names)
+
+            # Scansiona TUTTE le release per barcode, label, catalognumber
+            for r in releases:
+                if not res.get("barcode") and r.get("barcode"):
+                    res["barcode"] = r["barcode"]
+
+                for li in r.get("label-info", []):
+                    lbl = li.get("label") or {}
+                    if not res.get("label") and lbl.get("name"):
+                        res["label"]        = lbl["name"]
+                        res["organization"] = lbl["name"]
+                    if not res.get("catalognumber") and li.get("catalog-number"):
+                        res["catalognumber"] = li["catalog-number"]
+                # Esci prima se abbiamo già tutto
+                if res.get("barcode") and res.get("label") and res.get("catalognumber"):
+                    break
+
+        _mb_cache[cache_key] = res
     except Exception as e:
-        result_err = e
-        logger.debug("[musicbrainz] Lookup failed for %s: %s", isrc, e)
+        logger.debug("[musicbrainz] lookup failed: %s", e)
 
-    finally:
-        # 4. Libera i thread in attesa
-        with _mb_inflight_mu:
-            _mb_inflight_results[cache_key] = result_err if result_err else final_genre
-            del _mb_inflight[cache_key]
-            event.set()
-
-    return final_genre
+    return res
 
 # =====================================================================
-# Wrapper Asincrono usato da Qobuz.py e Tidal.py
+# Wrapper Asincrono aggiornato per Metadati Completi
 # =====================================================================
-class AsyncGenreFetch:
+class AsyncMBFetch:
     """
-    Avvia la ricerca di MusicBrainz in background per non bloccare i download,
-    sfruttando sotto il cofano il potente motore di cache e rate-limit.
+    Avvia la ricerca di MusicBrainz in background.
+    Ora restituisce un dizionario completo con tutti i metadati professionali.
     """
-    # Usiamo un thread pool condiviso per tutte le ricerche
+    # Thread pool condiviso
     _executor = ThreadPoolExecutor(max_workers=4)
 
-    def __init__(self, isrc: str, use_single_genre: bool = True, separator: str = "; "):
+    def __init__(self, isrc: str):
         self.isrc = isrc
-        self.future = self._executor.submit(fetch_genre_sync, isrc, use_single_genre, separator)
+        self.future = self._executor.submit(fetch_mb_metadata, isrc)
 
-    def result(self) -> str:
+    def result(self) -> dict:
+        """Ritorna il dizionario dei metadati. Se fallisce, ritorna un dict vuoto."""
         try:
             return self.future.result(timeout=15)
-        except Exception:
-            return ""
+        except Exception as e:
+            logger.debug("[musicbrainz] Async fetch failed: %s", e)
+            return {}

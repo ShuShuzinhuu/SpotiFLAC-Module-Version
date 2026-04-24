@@ -8,6 +8,8 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+from ..core.tagger import _print_mb_summary
 from dataclasses import dataclass, field
 
 import requests
@@ -21,7 +23,7 @@ from ..core.models import TrackMetadata, DownloadResult
 from ..core.tagger import embed_metadata
 from ..core.provider_stats import record_success, record_failure, prioritize_providers
 from .base import BaseProvider
-from ..core.musicbrainz import AsyncGenreFetch
+from ..core.musicbrainz import AsyncMBFetch
 from ..core.download_validation import validate_downloaded_track
 from ..core.console import (
     print_source_banner, print_api_failure, print_quality_fallback,
@@ -79,9 +81,9 @@ _QUALITY_FALLBACK: dict[str, list[str]] = {
     "":   ["6"],
 }
 
-_API_TIMEOUT_S = 25
-_MAX_RETRIES   = 2
-_RETRY_DELAY_S = 0.5
+_API_TIMEOUT_S = 8
+_MAX_RETRIES   = 1
+_RETRY_DELAY_S = 0.3
 
 
 # ---------------------------------------------------------------------------
@@ -327,26 +329,30 @@ def _fetch_stream_url_parallel(
     start  = time.time()
     errors: list[str] = []
 
-    futures: dict[Future, str] = {}
-    with ThreadPoolExecutor(max_workers=len(apis)) as pool:
-        for api in apis:
-            fut = pool.submit(_fetch_stream_url_once, api, track_id, quality, timeout_s)
-            futures[fut] = api
-
-        for fut in as_completed(futures):
+    pool = ThreadPoolExecutor(max_workers=min(len(apis), 8))
+    try:
+        futures: dict[Future, str] = {
+            pool.submit(_fetch_stream_url_once, api, track_id, quality, timeout_s): api
+            for api in apis
+        }
+        for fut in as_completed(futures, timeout=timeout_s + 2):
             api = futures[fut]
             try:
                 stream_url = fut.result()
                 logger.debug("[qobuz] parallel: got URL from %s in %.2fs", api, time.time() - start)
-                for other in futures:
-                    if other is not fut:
-                        other.cancel() # Fix 1: Lasciato intatto
+                pool.shutdown(wait=False, cancel_futures=True)
+                record_success("qobuz", api)
+                print_source_banner("qobuz", api, quality)
                 return api, stream_url
             except Exception as exc:
                 err_msg = str(exc)[:80]
                 errors.append(f"{api}: {err_msg}")
                 record_failure("qobuz", api)
                 print_api_failure("qobuz", api, err_msg)
+    except (TimeoutError, FuturesTimeoutError):
+        errors.append("global timeout exceeded")
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
     raise SpotiflacError(
         ErrorKind.UNAVAILABLE,
@@ -361,7 +367,7 @@ def _fetch_stream_url_parallel(
 class QobuzProvider(BaseProvider):
     name = "qobuz"
 
-    def __init__(self, timeout_s: int = 30) -> None:
+    def __init__(self, timeout_s: int = 30, qobuz_token: str | None = None) -> None:
         super().__init__(
             timeout_s = timeout_s,
             retry     = RetryConfig(max_attempts=2),
@@ -370,15 +376,19 @@ class QobuzProvider(BaseProvider):
         self._session    = self._http._session
         self._creds:      QobuzCredentials | None = None
         self._creds_lock = threading.Lock()
+        self._qobuz_token = qobuz_token or os.environ.get("QOBUZ_AUTH_TOKEN")
 
     def _get_credentials(self, force_refresh: bool = False) -> QobuzCredentials:
-        # Fix 3: Lock rilasciato durante lo scrape
         with self._creds_lock:
             if not force_refresh and self._creds and self._creds.is_fresh():
+                if self._qobuz_token and not self._creds.user_auth_token:
+                    self._creds.user_auth_token = self._qobuz_token  # ← aggiunto
                 return self._creds
             disk = _load_cached_credentials()
             if not force_refresh and disk and disk.is_fresh():
                 self._creds = disk
+                if self._qobuz_token and not self._creds.user_auth_token:
+                    self._creds.user_auth_token = self._qobuz_token  # ← aggiunto
                 return self._creds
 
         # Scrape fuori dal lock (può essere lento)
@@ -395,14 +405,14 @@ class QobuzProvider(BaseProvider):
         with self._creds_lock:
             if scraped:
                 self._creds = scraped
-                return self._creds
-            if disk:
+            elif disk:
                 self._creds = disk
-                return self._creds
-            if self._creds:
-                return self._creds
-            logger.warning("[qobuz] using embedded fallback credentials")
-            self._creds = QobuzCredentials.default()
+            elif not self._creds:
+                logger.warning("[qobuz] using embedded fallback credentials")
+                self._creds = QobuzCredentials.default()
+
+            if self._qobuz_token and not self._creds.user_auth_token:
+                self._creds.user_auth_token = self._qobuz_token  # ← aggiunto
             return self._creds
 
     def _probe_credentials(self, creds: QobuzCredentials) -> bool:
@@ -491,8 +501,6 @@ class QobuzProvider(BaseProvider):
         for i, q in enumerate(chain):
             try:
                 winner_api, stream_url = _fetch_stream_url_parallel(ordered_apis, track_id, q, _API_TIMEOUT_S)
-                record_success("qobuz", winner_api)
-                print_source_banner("qobuz", winner_api, q)
                 return stream_url
             except SpotiflacError as exc:
                 last_exc = exc
@@ -517,7 +525,7 @@ class QobuzProvider(BaseProvider):
             use_album_track_num: bool = False,
             first_artist_only:   bool = False,
             allow_fallback:      bool = True,
-            quality:             str  = "27",
+            quality:             str  = "6",
             embed_genre:         bool = True,
             single_genre:        bool = True,
             embed_lyrics:            bool = False,
@@ -531,16 +539,18 @@ class QobuzProvider(BaseProvider):
             if not metadata.isrc:
                 raise TrackNotFoundError(self.name, "no ISRC provided")
 
-            genre_fetch = (
-                AsyncGenreFetch(metadata.isrc, use_single_genre=single_genre)
-                if embed_genre else None
-            )
+            # 1. Avvio Fetch MusicBrainz in parallelo (se richiesto l'arricchimento)
+            mb_fetcher = None
+            if (enrich_metadata or embed_genre) and metadata.isrc:
+                mb_fetcher = AsyncMBFetch(metadata.isrc)
 
+            # 2. Ricerca traccia su Qobuz
             track    = self._search_by_isrc(metadata.isrc)
             track_id = track.get("id")
             if not track_id:
                 raise TrackNotFoundError(self.name, metadata.isrc)
 
+            # 3. Costruzione percorso e controllo esistenza
             dest = self._build_output_path(
                 metadata, output_dir, filename_format,
                 position, include_track_num, use_album_track_num, first_artist_only,
@@ -548,30 +558,63 @@ class QobuzProvider(BaseProvider):
             if self._file_exists(dest):
                 return DownloadResult.ok(self.name, str(dest))
 
+            # 4. Ottenimento URL e download effettivo
             stream_url = self._get_stream_url(track_id, quality, allow_fallback)
             self._http.stream_to_file(stream_url, str(dest), self._progress_cb)
 
+            # 5. Validazione integrità file
             expected_s = metadata.duration_ms // 1000
             valid, err = validate_downloaded_track(str(dest), expected_s)
             if not valid:
                 raise SpotiflacError(ErrorKind.UNAVAILABLE, err, self.name)
 
-            genre = genre_fetch.result() if genre_fetch else ""
-            if genre:
-                logger.debug("[qobuz] genre from MusicBrainz: %s", genre)
+            # 6. RECUPERO DATI MUSICBRAINZ E MAPPATURA TAG
+            mb_tags = {}
+            if mb_fetcher:
+                res = mb_fetcher.result()
+                if res:
+                    mapping = {
+                        "mbid_track":    "MUSICBRAINZ_TRACKID",
+                        "mbid_album":    "MUSICBRAINZ_ALBUMID",
+                        "mbid_artist":   "MUSICBRAINZ_ARTISTID",
+                        "mbid_relgroup": "MUSICBRAINZ_RELEASEGROUPID",
+                        "barcode":       "BARCODE",
+                        "label":         "LABEL",
+                        "organization":  "ORGANIZATION",
+                        "country":       "RELEASECOUNTRY",
+                        "script":        "SCRIPT",
+                        "status":        "RELEASESTATUS",
+                        "media":         "MEDIA",
+                        "type":          "RELEASETYPE",
+                        "artist_sort":   "ARTISTSORT",
+                        "bpm":           "BPM",
+                        "genre":         "GENRE"
+                    }
 
+                    for mb_key, tag_name in mapping.items():
+                        val = res.get(mb_key)
+                        if val:
+                            mb_tags[tag_name] = str(val)
+
+                    if res.get("original_date"):
+                        mb_tags["ORIGINALDATE"] = res["original_date"]
+                        mb_tags["ORIGINALYEAR"] = res["original_date"][:4]
+            _print_mb_summary(mb_tags)
+
+            # 7. Scrittura Metadati finali
             embed_metadata(
                 dest, metadata,
-                first_artist_only = first_artist_only,
-                cover_url         = metadata.cover_url,
-                session           = self._session,
-                extra_tags        = {"GENRE": genre} if genre else None,
+                first_artist_only       = first_artist_only,
+                cover_url               = metadata.cover_url,
+                session                 = self._session,
+                extra_tags              = mb_tags,
                 embed_lyrics            = embed_lyrics,
                 lyrics_providers        = lyrics_providers,
                 lyrics_spotify_token    = lyrics_spotify_token,
                 lyrics_musixmatch_token = lyrics_musixmatch_token,
                 enrich                  = enrich_metadata,
                 enrich_providers        = enrich_providers,
+                enrich_qobuz_token      = self._qobuz_token or "",
             )
             return DownloadResult.ok(self.name, str(dest))
 

@@ -20,6 +20,9 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+from ..core.tagger import _print_mb_summary
+from ..core.link_resolver import LinkResolver
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
@@ -32,6 +35,7 @@ from ..core.errors import (
 )
 from ..core.http import HttpClient, RetryConfig
 from ..core.models import TrackMetadata, DownloadResult
+from ..core.musicbrainz import AsyncMBFetch
 from ..core.tagger import embed_metadata
 from .base import BaseProvider
 from ..core.console import (
@@ -72,9 +76,9 @@ _TIDAL_API_GIST_URL   = "https://gist.githubusercontent.com/afkarxyz/2ce772b9433
 _TIDAL_API_CACHE_FILE = "tidal-api-urls.json"
 
 # Timeout e retry allineati al Go (tidalAPITimeoutMobile, tidalMaxRetries)
-_API_TIMEOUT_S = 25
-_MAX_RETRIES   = 2
-_RETRY_DELAY_S = 0.5
+_API_TIMEOUT_S = 8
+_MAX_RETRIES   = 1
+_RETRY_DELAY_S = 0.3
 
 # ---------------------------------------------------------------------------
 # API list manager (invariato rispetto alla versione originale)
@@ -147,7 +151,7 @@ def _save_tidal_api_list_state_locked(state: dict) -> None:
 
 
 def _fetch_tidal_api_urls_from_gist() -> list[str]:
-    resp = requests.get(_TIDAL_API_GIST_URL, timeout=12, headers={"User-Agent": _TIDAL_USER_AGENT})
+    resp = requests.get(_TIDAL_API_GIST_URL, timeout=10, headers={"User-Agent": _TIDAL_USER_AGENT})
     if resp.status_code != 200:
         raise RuntimeError(f"Tidal API gist returned status {resp.status_code}")
     urls = resp.json()
@@ -411,38 +415,34 @@ def _fetch_tidal_url_parallel(
         quality:   str,
         timeout_s: int = _API_TIMEOUT_S,
 ) -> tuple[str, str]:
-    """
-    Interroga tutte le API simultaneamente e ritorna (api_url, download_url)
-    della prima risposta valida.
-
-    Porta getDownloadURLParallel dal Go:
-      goroutine per ogni API → resultChan → prima risposta vince.
-    """
     if not apis:
         raise SpotiflacError(ErrorKind.UNAVAILABLE, "no Tidal APIs configured", "tidal")
 
     start  = time.time()
     errors: list[str] = []
 
-    futures: dict[Future, str] = {}
-    with ThreadPoolExecutor(max_workers=len(apis)) as pool:
-        for api in apis:
-            fut = pool.submit(_fetch_tidal_url_once, api, track_id, quality, timeout_s)
-            futures[fut] = api
-
-        for fut in as_completed(futures):
+    pool = ThreadPoolExecutor(max_workers=min(len(apis), 8))
+    try:
+        futures: dict[Future, str] = {
+            pool.submit(_fetch_tidal_url_once, api, track_id, quality, timeout_s): api
+            for api in apis
+        }
+        for fut in as_completed(futures, timeout=timeout_s + 2):
             api = futures[fut]
             try:
                 dl_url = fut.result()
                 logger.debug("[tidal] parallel: got URL from %s in %.2fs", api, time.time() - start)
-                for other in futures:
-                    if other is not fut:
-                        other.cancel()
+                # Shutdown senza aspettare i thread in esecuzione (Python 3.9+)
+                pool.shutdown(wait=False, cancel_futures=True)
                 return api, dl_url
             except Exception as exc:
                 err_msg = str(exc)[:80]
                 errors.append(f"{api}: {err_msg}")
                 print_api_failure("tidal", api, err_msg)
+    except (TimeoutError, FuturesTimeoutError):
+        errors.append("global timeout exceeded")
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
     raise SpotiflacError(
         ErrorKind.UNAVAILABLE,
@@ -473,6 +473,8 @@ class TidalProvider(BaseProvider):
         except Exception as exc:
             logger.warning("[tidal] API list unavailable, using built-in fallback: %s", exc)
             self._apis = list(apis or _TIDAL_APIS)
+
+        self._qobuz_token: str | None = None
 
     # ------------------------------------------------------------------
     # Spotify → Tidal resolution (invariata)
@@ -536,18 +538,11 @@ class TidalProvider(BaseProvider):
         return None
 
     def _resolve_via_songlink(self, spotify_track_id: str) -> str:
-        url = (
-            f"https://api.song.link/v1-alpha.1/links?"
-            f"url=https://open.spotify.com/track/{spotify_track_id}&userCountry=IT"
-        )
-        try:
-            resp = self._session.get(url, timeout=10)
-            resp.raise_for_status()
-            tidal = resp.json().get("linksByPlatform", {}).get("tidal")
-            if tidal and tidal.get("url"):
-                return tidal["url"]
-        except Exception as exc:
-            raise TrackNotFoundError(self.name, spotify_track_id) from exc
+        resolver = LinkResolver(self._http)
+        links = resolver.resolve_all(spotify_track_id)
+        tidal_url = links.get("tidal")
+        if tidal_url:
+            return tidal_url
         raise TrackNotFoundError(self.name, spotify_track_id)
 
     # ------------------------------------------------------------------
@@ -623,12 +618,12 @@ class TidalProvider(BaseProvider):
         t_start = time.time()
 
         with open(dest, "wb") as f:
-            resp = self._session.get(init_url, timeout=20, headers=headers)
+            resp = self._session.get(init_url, timeout=15, headers=headers)
             resp.raise_for_status()
             f.write(resp.content)
 
             for i, url in enumerate(media_urls, 1):
-                resp = self._session.get(url, timeout=20, headers=headers)
+                resp = self._session.get(url, timeout=15, headers=headers)
                 resp.raise_for_status()
                 f.write(resp.content)
                 pct    = i / total
@@ -690,6 +685,11 @@ class TidalProvider(BaseProvider):
             )
             track_id = self._parse_track_id(tidal_url)
 
+            mb_fetcher = None
+            if metadata.isrc:
+                # Avviamo la ricerca mentre Tidal si prepara al download
+                mb_fetcher = AsyncMBFetch(metadata.isrc)
+
             dest = self._build_output_path(
                 metadata, output_dir, filename_format,
                 position, include_track_num, use_album_track_num, first_artist_only,
@@ -710,17 +710,54 @@ class TidalProvider(BaseProvider):
             if not valid:
                 raise SpotiflacError(ErrorKind.UNAVAILABLE, err_msg, self.name)
 
+            mb_tags = {}
+            res: dict = {}
+            if mb_fetcher:
+                res = mb_fetcher.result()
+
+            mapping = {
+                "mbid_track":    "MUSICBRAINZ_TRACKID",
+                "mbid_album":    "MUSICBRAINZ_ALBUMID",
+                "mbid_artist":   "MUSICBRAINZ_ARTISTID",
+                "mbid_relgroup": "MUSICBRAINZ_RELEASEGROUPID",
+                "barcode":       "BARCODE",
+                "label":         "LABEL",
+                "organization":  "ORGANIZATION",
+                "country":       "RELEASECOUNTRY",
+                "script":        "SCRIPT",
+                "status":        "RELEASESTATUS",
+                "media":         "MEDIA",
+                "type":          "RELEASETYPE",
+                "artist_sort":   "ARTISTSORT",
+                "bpm":           "BPM",
+                "genre":         "GENRE"
+            }
+
+            for mb_key, tag_name in mapping.items():
+                val = res.get(mb_key)
+                if val:
+                    mb_tags[tag_name] = str(val)
+
+            # Gestione speciale DATA ORIGINALE
+            # Come richiesto, l'anno originale va nel campo DATE (sovrascrivendo quello Spotify)
+            if res.get("original_date"):
+                mb_tags["ORIGINALDATE"] = res["original_date"]
+                mb_tags["ORIGINALYEAR"] = res["original_date"][:4]
+            _print_mb_summary(mb_tags)
+            # 6. Scrittura Metadati finali
             embed_metadata(
                 dest, metadata,
-                first_artist_only=first_artist_only,
-                cover_url=metadata.cover_url,
-                session=self._session,
+                first_artist_only       = first_artist_only,
+                cover_url               = metadata.cover_url,
+                session                 = self._session,
+                extra_tags              = mb_tags,
                 embed_lyrics            = embed_lyrics,
                 lyrics_providers        = lyrics_providers,
                 lyrics_spotify_token    = lyrics_spotify_token,
                 lyrics_musixmatch_token = lyrics_musixmatch_token,
                 enrich                  = enrich_metadata,
                 enrich_providers        = enrich_providers,
+                enrich_qobuz_token      = self._qobuz_token or "",
             )
             return DownloadResult.ok(self.name, str(dest))
 

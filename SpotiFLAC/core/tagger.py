@@ -1,6 +1,12 @@
 # SpotiFLAC/core/tagger.py
 """
 Tagger FLAC centralizzato — con metadata enrichment multi-provider e lyrics multi-provider.
+
+FIX v2:
+  - ARTIST/ALBUMARTIST scritti come stringa unica con virgola (non lista)
+    per compatibilità con tutti gli editor (beets, foobar2000, picard, ecc.)
+  - Aggiunto ARTISTS/ALBUMARTISTS come tag multi-valore separato
+    per editor avanzati che li supportano (MusicBrainz Picard standard)
 """
 from __future__ import annotations
 import logging
@@ -17,6 +23,68 @@ logger = logging.getLogger(__name__)
 
 SOURCE_TAG = "https://github.com/ShuShuzinhuu/SpotiFLAC-Module-Version"
 
+
+# ---------------------------------------------------------------------------
+# MusicBrainz summary helper
+# ---------------------------------------------------------------------------
+
+def _print_mb_summary(mb_tags: dict) -> None:
+    """
+    Stampa un riepilogo dei tag aggiunti da MusicBrainz,
+    in formato analogo al messaggio "Arricchito con: ..." del tagger.
+    """
+    if not mb_tags:
+        return
+
+    # Mappatura unificata sia per i tag FLAC (UPPERCASE) sia per i dizionari raw (lowercase)
+    _TAG_LABELS = {
+        "GENRE": "genere", "genre": "genere",
+        "BPM": "BPM", "bpm": "BPM",
+        "LABEL": "etichetta", "label": "etichetta",
+        "CATALOGNUMBER": "n. catalogo", "catalognumber": "n. catalogo",
+        "BARCODE": "barcode", "barcode": "barcode",
+        "ORIGINALDATE": "data", "original_date": "data",
+        "RELEASECOUNTRY": "paese", "country": "paese",
+        "RELEASESTATUS": "stato release", "status": "stato release",
+        "MEDIA": "supporto", "media": "supporto",
+        "RELEASETYPE": "tipo release", "type": "tipo release",
+        "ARTISTSORT": "artista (sort)", "artist_sort": "artista (sort)",
+        "ALBUMARTISTSORT": "artista album (sort)", "albumartist_sort": "artista album (sort)",
+        "SCRIPT": "scrittura", "script": "scrittura",
+    }
+
+    # Raggruppa tutti gli ID per mostrarli in un unico conteggio finale
+    mb_ids = {
+        k: v for k, v in mb_tags.items()
+        if str(k).startswith("MUSICBRAINZ_") or str(k).startswith("mbid_")
+    }
+
+    # Ignoriamo l'anno per evitare il duplicato a schermo (teniamo solo ORIGINALDATE/data)
+    skip_dupes = {"ORIGINALYEAR", "original_year", "DATE", "date"}
+
+    # Selezioniamo solo i campi che hanno effettivamente un valore e non sono ID o duplicati
+    important = {
+        k: v for k, v in mb_tags.items()
+        if k not in mb_ids and k not in skip_dupes and v
+    }
+
+    parts = []
+    for tag, val in important.items():
+        label = _TAG_LABELS.get(tag, str(tag).lower())
+        # Tronchiamo i valori troppo lunghi a 40 caratteri (es. per stringhe lunghissime)
+        short_val = str(val)[:40] + ("…" if len(str(val)) > 40 else "")
+        parts.append(f"{label}: {short_val}")
+
+    if mb_ids:
+        parts.append(f"ID MusicBrainz ({len(mb_ids)} campi)")
+
+    if parts:
+        print(f"  ✦ MusicBrainz: {', '.join(parts)}")
+
+
+# ---------------------------------------------------------------------------
+# Main embed function
+# ---------------------------------------------------------------------------
 
 def embed_metadata(
         filepath:          str | Path,
@@ -36,29 +104,8 @@ def embed_metadata(
         # Metadata enrichment options
         enrich:           bool = False,
         enrich_providers: list[str] | None = None,
+        enrich_qobuz_token: str  = "",
 ) -> None:
-    """
-    Scrive i tag Vorbis Comment in un file FLAC, opzionalmente embed cover,
-    testi (da più provider) e metadati arricchiti (label, BPM, genere…).
-
-    Args:
-        filepath:                Path del file FLAC.
-        metadata:                TrackMetadata Spotify.
-        first_artist_only:       Usa solo il primo artista.
-        cover_url:               URL copertina (scaricata se cover_data è None).
-        cover_data:              Byte della copertina (già scaricata).
-        session:                 requests.Session riutilizzabile.
-        extra_tags:              Tag aggiuntivi liberi.
-        multi_artist:            Scrivi ARTIST/ALBUMARTIST multipli.
-        embed_lyrics:            Abilita fetch testi multi-provider.
-        lyrics_providers:        Lista provider testi in ordine.
-                                 Default: ["spotify","musixmatch","apple","amazon","lrclib"]
-        lyrics_spotify_token:    Cookie sp_dc Spotify (per lyrics Spotify).
-        lyrics_musixmatch_token: Token Musixmatch desktop.
-        enrich:                  Abilita metadata enrichment multi-provider.
-        enrich_providers:        Lista provider enrichment in ordine.
-                                 Default: ["deezer","apple","qobuz","tidal"]
-    """
     path = Path(filepath)
     if not path.exists():
         raise SpotiflacError(ErrorKind.FILE_IO, f"File not found: {path}")
@@ -77,9 +124,17 @@ def embed_metadata(
                 artist_name = metadata.first_artist,
                 isrc        = metadata.isrc,
                 providers   = enrich_providers,
+                qobuz_token = enrich_qobuz_token,
             )
             enriched_tags      = enriched.as_tags()
             enriched_cover_url = enriched.cover_url_hd
+            if enriched._sources:
+                nomi_campi = {"cover_url_hd": "cover", "explicit": "advisory"}
+                dettagli = ", ".join(
+                    f"{nomi_campi.get(campo, campo)} ({provider})"
+                    for campo, provider in enriched._sources.items()
+                )
+                print(f"Arricchito con: {dettagli}")
             logger.debug("[tagger] enriched: %s", list(enriched_tags.keys()))
         except Exception as exc:
             logger.warning("[tagger] enrichment failed: %s", exc)
@@ -88,7 +143,6 @@ def embed_metadata(
     # 2. Cover art                                                         #
     # ------------------------------------------------------------------ #
     if not cover_data:
-        # Preferisci cover HD dall'enrichment, poi quella di Spotify
         best_cover = enriched_cover_url or cover_url or metadata.cover_url
         if best_cover:
             cover_data = _fetch_cover(best_cover, session)
@@ -125,22 +179,32 @@ def embed_metadata(
         tags = metadata.as_flac_tags(first_artist_only=first_artist_only)
         tags["DESCRIPTION"] = SOURCE_TAG
 
-        # Enriched tags hanno precedenza su extra_tags solo per campi assenti
         merged_extra: dict[str, str] = {**enriched_tags}
         if extra_tags:
-            merged_extra.update(extra_tags)  # extra_tags espliciti vincono sempre
+            merged_extra.update(extra_tags)
+
+        if merged_extra:
+            if "original_date" in merged_extra and merged_extra["original_date"]:
+                tags["ORIGINALDATE"] = merged_extra["original_date"]
+                tags["ORIGINALYEAR"] = merged_extra["original_date"][:4]
+
+            for key, val in merged_extra.items():
+                if key not in ("original_date", "original_year"):
+                    tags[key] = str(val)
 
         if lyrics:
             tags["LYRICS"] = lyrics
             logger.debug("[tagger] lyrics embedded (%d chars)", len(lyrics))
 
-        if merged_extra:
-            tags.update(merged_extra)
-
         for key, val in tags.items():
             if multi_artist and key in ("ARTIST", "ALBUMARTIST") and "," in val:
-                artists = [a.strip() for a in val.split(",") if a.strip()]
-                audio[key] = artists
+                parts = [a.strip() for a in val.split(",") if a.strip()]
+
+                # FIX: ARTIST = stringa unica "The Weeknd, Playboi Carti"
+                audio[key] = val
+
+                # ARTISTS / ALBUMARTISTS = tag multi-valore per editor moderni
+                audio[key + "S"] = parts
             else:
                 audio[key] = val
 
@@ -163,20 +227,18 @@ def embed_metadata(
             cause=exc,
         )
 
-
 def _fetch_cover(url: str, session: requests.Session | None) -> bytes | None:
     if not url:
         return None
     try:
         s   = session or requests.Session()
-        res = s.get(url, timeout=15)
+        res = s.get(url, timeout=8)
         if res.status_code == 200:
             return res.content
         logger.warning("[tagger] cover HTTP %s for %s", res.status_code, url)
     except Exception as exc:
         logger.warning("[tagger] cover download failed (%s): %s", url, exc)
     return None
-
 
 def max_resolution_spotify_cover(url: str) -> str:
     """Converte URL immagine Spotify alla variante massima risoluzione."""

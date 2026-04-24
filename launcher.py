@@ -32,17 +32,24 @@ def parse_args() -> argparse.Namespace:
         default = "{title} - {artist}",
         dest    = "filename_format",
         help    = "Template filename. Placeholder: {title} {artist} {album} "
-                  "{album_artist} {year} {date} {track} {disc} {isrc}",
+                  "{album_artist} {year} {date} {track} {disc} {isrc} {position}",
     )
     parser.add_argument(
         "--quality", "-q",
         default = "LOSSLESS",
-        help    = "Qualità: LOSSLESS o HI_RES (Tidal), 6/7/27 (Qobuz). Default: LOSSLESS",
+        help    = "Quality: LOSSLESS or HI_RES (Tidal), 6/7/27 (Qobuz). Default: LOSSLESS",
     )
     parser.add_argument("--use-track-numbers",     action="store_true", dest="use_track_numbers")
     parser.add_argument("--use-artist-subfolders", action="store_true", dest="use_artist_subfolders")
     parser.add_argument("--use-album-subfolders",  action="store_true", dest="use_album_subfolders")
     parser.add_argument("--first-artist-only",     action="store_true", dest="first_artist_only")
+    parser.add_argument(
+        "--qobuz-token",
+        default = None,
+        dest    = "qobuz_token",
+        metavar = "TOKEN",
+        help    = "Token utente Qobuz (x-user-auth-token)",
+    )
     parser.add_argument(
         "--loop", "-l",
         type    = int,
@@ -65,9 +72,9 @@ def parse_args() -> argparse.Namespace:
         nargs   = "+",
         default = None,
         dest    = "lyrics_providers",
-        choices = ["spotify", "musixmatch", "apple", "amazon", "lrclib"],
+        choices = ["spotify", "musixmatch", "amazon", "lrclib"],
         metavar = "PROVIDER",
-        help    = "Provider testi in ordine. Default: spotify musixmatch apple amazon lrclib",
+        help    = "Provider testi in ordine. Default: spotify musixmatch amazon lrclib",
     )
     lyrics_grp.add_argument(
         "--spotify-token",
@@ -129,6 +136,7 @@ def main() -> None:
         # Enrichment
         enrich_metadata          = args.enrich,
         enrich_providers         = args.enrich_providers,
+        qobuz_token              = args.qobuz_token,
     )
 
 

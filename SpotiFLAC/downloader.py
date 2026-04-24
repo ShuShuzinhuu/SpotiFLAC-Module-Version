@@ -1,16 +1,10 @@
 """
 Downloader — orchestratore principale.
-
-Gestisce la fallback chain tra provider, la struttura cartelle,
-il loop retry e la pipeline completa download → tag.
-Ispirato al rotation system Go: nessuna eccezione sale al chiamante,
-ogni risultato è un DownloadResult tipato.
 """
 from __future__ import annotations
 import logging
 import os
 import re
-import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,10 +19,6 @@ from .core.console import print_track_header, print_summary
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Config dataclasses
-# ---------------------------------------------------------------------------
-
 @dataclass
 class DownloadOptions:
     output_dir:           str
@@ -40,39 +30,30 @@ class DownloadOptions:
     first_artist_only:    bool            = False
     quality:              str             = "LOSSLESS"
     allow_fallback:       bool            = True
-    inter_track_delay_s:  float           = 1.5
+    inter_track_delay_s:  float           = 0.5
 
-    # ── Lyrics ────────────────────────────────────────────────────────
     embed_lyrics:            bool          = False
     lyrics_providers:        list[str]     = field(
-        default_factory=lambda: ["spotify", "musixmatch", "apple", "amazon", "lrclib"]
+        default_factory=lambda: ["spotify", "musixmatch", "amazon", "lrclib"]
     )
-    lyrics_spotify_token:    str           = ""   # cookie sp_dc
-    lyrics_musixmatch_token: str           = ""   # token desktop Musixmatch
+    lyrics_spotify_token:    str           = ""
+    lyrics_musixmatch_token: str           = ""
 
-    # ── Metadata enrichment ───────────────────────────────────────────
     enrich_metadata:    bool           = False
     enrich_providers:   list[str]      = field(
         default_factory=lambda: ["deezer", "apple", "qobuz", "tidal"]
     )
+    qobuz_token:        str | None     = None
 
 
-# ---------------------------------------------------------------------------
-# Provider factory
-# ---------------------------------------------------------------------------
-
-def _build_provider(name: str) -> BaseProvider | None:
-    """
-    Factory centralizzata per i provider.
-    Provider nativi implementano BaseProvider direttamente.
-    Provider legacy (amazon, deezer, youtube) sono avvolti da adapter.
-    """
+def _build_provider(name: str, opts: DownloadOptions) -> BaseProvider | None:
     from .providers.tidal import TidalProvider
     from .providers.qobuz import QobuzProvider
 
-    native = {"tidal": TidalProvider, "qobuz": QobuzProvider}
-    if name in native:
-        return native[name]()
+    if name == "tidal":
+        return TidalProvider()
+    if name == "qobuz":
+        return QobuzProvider(qobuz_token=opts.qobuz_token)
 
     adapters = {
         "amazon":  ("providers.amazon",  "AmazonProvider"),
@@ -94,22 +75,13 @@ def _build_provider(name: str) -> BaseProvider | None:
         return None
 
 
-# ---------------------------------------------------------------------------
-# Single-track download logic
-# ---------------------------------------------------------------------------
-
 def download_one(
-    metadata:   TrackMetadata,
-    output_dir: str,
-    providers:  list[BaseProvider],
-    opts:       DownloadOptions,
-    position:   int = 1,
+        metadata:   TrackMetadata,
+        output_dir: str,
+        providers:  list[BaseProvider],
+        opts:       DownloadOptions,
+        position:   int = 1,
 ) -> DownloadResult:
-    """
-    Prova i provider in ordine.
-    Ritorna il primo DownloadResult con success=True,
-    oppure DownloadResult.fail() se tutti falliscono.
-    """
     errors: dict[str, str] = {}
     manager = DownloadManager()
 
@@ -118,8 +90,6 @@ def download_one(
 
         cb = ProgressCallback(item_id=metadata.id)
         provider.set_progress_callback(cb)
-
-        ext = _provider_extension(provider.name)
 
         result = provider.download_track(
             metadata,
@@ -130,7 +100,6 @@ def download_one(
             use_album_track_num = opts.use_track_numbers,
             first_artist_only   = opts.first_artist_only,
             allow_fallback      = opts.allow_fallback,
-
             embed_lyrics            = opts.embed_lyrics,
             lyrics_providers        = opts.lyrics_providers,
             lyrics_spotify_token    = opts.lyrics_spotify_token,
@@ -150,43 +119,27 @@ def download_one(
     return DownloadResult.fail("none", f"All providers failed — {summary}")
 
 
-def _provider_extension(name: str) -> str:
-    return {
-        "youtube": ".mp3",
-        "amazon":  ".m4a",
-    }.get(name, ".flac")
-
-
-# ---------------------------------------------------------------------------
-# Batch download worker
-# ---------------------------------------------------------------------------
-
 class DownloadWorker:
-    """
-    Esegue il download di una lista di tracce in sequenza,
-    gestendo subfolders, skip, e failure tracking.
-    """
-
     def __init__(
-        self,
-        tracks:   list[TrackMetadata],
-        opts:     DownloadOptions,
-        collection_name: str = "",
-        is_album:     bool = False,
-        is_playlist:  bool = False,
+            self,
+            tracks:   list[TrackMetadata],
+            opts:     DownloadOptions,
+            collection_name: str = "",
+            is_album:     bool = False,
+            is_playlist:  bool = False,
     ) -> None:
         self._tracks          = tracks
         self._opts            = opts
         self._collection_name = collection_name
         self._is_album        = is_album
         self._is_playlist     = is_playlist
-        self._failed:  list[tuple[str, str, str]] = []  # (title, artists, error)
+        self._failed:  list[tuple[str, str, str]] = []
         self._providers: list[BaseProvider] = self._build_providers()
 
     def _build_providers(self) -> list[BaseProvider]:
         result = []
         for name in self._opts.services:
-            p = _build_provider(name)
+            p = _build_provider(name, self._opts)
             if p:
                 result.append(p)
         if not result:
@@ -194,7 +147,6 @@ class DownloadWorker:
         return result
 
     def run(self) -> list[tuple[str, str, str]]:
-        """Esegue tutti i download. Ritorna la lista dei falliti."""
         manager   = DownloadManager()
         total     = len(self._tracks)
         start     = time.perf_counter()
@@ -256,28 +208,12 @@ class DownloadWorker:
         print_summary(len(self._tracks), succeeded, self._failed, elapsed)
 
 
-# ---------------------------------------------------------------------------
-# Top-level entry point
-# ---------------------------------------------------------------------------
-
 class SpotiflacDownloader:
-    """
-    Entry point principale per uso come libreria o CLI.
-
-    Esempio:
-        downloader = SpotiflacDownloader(opts)
-        downloader.run("https://open.spotify.com/album/...")
-    """
-
     def __init__(self, opts: DownloadOptions) -> None:
         self._opts   = opts
         self._client = SpotifyMetadataClient()
 
     def run(self, spotify_url: str, loop_minutes: int | None = None) -> None:
-        """
-        Scarica tutti i brani dall'URL Spotify.
-        Se loop_minutes > 0, ripete il ciclo dopo l'attesa specificata.
-        """
         while True:
             self._run_once(spotify_url)
             if not loop_minutes or loop_minutes <= 0:
@@ -297,6 +233,27 @@ class SpotiflacDownloader:
         if not tracks:
             print("No tracks found.")
             return
+
+        # ── Risoluzione ISRC mancanti ─────────────────────────────────────
+        # IsrcHelper era definito (isrc_helper.py → isrc_finder + soundplate
+        # + songstats) ma non veniva mai istanziato nel flusso principale.
+        # I provider Tidal e Qobuz richiedono ISRC: senza questa chiamata
+        # tutti i brani con ISRC vuoto vengono scartati silenziosamente.
+        missing_isrc = [t for t in tracks if not t.isrc]
+        if missing_isrc:
+            print(f"Resolving ISRC for {len(missing_isrc)} track(s)…")
+            try:
+                from .core.isrc_helper import IsrcHelper
+                from .core.http import HttpClient
+                resolver = IsrcHelper(HttpClient("isrc"))
+                for i, track in enumerate(tracks):
+                    if not track.isrc:
+                        resolved = resolver.get_isrc(track.id)
+                        if resolved:
+                            tracks[i] = track.model_copy(update={"isrc": resolved})
+                            logger.debug("[isrc] resolved %s → %s", track.id, resolved)
+            except Exception as exc:
+                logger.warning("[isrc] bulk resolution failed: %s", exc)
 
         print(f"Found {len(tracks)} track(s) in: {collection_name}")
 
@@ -318,10 +275,6 @@ class SpotiflacDownloader:
         )
         worker.run()
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _format_seconds(seconds: float) -> str:
     s = int(round(seconds))

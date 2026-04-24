@@ -1,12 +1,11 @@
 """
 Modelli Pydantic per SpotiFLAC.
-Sostituiscono i dict raw che circolano nel codice originale.
-Validazione, coercizione e zero KeyError a runtime.
+Sostituiscono i dict raw per garantire validazione, coercizione e zero KeyError.
 """
 from __future__ import annotations
 import re
 from typing import Literal
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, field_validator, model_validator, ValidationInfo
 
 
 # ---------------------------------------------------------------------------
@@ -34,24 +33,43 @@ class TrackMetadata(BaseModel):
 
     @field_validator("title", "artists", "album", "album_artist", mode="before")
     @classmethod
-    def strip_str(cls, v: object) -> str:
-        return str(v).strip() if v else "Unknown"
+    def strip_str(cls, v: object, info: ValidationInfo) -> str:
+        if not v:
+            return "Unknown"
+        s = str(v).strip()
+        
+        if info.field_name in ("artists", "album_artist"):
+        # Sostituzioni dei separatori comuni con la virgola
+            s = s.replace(" & ", ", ")
+            s = s.replace(" / ", ", ")
+            s = s.replace(" feat. ", ", ")
+            s = s.replace(" ft. ", ", ")
+
+        # Esempio: "Artist A, Artist B & Artist C" -> "Artist A, Artist B, Artist C"
+            parts = [p.strip() for p in s.split(",") if p.strip()]
+            s = ", ".join(parts)
+        return s or "Unknown"
 
     @property
     def year(self) -> str:
+        """Estrae l'anno dalla release_date (YYYY-MM-DD)."""
         return self.release_date[:4] if len(self.release_date) >= 4 else ""
 
     @property
     def duration_seconds(self) -> float:
+        """Converte la durata da millisecondi a secondi."""
         return self.duration_ms / 1000
 
     @property
     def first_artist(self) -> str:
+        """Ritorna solo il primo artista della lista."""
         return self.artists.split(",")[0].strip()
 
     def as_flac_tags(self, *, first_artist_only: bool = False) -> dict[str, str]:
+        """Formatta i metadati come tag standard per file FLAC/Vorbis."""
         artist = self.first_artist if first_artist_only else self.artists
         album_artist = self.first_artist if first_artist_only else self.album_artist
+
         tags: dict[str, str] = {
             "TITLE":        self.title,
             "ARTIST":       artist,
@@ -63,6 +81,8 @@ class TrackMetadata(BaseModel):
             "DISCNUMBER":   str(self.disc_number or 1),
             "DISCTOTAL":    str(self.total_discs or 1),
         }
+
+        # Campi opzionali
         for key, val in [
             ("ISRC",         self.isrc),
             ("COPYRIGHT",    self.copyright),
@@ -75,10 +95,11 @@ class TrackMetadata(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Download result
+# Download Result
 # ---------------------------------------------------------------------------
 
 class DownloadResult(BaseModel):
+    """Rappresenta l'esito di un'operazione di download."""
     success:    bool
     provider:   str
     file_path:  str | None = None
@@ -87,8 +108,9 @@ class DownloadResult(BaseModel):
 
     @model_validator(mode="after")
     def _check_consistency(self) -> "DownloadResult":
+        """Valida che se il download ha successo, il path sia presente."""
         if self.success and not self.file_path:
-            raise ValueError("success=True requires file_path")
+            raise ValueError("success=True richiede un file_path")
         return self
 
     @classmethod
@@ -102,7 +124,7 @@ class DownloadResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Filename / path helpers
+# Filename / Path Helpers
 # ---------------------------------------------------------------------------
 
 _UNSAFE_RE   = re.compile(r'[\\/*?:"<>|]')
@@ -110,7 +132,7 @@ _WHITESPACE  = re.compile(r"\s+")
 
 
 def sanitize(value: str, fallback: str = "Unknown") -> str:
-    """Rimuove caratteri non validi per filename e normalizza whitespace."""
+    """Rimuove caratteri non validi per i filesystem e normalizza gli spazi."""
     if not value:
         return fallback
     cleaned = _UNSAFE_RE.sub("", value)
@@ -119,18 +141,19 @@ def sanitize(value: str, fallback: str = "Unknown") -> str:
 
 
 def build_filename(
-    metadata:            TrackMetadata,
-    fmt:                 str,
-    position:            int   = 1,
-    include_track_num:   bool  = False,
-    use_album_track_num: bool  = False,
-    first_artist_only:   bool  = False,
-    extension:           str   = ".flac",
+        metadata:            TrackMetadata,
+        fmt:                 str,
+        position:            int   = 1,
+        include_track_number:   bool  = False,
+        use_album_track_number: bool  = False,
+        first_artist_only:   bool  = False,
+        extension:           str   = ".flac",
 ) -> str:
     """
-    Costruisce il filename finale a partire dal formato template.
-    Rimpiazza `{title}`, `{artist}`, `{album}`, `{year}`, `{track}`, ecc.
+    Costruisce il filename finale applicando i placeholder o i formati legacy.
+    Placeholder supportati: {title}, {artist}, {album}, {album_artist}, {year}, {date}, {disc}, {isrc}, {track}
     """
+    # Preparazione variabili sanificate
     artist       = sanitize(metadata.first_artist if first_artist_only else metadata.artists)
     album_artist = sanitize(metadata.first_artist if first_artist_only else metadata.album_artist)
     title        = sanitize(metadata.title)
@@ -139,13 +162,14 @@ def build_filename(
     date         = sanitize(metadata.release_date)
     disc         = metadata.disc_number
 
-    track_num = (
+    # Determina il numero traccia (sequenziale o da album)
+    track_number = (
         metadata.track_number
-        if (use_album_track_num and metadata.track_number > 0)
+        if (use_album_track_number and metadata.track_number > 0)
         else position
     )
 
-    # Template format
+    # Logica di rimpiazzo Template
     if "{" in fmt:
         result = (
             fmt
@@ -157,23 +181,30 @@ def build_filename(
             .replace("{date}",         date)
             .replace("{disc}",         str(disc) if disc > 0 else "")
             .replace("{isrc}",         sanitize(metadata.isrc))
+            .replace("{position}",     f"{position:02d}")
         )
-        if track_num > 0:
-            result = result.replace("{track}", f"{track_num:02d}")
+
+        if metadata.track_number > 0:
+            result = result.replace("{track}", f"{metadata.track_number:02d}")
         else:
+            # Rimuove {track} e separatori pendenti se il numero non esiste
             result = re.sub(r"\{track\}[\.\s-]*", "", result)
     else:
-        # Legacy named formats
+        # Formati legacy (se fmt non è un template string)
         if fmt == "artist-title":
             result = f"{artist} - {title}"
         elif fmt == "title":
             result = title
         else:  # default: title-artist
             result = f"{title} - {artist}"
-        if include_track_num and track_num > 0:
-            result = f"{track_num:02d}. {result}"
 
-    result = sanitize(result)
+        track_number = metadata.track_number if use_album_track_number else position
+        if include_track_number and track_number > 0:
+            result = f"{track_number:02d}. {result}"
+
+    # Pulizia finale e aggiunta estensione
+    result = _WHITESPACE.sub(" ", result).strip() or "Unknown"
     if not result.lower().endswith(extension):
         result += extension
+
     return result

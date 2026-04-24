@@ -85,7 +85,7 @@ class HttpClient:
         """
         import os
         temp = dest_path + ".part"
-        req_kwargs: dict[str, Any] = {"stream": True, "timeout": (self._timeout, 300)}
+        req_kwargs: dict[str, Any] = {"stream": True, "timeout": (self._timeout, 120)}
         if extra_headers:
             req_kwargs["headers"] = extra_headers
 
