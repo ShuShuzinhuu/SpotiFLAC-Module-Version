@@ -7,34 +7,17 @@ Ordine di tentativo (configurabile):
   2. Musixmatch   — testo sincronizzato / plain (token configurabile)
   3. Amazon Music — testo plain via afkar API
   4. LRCLIB       — testo sincronizzato / plain (nessuna auth)
-
-Uso:
-    from .lyrics import fetch_lyrics
-
-    text = fetch_lyrics(
-        "Bohemian Rhapsody", "Queen",
-        album="A Night at the Opera",
-        duration_s=354,
-        track_id="spotify_track_id",
-        providers=["spotify", "musixmatch", "lrclib"],
-        spotify_token="...",   # opzionale
-        musixmatch_token="...",# opzionale
-    )
 """
 from __future__ import annotations
 
 import logging
 import time
 import urllib.parse
-from typing import Any, Callable
+from typing import Any
 
 import requests
 
 logger = logging.getLogger(__name__)
-
-# --------------------------------------------------------------------------- #
-# Costanti                                                                     #
-# --------------------------------------------------------------------------- #
 
 _LRCLIB          = "https://lrclib.net/api"
 _MUSIXMATCH_BASE = "https://apic-desktop.musixmatch.com/ws/1.1"
@@ -50,7 +33,7 @@ _DEFAULT_PROVIDERS = ["spotify", "musixmatch", "amazon", "lrclib"]
 
 
 # --------------------------------------------------------------------------- #
-# Provider 1 — Spotify Web (spclient lyrics endpoint)                         #
+# Provider 1 — Spotify Web                                                     #
 # --------------------------------------------------------------------------- #
 
 def _fetch_spotify(
@@ -58,24 +41,13 @@ def _fetch_spotify(
         sp_dc_token: str,
         timeout: int = 10,
 ) -> str:
-    """
-    Recupera testo sincronizzato da Spotify via spclient.
-    Richiede un token 'sp_dc' (cookie di sessione Spotify, non l'access token).
-
-    Come ottenere sp_dc:
-      1. Accedi a https://open.spotify.com nel browser
-      2. Apri DevTools → Application → Cookies → sp_dc
-      3. Copia il valore e passalo come `spotify_token` a fetch_lyrics()
-    """
     if not track_id or not sp_dc_token:
         return ""
     try:
-        # Step 1: ottieni un access token client dal cookie sp_dc
         client_token = _spotify_client_token(sp_dc_token, timeout)
         if not client_token:
             return ""
 
-        # Step 2: fetch testi
         r = requests.get(
             f"{_SPOTIFY_LYRICS}/{track_id}",
             params={"format": "json", "market": "from_token"},
@@ -90,24 +62,22 @@ def _fetch_spotify(
             logger.debug("[lyrics/spotify] HTTP %s for track %s", r.status_code, track_id)
             return ""
 
-        data   = r.json()
-        lines  = data.get("lyrics", {}).get("lines", [])
+        data  = r.json()
+        lines = data.get("lyrics", {}).get("lines", [])
         if not lines:
             return ""
 
         sync_type = data.get("lyrics", {}).get("syncType", "")
         if sync_type == "LINE_SYNCED":
-            # Converti in formato LRC
             lrc_lines = []
             for line in lines:
-                ms    = int(line.get("startTimeMs", 0))
-                m, s  = divmod(ms // 1000, 60)
-                cs    = (ms % 1000) // 10
+                ms   = int(line.get("startTimeMs", 0))
+                m, s = divmod(ms // 1000, 60)
+                cs   = (ms % 1000) // 10
                 words = line.get("words", "")
                 lrc_lines.append(f"[{m:02d}:{s:02d}.{cs:02d}]{words}")
             return "\n".join(lrc_lines)
 
-        # Testo non sincronizzato
         return "\n".join(line.get("words", "") for line in lines)
 
     except Exception as exc:
@@ -118,7 +88,23 @@ def _fetch_spotify(
 def _spotify_client_token(sp_dc: str, timeout: int) -> str:
     """
     Scambia il cookie sp_dc con un Bearer token per le API client Spotify.
+
+    FIX: integra spotify_totp.py come header aggiuntivo.
+    Le versioni recenti di Spotify validano le richieste tramite TOTP;
+    senza di esso il server risponde 401 anche con sp_dc valido.
     """
+    # Genera il codice TOTP (spotify_totp.py era definito ma mai usato)
+    totp_headers: dict[str, str] = {}
+    try:
+        from .spotify_totp import generate_spotify_totp
+        totp_code, totp_version = generate_spotify_totp()
+        if totp_code:
+            totp_headers["Spotify-TOTP"]    = totp_code
+            totp_headers["Spotify-TOTP-V2"] = f"{totp_code}:{totp_version}"
+            logger.debug("[lyrics/spotify] TOTP v%d added to token request", totp_version)
+    except Exception as exc:
+        logger.debug("[lyrics/spotify] TOTP generation skipped: %s", exc)
+
     try:
         r = requests.get(
             "https://open.spotify.com/get_access_token",
@@ -126,6 +112,7 @@ def _spotify_client_token(sp_dc: str, timeout: int) -> str:
             headers={
                 "Cookie":     f"sp_dc={sp_dc}",
                 "User-Agent": _UA,
+                **totp_headers,
             },
             timeout=timeout,
         )
@@ -140,7 +127,7 @@ def _spotify_client_token(sp_dc: str, timeout: int) -> str:
 # Provider 2 — Musixmatch                                                      #
 # --------------------------------------------------------------------------- #
 
-_MUSIXMATCH_DEFAULT_TOKEN = ""  # Imposta qui un token o passalo a runtime
+_MUSIXMATCH_DEFAULT_TOKEN = ""
 
 def _fetch_musixmatch(
         track_name:  str,
@@ -150,25 +137,14 @@ def _fetch_musixmatch(
         token:       str = "",
         timeout:     int = 12,
 ) -> str:
-    """
-    Recupera testi sincronizzati da Musixmatch.
-
-    Come ottenere il token:
-      1. Installa l'app desktop Musixmatch (Windows/Mac)
-      2. Apri DevTools → Network → cerca 'usertoken' nelle request headers
-      3. Oppure usa https://github.com/akashrchandran/spotify-lyrics-api
-         che espone un endpoint compatibile senza token personale.
-    """
     used_token = token or _MUSIXMATCH_DEFAULT_TOKEN
     if not used_token:
         return ""
 
     try:
-        # Tentativo con subtitle (synced lyrics)
         result = _musixmatch_subtitles(track_name, artist_name, album_name, duration_s, used_token, timeout)
         if result:
             return result
-        # Fallback su lyrics plain
         return _musixmatch_plain(track_name, artist_name, used_token, timeout)
     except Exception as exc:
         logger.debug("[lyrics/musixmatch] %s", exc)
@@ -177,8 +153,8 @@ def _fetch_musixmatch(
 
 def _musixmatch_base_params(token: str) -> dict:
     return {
-        "format":   "json",
-        "app_id":   "web-desktop-app-v1.0",
+        "format":    "json",
+        "app_id":    "web-desktop-app-v1.0",
         "usertoken": token,
     }
 
@@ -210,10 +186,9 @@ def _musixmatch_subtitles(
     if not r.ok:
         return ""
 
-    body    = r.json().get("message", {}).get("body", {})
-    macro   = body.get("macro_calls", {})
+    body  = r.json().get("message", {}).get("body", {})
+    macro = body.get("macro_calls", {})
 
-    # Prova prima richsync (word-level)
     richsync = (
         macro.get("track.richsync.get", {})
         .get("message", {})
@@ -223,7 +198,6 @@ def _musixmatch_subtitles(
     if richsync.get("richsync_body"):
         return _richsync_to_lrc(richsync["richsync_body"])
 
-    # Poi subtitle (line-level)
     subtitle = (
         macro.get("track.subtitles.get", {})
         .get("message", {})
@@ -260,7 +234,6 @@ def _musixmatch_plain(title: str, artist: str, token: str, timeout: int) -> str:
 
 
 def _richsync_to_lrc(richsync_body: str) -> str:
-    """Converte richsync JSON (word-level) in LRC (line-level)."""
     import json as _json
     try:
         lines = _json.loads(richsync_body)
@@ -270,7 +243,6 @@ def _richsync_to_lrc(richsync_body: str) -> str:
             m   = int(ts // 60)
             s   = int(ts % 60)
             cs  = int((ts % 1) * 100)
-            # Unisci tutte le parole della riga
             text = "".join(w.get("c", "") for w in entry.get("l", []))
             if text.strip():
                 lrc.append(f"[{m:02d}:{s:02d}.{cs:02d}]{text}")
@@ -278,8 +250,9 @@ def _richsync_to_lrc(richsync_body: str) -> str:
     except Exception:
         return ""
 
+
 # --------------------------------------------------------------------------- #
-# Provider 4 — Amazon Music (via afkar API)                                   #
+# Provider 3 — Amazon Music                                                    #
 # --------------------------------------------------------------------------- #
 
 def _fetch_amazon(
@@ -288,14 +261,9 @@ def _fetch_amazon(
         isrc:        str = "",
         timeout:     int = 15,
 ) -> str:
-    """
-    Prova a recuperare testi da Amazon Music tramite l'API afkar.
-    Funziona solo se il brano è disponibile su Amazon Music.
-    """
     if not isrc:
         return ""
     try:
-        # Cerca ASIN tramite ISRC
         r = requests.get(
             f"{_AMAZON_API_BASE}/lyrics/{isrc}",
             headers={"User-Agent": _UA},
@@ -303,11 +271,10 @@ def _fetch_amazon(
         )
         if not r.ok:
             return ""
-        data = r.json()
+        data  = r.json()
         lines = data.get("lines") or data.get("lyrics", [])
         if not lines:
             return ""
-        # Formato LRC se sono presenti timestamp
         if isinstance(lines[0], dict):
             lrc: list[str] = []
             for line in lines:
@@ -325,7 +292,7 @@ def _fetch_amazon(
 
 
 # --------------------------------------------------------------------------- #
-# Provider 5 — LRCLIB (originale, invariato)                                  #
+# Provider 4 — LRCLIB                                                          #
 # --------------------------------------------------------------------------- #
 
 def _fetch_lrclib(
@@ -394,24 +361,6 @@ def fetch_lyrics(
         spotify_token:    str  = "",
         musixmatch_token: str  = "",
 ) -> str:
-    """
-    Cerca testi da più provider nell'ordine specificato.
-    Ritorna il primo risultato non vuoto.
-
-    Args:
-        track_name:        Titolo del brano.
-        artist_name:       Artista principale.
-        album_name:        Album (migliora accuratezza LRCLIB/Musixmatch).
-        duration_s:        Durata in secondi (migliora accuratezza).
-        track_id:          Spotify track ID (per Spotify lyrics).
-        isrc:              ISRC (per Amazon/Musixmatch).
-        providers:         Ordine dei provider. Default: tutti.
-        spotify_token:     Cookie sp_dc di Spotify (opzionale).
-        musixmatch_token:  Token Musixmatch (opzionale).
-
-    Returns:
-        Testo in formato LRC o plain, oppure "" se non trovato.
-    """
     if providers is None:
         providers = _DEFAULT_PROVIDERS
 
@@ -420,22 +369,17 @@ def fetch_lyrics(
         try:
             if provider == "spotify":
                 result = _fetch_spotify(track_id, spotify_token)
-
             elif provider == "musixmatch":
                 result = _fetch_musixmatch(
                     track_name, artist_name, album_name, duration_s,
                     token=musixmatch_token,
                 )
-
             elif provider == "amazon":
                 result = _fetch_amazon(track_name, artist_name, isrc=isrc)
-
             elif provider == "lrclib":
                 result = _fetch_lrclib(track_name, artist_name, album_name, duration_s)
-
             else:
                 logger.warning("[lyrics] unknown provider: %s", provider)
-
         except Exception as exc:
             logger.debug("[lyrics/%s] unexpected error: %s", provider, exc)
 
@@ -448,6 +392,5 @@ def fetch_lyrics(
 
 
 def set_musixmatch_token(token: str) -> None:
-    """Imposta il token Musixmatch globalmente (alternativa al passarlo ogni volta)."""
     global _MUSIXMATCH_DEFAULT_TOKEN
     _MUSIXMATCH_DEFAULT_TOKEN = token
