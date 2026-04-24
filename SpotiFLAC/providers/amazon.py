@@ -119,7 +119,7 @@ class AmazonProvider(BaseProvider):
             raise RuntimeError(f"Cannot extract ASIN from: {amazon_url}")
         asin = asin_match.group(1)
 
-        api_url = f"https://amzn.afkarxyz.qzz.io/api/track/{asin}"
+        api_url = f"https://amazon.spotbye.qzz.io/api/track/{asin}"
         logger.info("[amazon] Fetching track (ASIN: %s)", asin)
 
         resp = self._session.get(api_url, timeout=30)
