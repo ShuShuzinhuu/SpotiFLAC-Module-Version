@@ -358,7 +358,7 @@ Your support helps keep development going._
 
 ## API Credits
 
-[Song.link](https://song.link) · [hifi-api](https://github.com/binimum/hifi-api) · [dabmusic.xyz](https://dabmusic.xyz) · [SpotubeDL](spotubedl.com) · [afkarxyz](https://github.com/afkarxyz) · [MusicBrainz](https://musicbrainz.org)
+[Song.link](https://song.link) · [hifi-api](https://github.com/binimum/hifi-api) · [dabmusic.xyz](https://dabmusic.xyz)· [afkarxyz](https://github.com/afkarxyz) · [MusicBrainz](https://musicbrainz.org)
 
 > [!TIP]
 >
