@@ -97,8 +97,9 @@ class BaseProvider(ABC):
 
     def _file_exists(self, path: Path) -> bool:
         if path.exists() and path.stat().st_size > 0:
+            print(f"Skip (already existing): {path.name}")
             size_mb = path.stat().st_size / (1024 * 1024)
-            logger.info("File already exists: %s (%.2f MB)", path.name, size_mb)
+            logger.debug("File already exists: %s (%.2f MB)", path.name, size_mb)
             return True
         return False
 
