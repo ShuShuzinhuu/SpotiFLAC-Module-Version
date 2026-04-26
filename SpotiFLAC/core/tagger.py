@@ -150,11 +150,12 @@ def embed_metadata(
     # 3. Lyrics                                                            #
     # ------------------------------------------------------------------ #
     lyrics: str | None = None
+    lyrics_prov: str = ""
 
     if embed_lyrics and metadata.title and metadata.first_artist:
         try:
             from .lyrics import fetch_lyrics
-            lyrics = fetch_lyrics(
+            res = fetch_lyrics(
                 track_name       = metadata.title,
                 artist_name      = metadata.first_artist,
                 album_name       = metadata.album,
@@ -164,6 +165,11 @@ def embed_metadata(
                 providers        = lyrics_providers,
                 spotify_token    = lyrics_spotify_token,
             )
+            # Supportiamo sia la nuova tupla (lyrics, provider) sia la vecchia stringa
+            if isinstance(res, tuple):
+                lyrics, lyrics_prov = res
+            else:
+                lyrics = res
         except Exception as exc:
             logger.warning("[tagger] lyrics fetch failed: %s", exc)
 
@@ -214,9 +220,10 @@ def embed_metadata(
                 if key not in _date_keys and key.upper() not in _date_keys:
                     tags[key.upper()] = str(val)
 
-
         if lyrics:
             tags["LYRICS"] = lyrics
+            prov_str = lyrics_prov if lyrics_prov else "sconosciuto"
+            print(f"  ✦ Testo: aggiunto tramite {prov_str}")
             logger.debug("[tagger] lyrics embedded (%d chars)", len(lyrics))
 
         for key, val in tags.items():
