@@ -100,7 +100,6 @@ def embed_metadata(
         embed_lyrics:         bool = False,
         lyrics_providers:     list[str] | None = None,
         lyrics_spotify_token: str = "",
-        lyrics_musixmatch_token: str = "",
         # Metadata enrichment options
         enrich:           bool = False,
         enrich_providers: list[str] | None = None,
@@ -164,7 +163,6 @@ def embed_metadata(
                 isrc             = metadata.isrc,
                 providers        = lyrics_providers,
                 spotify_token    = lyrics_spotify_token,
-                musixmatch_token = lyrics_musixmatch_token,
             )
         except Exception as exc:
             logger.warning("[tagger] lyrics fetch failed: %s", exc)
