@@ -18,6 +18,7 @@ from ..core.models import TrackMetadata, DownloadResult
 from ..core.errors import SpotiflacError
 from .base import BaseProvider
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from ..core.console import print_source_banner
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +148,7 @@ class AmazonProvider(BaseProvider):
         except Exception:
             return "m4a"
 
-    def _download_from_afkar(self, amazon_url: str, output_dir: str) -> str:
+    def _download_from_api(self, amazon_url: str, output_dir: str) -> str:
         asin_match = re.search(r"(B[0-9A-Z]{9})", amazon_url)
         if not asin_match:
             raise RuntimeError(f"Cannot extract ASIN from: {amazon_url}")
@@ -155,6 +156,8 @@ class AmazonProvider(BaseProvider):
 
         api_url = f"https://amazon.spotbye.qzz.io/api/track/{asin}"
         logger.info("[amazon] Fetching track (ASIN: %s)", asin)
+
+        print_source_banner("amazon", api_url)
 
         debug_key = _get_amazon_debug_key()
         resp = self._session.get(
@@ -329,7 +332,7 @@ class AmazonProvider(BaseProvider):
             mb_fetcher = AsyncMBFetch(metadata.isrc) if metadata.isrc else None
 
             amazon_url = self._get_amazon_url(metadata.id)
-            downloaded = self._download_from_afkar(amazon_url, output_dir)
+            downloaded = self._download_from_api(amazon_url, output_dir)
 
             ext      = os.path.splitext(downloaded)[1] or ".m4a"
             dest_ext = str(dest).rsplit(".", 1)[0] + ext
