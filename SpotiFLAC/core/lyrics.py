@@ -299,7 +299,7 @@ def fetch_lyrics(
         isrc:             str  = "",
         providers:        list[str] | None = None,
         spotify_token:    str  = "",
-) -> str:
+) -> tuple[str, str]:
     if providers is None:
         providers = _DEFAULT_PROVIDERS
 
@@ -323,7 +323,7 @@ def fetch_lyrics(
 
         if result and result.strip():
             logger.debug("[lyrics] found via %s (%d chars)", provider, len(result))
-            return result.strip()
+            return result.strip(), provider
 
     logger.debug("[lyrics] not found for '%s' by '%s'", track_name, artist_name)
-    return ""
+    return "", ""
