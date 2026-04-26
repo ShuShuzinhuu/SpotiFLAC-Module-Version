@@ -242,6 +242,8 @@ class SpotifyMetadataClient:
         cover       = self._best_image(
             album.get("images") or data.get("images", [])
         )
+        copyrights = album.get("copyrights", [])
+        copyright_text = copyrights[0].get("text", "") if copyrights else ""
         return TrackMetadata(
             id           = data.get("id", ""),
             title        = data.get("name", "Unknown"),
@@ -255,6 +257,8 @@ class SpotifyMetadataClient:
             release_date = album.get("release_date", ""),
             cover_url    = cover,
             external_url = data.get("external_urls", {}).get("spotify", ""),
+            copyright    = copyright_text,
+            composer     = ""
         )
 
     def _track_from_album_item(
@@ -267,6 +271,8 @@ class SpotifyMetadataClient:
         artists       = self._format_artists(item.get("artists", []))
         album_artists = self._format_artists(album.get("artists", []))
         cover         = self._best_image(album.get("images", []))
+        copyrights = album.get("copyrights", [])
+        copyright_text = copyrights[0].get("text", "") if copyrights else ""
 
         return TrackMetadata(
             id           = item.get("id", ""),
@@ -282,4 +288,6 @@ class SpotifyMetadataClient:
             release_date = album.get("release_date", ""),
             cover_url    = cover,
             external_url = item.get("external_urls", {}).get("spotify", ""),
+            copyright    = copyright_text,
+            composer     = ""
         )

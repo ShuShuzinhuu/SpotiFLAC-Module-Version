@@ -198,6 +198,12 @@ def embed_metadata(
 
         # Scriviamo tutti i tag extra (Enrichment + MusicBrainz)
         if merged_extra:
+            if metadata.composer:
+                merged_extra.pop("COMPOSER", None)
+                merged_extra.pop("composer", None)
+            if metadata.copyright:
+                merged_extra.pop("COPYRIGHT", None)
+                merged_extra.pop("copyright", None)
             orig_date = merged_extra.get("original_date") or merged_extra.get("ORIGINALDATE")
             if orig_date:
                 tags["ORIGINALDATE"] = str(orig_date)
