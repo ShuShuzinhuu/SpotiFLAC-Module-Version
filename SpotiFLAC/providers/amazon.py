@@ -333,7 +333,7 @@ class AmazonProvider(BaseProvider):
             mb_fetcher = AsyncMBFetch(metadata.isrc) if metadata.isrc else None
 
             amazon_url = self._get_amazon_url(metadata.id)
-            downloaded = self._download_from_api(amazon_url, output_dir)
+            downloaded = self._download_from_api(amazon_url, output_dir, quality)
 
             ext      = os.path.splitext(downloaded)[1] or ".m4a"
             dest_ext = str(dest).rsplit(".", 1)[0] + ext
