@@ -100,6 +100,7 @@ def download_one(
             use_album_track_num = opts.use_album_track_numbers,
             first_artist_only   = opts.first_artist_only,
             allow_fallback      = opts.allow_fallback,
+            quality             = opts.quality,          # FIX #1: quality ora propagata
             embed_lyrics            = opts.embed_lyrics,
             lyrics_providers        = opts.lyrics_providers,
             lyrics_spotify_token    = opts.lyrics_spotify_token,
@@ -233,11 +234,6 @@ class SpotiflacDownloader:
             print("No tracks found.")
             return
 
-        # ── Risoluzione ISRC mancanti ─────────────────────────────────────
-        # IsrcHelper era definito (isrc_helper.py → isrc_finder + soundplate
-        # + songstats) ma non veniva mai istanziato nel flusso principale.
-        # I provider Tidal e Qobuz richiedono ISRC: senza questa chiamata
-        # tutti i brani con ISRC vuoto vengono scartati silenziosamente.
         missing_isrc = [t for t in tracks if not t.isrc]
         if missing_isrc:
             print(f"Resolving ISRC for {len(missing_isrc)} track(s)…")
