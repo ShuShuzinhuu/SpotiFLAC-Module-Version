@@ -110,7 +110,7 @@ class AmazonProvider(BaseProvider):
             resp = self._session.get(
                 url,
                 headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"},
-                timeout=10,
+                timeout=20,
             )
             resp.raise_for_status()
             match = re.search(
