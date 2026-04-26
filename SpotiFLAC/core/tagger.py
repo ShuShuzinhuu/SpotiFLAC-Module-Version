@@ -187,10 +187,15 @@ def embed_metadata(
             # --- LOGICA SINGOLI CENTRALE ---
             # Se è un singolo (1 o 2 tracce), evitiamo che MusicBrainz sovrascriva
             # il genere trovato dai provider di enrichment (più precisi sui singoli)
-            if 0 < metadata.total_tracks <= 2 and "GENRE" in extra_tags:
-                # Escludiamo il genere da MusicBrainz se lo abbiamo già trovato
-                if "GENRE" in enriched_tags:
-                    extra_tags = {k: v for k, v in extra_tags.items() if k != "GENRE"}
+            if metadata.total_tracks <= 2:
+                # Se l'arricchimento ha trovato un genere, lo imponiamo sopra ogni cosa
+                enrich_genre = enriched_tags.get("GENRE")
+                if enrich_genre:
+                    # Sovrascriviamo il genere base di Spotify/Qobuz
+                    tags["GENRE"] = enrich_genre
+                    # E rimuoviamo quello di MusicBrainz (extra_tags) se presente
+                    if extra_tags:
+                        extra_tags = {k: v for k, v in extra_tags.items() if k != "GENRE"}
 
             # Applichiamo i tag di MusicBrainz
             merged_extra.update(extra_tags)
