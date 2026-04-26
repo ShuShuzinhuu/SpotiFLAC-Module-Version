@@ -148,7 +148,7 @@ class AmazonProvider(BaseProvider):
         except Exception:
             return "m4a"
 
-    def _download_from_api(self, amazon_url: str, output_dir: str) -> str:
+    def _download_from_api(self, amazon_url: str, output_dir: str, quality: str) -> str:
         asin_match = re.search(r"(B[0-9A-Z]{9})", amazon_url)
         if not asin_match:
             raise RuntimeError(f"Cannot extract ASIN from: {amazon_url}")
@@ -157,7 +157,7 @@ class AmazonProvider(BaseProvider):
         api_url = f"https://amazon.spotbye.qzz.io/api/track/{asin}"
         logger.info("[amazon] Fetching track (ASIN: %s)", asin)
 
-        print_source_banner("amazon", api_url)
+        print_source_banner("amazon", api_url, quality)
 
         debug_key = _get_amazon_debug_key()
         resp = self._session.get(
@@ -310,6 +310,7 @@ class AmazonProvider(BaseProvider):
             use_album_track_num: bool            = False,
             first_artist_only:   bool            = False,
             allow_fallback:      bool            = True,
+            quality:             str             = "LOSSLESS",
             # ── parametri lyrics e enrich (stessa firma di Tidal/Qobuz) ──
             embed_lyrics:            bool            = False,
             lyrics_providers:        list[str] | None = None,
