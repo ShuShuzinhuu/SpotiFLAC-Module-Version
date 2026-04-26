@@ -23,6 +23,7 @@ from .downloader import SpotiflacDownloader, DownloadOptions
 from .providers import (
     QobuzProvider,
     TidalProvider,
+    AmazonProvider,
     SpotifyMetadataClient,
 )
 from .core import TrackMetadata, DownloadResult
@@ -35,6 +36,7 @@ __all__ = [
     "DownloadOptions",
     "QobuzProvider",
     "TidalProvider",
+    "AmazonProvider",
     "SpotifyMetadataClient",
     "TrackMetadata",
     "DownloadResult",
@@ -57,6 +59,7 @@ def SpotiFLAC(
         services:              list[str] | None = None,
         filename_format:       str              = "{title} - {artist}",
         use_track_numbers:     bool             = False,
+        use_album_track_numbers: bool           = False,
         use_artist_subfolders: bool             = False,
         use_album_subfolders:  bool             = False,
         loop:                  int | None       = None,
@@ -102,6 +105,7 @@ def SpotiFLAC(
         services              = services or ["tidal"],
         filename_format       = filename_format,
         use_track_numbers     = use_track_numbers,
+        use_album_track_numbers = use_album_track_numbers,
         use_artist_subfolders = use_artist_subfolders,
         use_album_subfolders  = use_album_subfolders,
         quality               = quality,

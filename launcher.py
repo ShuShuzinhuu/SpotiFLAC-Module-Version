@@ -39,6 +39,7 @@ def parse_args() -> argparse.Namespace:
         help    = "Quality: LOSSLESS or HI_RES. Default: LOSSLESS",
     )
     parser.add_argument("--use-track-numbers",     action="store_true", dest="use_track_numbers")
+    parser.add_argument("--use-album-track-numbers", action="store_true", dest="use_album_track_numbers")
     parser.add_argument("--use-artist-subfolders", action="store_true", dest="use_artist_subfolders")
     parser.add_argument("--use-album-subfolders",  action="store_true", dest="use_album_subfolders")
     parser.add_argument("--first-artist-only",     action="store_true", dest="first_artist_only")
@@ -112,6 +113,7 @@ def main() -> None:
         services                 = args.service,
         filename_format          = args.filename_format,
         use_track_numbers        = args.use_track_numbers,
+        use_album_track_numbers  = args.use_album_track_numbers,
         use_artist_subfolders    = args.use_artist_subfolders,
         use_album_subfolders     = args.use_album_subfolders,
         loop                     = args.loop,

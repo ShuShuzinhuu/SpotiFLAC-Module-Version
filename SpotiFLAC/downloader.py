@@ -21,16 +21,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DownloadOptions:
-    output_dir:           str
-    services:             list[str]       = field(default_factory=lambda: ["tidal"])
-    filename_format:      str             = "{title} - {artist}"
-    use_track_numbers:    bool            = False
-    use_artist_subfolders: bool           = False
-    use_album_subfolders:  bool           = False
-    first_artist_only:    bool            = False
-    quality:              str             = "LOSSLESS"
-    allow_fallback:       bool            = True
-    inter_track_delay_s:  float           = 0.5
+    output_dir:              str
+    services:                list[str]       = field(default_factory=lambda: ["tidal"])
+    filename_format:         str             = "{title} - {artist}"
+    use_track_numbers:       bool            = False
+    use_album_track_numbers: bool         = False
+    use_artist_subfolders:   bool           = False
+    use_album_subfolders:    bool           = False
+    first_artist_only:       bool            = False
+    quality:                 str             = "LOSSLESS"
+    allow_fallback:          bool            = True
+    inter_track_delay_s:     float           = 0.5
 
     embed_lyrics:            bool          = False
     lyrics_providers:        list[str]     = field(
@@ -96,7 +97,7 @@ def download_one(
             filename_format     = opts.filename_format,
             position            = position,
             include_track_num   = opts.use_track_numbers,
-            use_album_track_num = opts.use_track_numbers,
+            use_album_track_num = opts.use_album_track_numbers,
             first_artist_only   = opts.first_artist_only,
             allow_fallback      = opts.allow_fallback,
             embed_lyrics            = opts.embed_lyrics,
