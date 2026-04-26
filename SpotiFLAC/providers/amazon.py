@@ -28,7 +28,7 @@ _DEFAULT_UA = (
     "Chrome/145.0.0.0 Safari/537.36"
 )
 
-
+AMAZON_API_BASE = "https://amazon.spotbye.qzz.io/api"
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ class AmazonProvider(BaseProvider):
             raise RuntimeError(f"Cannot extract ASIN from: {amazon_url}")
         asin = asin_match.group(1)
 
-        api_url = f"https://amazon.spotbye.qzz.io/api/track/{asin}"
+        api_url = f"{AMAZON_API_BASE}/track/{asin}"
         logger.info("[amazon] Fetching track (ASIN: %s)", asin)
 
         print_source_banner("amazon", api_url, quality)
