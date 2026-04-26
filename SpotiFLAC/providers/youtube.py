@@ -229,7 +229,6 @@ class YouTubeProvider(BaseProvider):
             embed_lyrics:            bool            = False,
             lyrics_providers:        list[str] | None = None,
             lyrics_spotify_token:    str             = "",
-            lyrics_musixmatch_token: str             = "",
             enrich_metadata:         bool            = False,
             enrich_providers:        list[str] | None = None,
             **kwargs,
@@ -281,7 +280,6 @@ class YouTubeProvider(BaseProvider):
                         isrc             = metadata.isrc,
                         providers        = lyrics_providers,
                         spotify_token    = lyrics_spotify_token,
-                        musixmatch_token = lyrics_musixmatch_token,
                     )
                 except Exception as exc:
                     logger.warning("[youtube] lyrics fetch failed: %s", exc)

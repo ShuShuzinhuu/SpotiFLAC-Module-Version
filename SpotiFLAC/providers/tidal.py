@@ -675,7 +675,6 @@ class TidalProvider(BaseProvider):
             embed_lyrics:            bool = False,
             lyrics_providers:        list[str] | None = None,
             lyrics_spotify_token:    str = "",
-            lyrics_musixmatch_token: str = "",
             enrich_metadata:         bool = False,
             enrich_providers:        list[str] | None = None,
     ) -> DownloadResult:
@@ -760,7 +759,6 @@ class TidalProvider(BaseProvider):
                 embed_lyrics            = embed_lyrics,
                 lyrics_providers        = lyrics_providers,
                 lyrics_spotify_token    = lyrics_spotify_token,
-                lyrics_musixmatch_token = lyrics_musixmatch_token,
                 enrich                  = enrich_metadata,
                 enrich_providers        = enrich_providers,
                 enrich_qobuz_token      = self._qobuz_token or "",
