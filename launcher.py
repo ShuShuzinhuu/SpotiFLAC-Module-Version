@@ -43,7 +43,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use-album-subfolders",  action="store_true", dest="use_album_subfolders")
     parser.add_argument("--first-artist-only",     action="store_true", dest="first_artist_only")
     parser.add_argument("--qobuz-token", default=None, dest="qobuz_token", help="Token Qobuz")
-    parser.add_argument("--musixmatch-token", default="", dest="musixmatch_token", help="Token Musixmatch")
     parser.add_argument("--loop", "-l", type=int, default=None, help="Ripeti ogni N minuti")
     parser.add_argument("--verbose", "-v", action="store_true")
 
@@ -123,7 +122,6 @@ def main() -> None:
         embed_lyrics             = args.embed_lyrics,
         lyrics_providers         = args.lyrics_providers,
         lyrics_spotify_token     = args.spotify_token,
-        lyrics_musixmatch_token  = args.musixmatch_token,
         # Enrichment
         enrich_metadata          = args.enrich,
         enrich_providers         = args.enrich_providers,

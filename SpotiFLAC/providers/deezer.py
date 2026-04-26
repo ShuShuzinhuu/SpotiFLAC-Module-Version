@@ -59,6 +59,7 @@ class DeezerProvider(BaseProvider):
         self._track_cache:  dict[str, _CacheEntry] = {}
         self._search_cache: dict[str, _CacheEntry] = {}
         self._cache_mu              = threading.Lock()
+        self._url_locks             = {}
         self._last_cache_cleanup    = 0.0
 
     # ------------------------------------------------------------------
@@ -125,9 +126,28 @@ class DeezerProvider(BaseProvider):
             if entry and not entry.is_expired():
                 return entry.data
             self._maybe_cleanup_cache()
-        data = self._get_json(url)
-        with self._cache_mu:
-            self._search_cache[url] = _CacheEntry(data)
+
+            # Crea o ottiene un lock specifico per questo URL
+            if url not in self._url_locks:
+                self._url_locks[url] = threading.Lock()
+            url_lock = self._url_locks[url]
+
+        # Blocchiamo l'esecuzione solo per questo specifico URL
+        with url_lock:
+            # Double-check: controlliamo se un altro thread ha popolato la cache nel frattempo
+            with self._cache_mu:
+                entry = self._search_cache.get(url)
+                if entry and not entry.is_expired():
+                    return entry.data
+
+            data = self._get_json(url)
+
+            with self._cache_mu:
+                self._search_cache[url] = _CacheEntry(data)
+                # Pulizia lock
+                if url in self._url_locks:
+                    del self._url_locks[url]
+
         return data
 
     # ------------------------------------------------------------------

@@ -67,7 +67,6 @@ def SpotiFLAC(
         embed_lyrics:            bool           = True,
         lyrics_providers:        list[str] | None = None,
         lyrics_spotify_token:    str            = "",
-        lyrics_musixmatch_token: str            = "",
         # Opzioni Enrichment (Attive di default)
         enrich_metadata:         bool           = True,
         enrich_providers:        list[str] | None = None,
@@ -111,7 +110,6 @@ def SpotiFLAC(
         embed_lyrics            = embed_lyrics,
         lyrics_providers        = lyrics_providers or ["spotify", "musixmatch", "lrclib", "apple"],
         lyrics_spotify_token    = lyrics_spotify_token,
-        lyrics_musixmatch_token = lyrics_musixmatch_token,
         # Enrichment
         enrich_metadata         = enrich_metadata,
         enrich_providers        = enrich_providers or ["deezer", "apple", "qobuz", "tidal"],

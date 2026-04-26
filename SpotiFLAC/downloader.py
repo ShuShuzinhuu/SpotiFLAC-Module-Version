@@ -37,7 +37,6 @@ class DownloadOptions:
         default_factory=lambda: ["spotify", "musixmatch", "amazon", "lrclib"]
     )
     lyrics_spotify_token:    str           = ""
-    lyrics_musixmatch_token: str           = ""
 
     enrich_metadata:    bool           = False
     enrich_providers:   list[str]      = field(
@@ -103,7 +102,6 @@ def download_one(
             embed_lyrics            = opts.embed_lyrics,
             lyrics_providers        = opts.lyrics_providers,
             lyrics_spotify_token    = opts.lyrics_spotify_token,
-            lyrics_musixmatch_token = opts.lyrics_musixmatch_token,
             enrich_metadata         = opts.enrich_metadata,
             enrich_providers        = opts.enrich_providers,
         )

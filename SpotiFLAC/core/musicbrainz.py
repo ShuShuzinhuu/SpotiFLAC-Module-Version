@@ -126,16 +126,32 @@ def fetch_mb_metadata(isrc: str) -> dict:
     if not isrc:
         return {}
 
-    # 1. Controllo cache
     cache_key = isrc.strip().upper()
+
+    # 1. Controllo cache rapido
     if cache_key in _mb_cache:
         return _mb_cache[cache_key]
 
-    if should_skip_mb():                              # ← FIX
+    if should_skip_mb():
         logger.debug("[musicbrainz] skipped (offline recently)")
         return {}
 
-    # Inizializza dizionario con i nuovi campi richiesti
+    # 2. Deduplicazione in-flight (Leader-Follower pattern)
+    with _mb_inflight_mu:
+        if cache_key in _mb_inflight:
+            event = _mb_inflight[cache_key]
+            is_leader = False
+        else:
+            event = threading.Event()
+            _mb_inflight[cache_key] = event
+            is_leader = True
+
+    # Se non siamo il leader, aspettiamo che il leader finisca
+    if not is_leader:
+        event.wait()
+        return _mb_cache.get(cache_key, {})
+
+    # 3. Solo il leader esegue la query effettiva
     res = {
         "genre": "", "original_date": "", "bpm": "", "mbid_track": "",
         "mbid_album": "", "mbid_artist": "", "mbid_relgroup": "",
@@ -149,102 +165,97 @@ def fetch_mb_metadata(isrc: str) -> dict:
         data = _query_recordings(f"isrc:{isrc}")
         set_mb_status(True)
         recs = data.get("recordings", [])
-        if not recs:
-            return {}
+        if recs:
+            rec = recs[0]
+            res["mbid_track"] = rec.get("id", "")
+            res["original_date"] = rec.get("first-release-date", "")
+            res["bpm"] = str(rec.get("bpm", "")) if rec.get("bpm") else ""
 
-        rec = recs[0]
-        res["mbid_track"] = rec.get("id", "") # ID Traccia
-        res["original_date"] = rec.get("first-release-date", "")
-        res["bpm"] = str(rec.get("bpm", "")) if rec.get("bpm") else ""
-
-        credits = rec.get("artist-credit", [])
-        if credits:
-            artist_ids = []
-            sort_names = []
-            for c in credits:
-                artist_obj = c.get("artist", {})
-                a_id = artist_obj.get("id")
-                a_sort = artist_obj.get("sort-name", "")
-                phrase = c.get("joinphrase", "")
-
-                if a_id: artist_ids.append(a_id)
-                if a_sort: sort_names.append(a_sort + phrase)
-
-            res["mbid_artist"] = "; ".join(artist_ids)
-            res["artist_sort"] = "".join(sort_names)
-
-        # Generi
-        all_tags = rec.get("tags", [])
-        for c in credits:
-            all_tags.extend(c.get("artist", {}).get("tags", []))
-        if all_tags:
-            sorted_tags = sorted(all_tags, key=lambda x: x.get("count", 0), reverse=True)
-            genres = []
-            for t in sorted_tags:
-                name = t.get("name", "").title()
-                if name and name not in genres: genres.append(name)
-            res["genre"] = "; ".join(genres[:5])
-
-            # Release data
-        releases = rec.get("releases", [])
-        if releases:
-            # Preferisci la release con barcode e label-info già presenti
-            def _release_score(r: dict) -> int:
-                score = 0
-                if r.get("barcode"): score += 2
-                if r.get("label-info"): score += 2
-                if r.get("country"): score += 1
-                if r.get("status") == "Official": score += 1
-                return score
-
-            rel = max(releases, key=_release_score)
-
-            res["mbid_album"]    = rel.get("id", "")
-            res["mbid_relgroup"] = rel.get("release-group", {}).get("id", "")
-            res["status"]        = rel.get("status", "")
-            res["type"]          = rel.get("release-group", {}).get("primary-type", "")
-            res["country"]       = rel.get("country", "")
-            res["script"]        = rel.get("text-representation", {}).get("script", "")
-            media = rel.get("media", [])
-            if media:
-                res["media"] = media[0].get("format", "")
-
-            # Album artist IDs e sort name dalla release scelta
-            rel_credits = rel.get("artist-credit", [])
-            if rel_credits:
-                aa_ids = []
-                aa_sort_names = []
-                for c in rel_credits:
+            credits = rec.get("artist-credit", [])
+            if credits:
+                artist_ids = []
+                sort_names = []
+                for c in credits:
                     artist_obj = c.get("artist", {})
-                    a_id   = artist_obj.get("id")
+                    a_id = artist_obj.get("id")
                     a_sort = artist_obj.get("sort-name", "")
                     phrase = c.get("joinphrase", "")
-                    if a_id:   aa_ids.append(a_id)
-                    if a_sort: aa_sort_names.append(a_sort + phrase)
-                res["mbid_albumartist"] = "; ".join(aa_ids)
-                res["albumartist_sort"] = "".join(aa_sort_names)
+                    if a_id: artist_ids.append(a_id)
+                    if a_sort: sort_names.append(a_sort + phrase)
+                res["mbid_artist"] = "; ".join(artist_ids)
+                res["artist_sort"] = "".join(sort_names)
 
-            # Scansiona TUTTE le release per barcode, label, catalognumber
-            for r in releases:
-                if not res.get("barcode") and r.get("barcode"):
-                    res["barcode"] = r["barcode"]
+            all_tags = rec.get("tags", [])
+            for c in credits:
+                all_tags.extend(c.get("artist", {}).get("tags", []))
+            if all_tags:
+                sorted_tags = sorted(all_tags, key=lambda x: x.get("count", 0), reverse=True)
+                genres = []
+                for t in sorted_tags:
+                    name = t.get("name", "").title()
+                    if name and name not in genres: genres.append(name)
+                res["genre"] = "; ".join(genres[:5])
 
-                for li in r.get("label-info", []):
-                    lbl = li.get("label") or {}
-                    if not res.get("label") and lbl.get("name"):
-                        res["label"]        = lbl["name"]
-                        res["organization"] = lbl["name"]
-                    if not res.get("catalognumber") and li.get("catalog-number"):
-                        res["catalognumber"] = li["catalog-number"]
-                # Esci prima se abbiamo già tutto
-                if res.get("barcode") and res.get("label") and res.get("catalognumber"):
-                    break
+            releases = rec.get("releases", [])
+            if releases:
+                def _release_score(r: dict) -> int:
+                    score = 0
+                    if r.get("barcode"): score += 2
+                    if r.get("label-info"): score += 2
+                    if r.get("country"): score += 1
+                    if r.get("status") == "Official": score += 1
+                    return score
 
+                rel = max(releases, key=_release_score)
+                res["mbid_album"]    = rel.get("id", "")
+                res["mbid_relgroup"] = rel.get("release-group", {}).get("id", "")
+                res["status"]        = rel.get("status", "")
+                res["type"]          = rel.get("release-group", {}).get("primary-type", "")
+                res["country"]       = rel.get("country", "")
+                res["script"]        = rel.get("text-representation", {}).get("script", "")
+                media = rel.get("media", [])
+                if media:
+                    res["media"] = media[0].get("format", "")
+
+                rel_credits = rel.get("artist-credit", [])
+                if rel_credits:
+                    aa_ids = []
+                    aa_sort_names = []
+                    for c in rel_credits:
+                        artist_obj = c.get("artist", {})
+                        a_id   = artist_obj.get("id")
+                        a_sort = artist_obj.get("sort-name", "")
+                        phrase = c.get("joinphrase", "")
+                        if a_id:   aa_ids.append(a_id)
+                        if a_sort: aa_sort_names.append(a_sort + phrase)
+                    res["mbid_albumartist"] = "; ".join(aa_ids)
+                    res["albumartist_sort"] = "".join(aa_sort_names)
+
+                for r in releases:
+                    if not res.get("barcode") and r.get("barcode"):
+                        res["barcode"] = r["barcode"]
+                    for li in r.get("label-info", []):
+                        lbl = li.get("label") or {}
+                        if not res.get("label") and lbl.get("name"):
+                            res["label"]        = lbl["name"]
+                            res["organization"] = lbl["name"]
+                        if not res.get("catalognumber") and li.get("catalog-number"):
+                            res["catalognumber"] = li["catalog-number"]
+                    if res.get("barcode") and res.get("label") and res.get("catalognumber"):
+                        break
+
+        # Salviamo in cache
         _mb_cache[cache_key] = res
+
     except Exception as e:
         set_mb_status(False)
         logger.debug("[musicbrainz] lookup failed: %s", e)
         return {}
+    finally:
+        # Svegliamo i thread in attesa e rimuoviamo l'evento in-flight
+        event.set()
+        with _mb_inflight_mu:
+            _mb_inflight.pop(cache_key, None)
 
     return res
 
