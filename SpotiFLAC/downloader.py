@@ -59,6 +59,7 @@ def _build_provider(name: str, opts: DownloadOptions) -> BaseProvider | None:
         "amazon":  ("providers.amazon",  "AmazonProvider"),
         "deezer":  ("providers.deezer",  "DeezerProvider"),
         "youtube": ("providers.youtube", "YouTubeProvider"),
+        "spoti":  ("providers.spotidownloader", "SpotiDownloaderProvider"),
     }
     if name not in adapters:
         logger.warning("Unknown provider: %s", name)

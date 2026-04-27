@@ -2,6 +2,7 @@ from .base import BaseProvider
 from .qobuz import QobuzProvider
 from .tidal import TidalProvider
 from .amazon import AmazonProvider
+from .spotidownloader import SpotiDownloaderProvider
 from .spotify_metadata import SpotifyMetadataClient, parse_spotify_url
 
 __all__ = [
@@ -9,6 +10,7 @@ __all__ = [
     "QobuzProvider",
     "TidalProvider",
     "AmazonProvider",
+    "SpotiDownloaderProvider",
     "SpotifyMetadataClient",
     "parse_spotify_url",
 ]
