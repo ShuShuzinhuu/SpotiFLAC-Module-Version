@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import os
 import logging
 import threading
 import time
-import os
 
 from ..core.models import TrackMetadata, DownloadResult
 from ..core.errors import SpotiflacError, AuthError, TrackNotFoundError, ErrorKind
@@ -37,19 +37,25 @@ class SpotiDownloaderProvider(BaseProvider):
         try:
             resp = self._http.post_json(
                 _SESSION_URL,
-                # Usa la variabile di classe esplicitamente
                 json={"token": self.__class__._bootstrap_token or "init"},
                 headers={
                     "Origin": _ORIGIN,
-                    "Referer": _ORIGIN,
+                    "Referer": f"{_ORIGIN}/",
                     "User-Agent": (
-                        "Mozilla/5.0 (X11; Linux x86_64) "
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0.0.0 Safari/537.36"
+                        "Chrome/124.0.0.0 Safari/537.36"
                     ),
+                    "Accept": "application/json, text/plain, */*",
                 },
             )
         except Exception as exc:
+            if "403" in str(exc):
+                raise AuthError(
+                    self.name,
+                    "Accesso negato dal server (probabile blocco Cloudflare/WAF attivo). "
+                    "Il provider potrebbe essere temporaneamente inaccessibile."
+                ) from exc
             raise AuthError(self.name, f"session request failed: {exc}")
 
         if not resp or not resp.get("success"):
@@ -68,25 +74,22 @@ class SpotiDownloaderProvider(BaseProvider):
     def _get_token(self) -> str:
         now = time.monotonic()
 
-        # Lettura rapida
         if self.__class__._token and now < self.__class__._token_exp:
             return self.__class__._token
 
         with self.__class__._lock:
             now = time.monotonic()
 
-            # Double-check
             if self.__class__._token and now < self.__class__._token_exp:
                 return self.__class__._token
 
             token = self._fetch_bootstrap_token()
 
-            # Salva il token a livello di classe (per il concatenamento e caching)
             self.__class__._bootstrap_token = token
             self.__class__._token = token
             self.__class__._token_exp = now + (55 * 60)
 
-            logger.info("[%s] token atualizado via /session", self.name)
+            logger.info("[%s] token aggiornato via /session", self.name)
             return token
 
     def invalidate_token(self):
@@ -95,7 +98,7 @@ class SpotiDownloaderProvider(BaseProvider):
             self.__class__._token_exp = 0.0
 
     # ---------------------------------------------------------
-    # RESOLVE FLAC
+    # RESOLVE FLAC (NIENTE FALLBACK MP3)
     # ---------------------------------------------------------
 
     def _get_flac_url(self, spotify_id: str, token: str) -> str:
@@ -156,7 +159,7 @@ class SpotiDownloaderProvider(BaseProvider):
     ) -> DownloadResult:
 
         try:
-            # 1. Avvia MusicBrainz in background sempre (per i tag base), non solo se enrich_metadata=True
+            # 1. Avvia MusicBrainz in background per il fetching parallelo
             mb_fetcher = None
             if metadata.isrc:
                 mb_fetcher = AsyncMBFetch(metadata.isrc)
@@ -165,6 +168,7 @@ class SpotiDownloaderProvider(BaseProvider):
             token = self._get_token()
             url = self._get_flac_url(metadata.id, token)
 
+            # 3. Costruisci il percorso (forzato a .flac)
             dest = self._build_output_path(
                 metadata,
                 output_dir,
@@ -179,6 +183,7 @@ class SpotiDownloaderProvider(BaseProvider):
             if self._file_exists(dest):
                 return DownloadResult.ok(self.name, str(dest), fmt="flac")
 
+            # 4. Scarica il file FLAC
             self._http.stream_to_file(
                 url,
                 str(dest),
@@ -190,11 +195,13 @@ class SpotiDownloaderProvider(BaseProvider):
                 },
             )
 
+            # 5. Valida il download (evita fake FLAC o preview da 30s)
             expected_s = metadata.duration_ms // 1000
             valid, err_msg = validate_downloaded_track(str(dest), expected_s)
             if not valid:
                 raise SpotiflacError(ErrorKind.UNAVAILABLE, err_msg, self.name)
 
+            # 6. Recupera e formatta i tag di MusicBrainz
             mb_tags = {}
             if mb_fetcher:
                 res = mb_fetcher.result()
@@ -232,20 +239,21 @@ class SpotiDownloaderProvider(BaseProvider):
                 _print_mb_summary(mb_tags)
 
             qobuz_token = kwargs.get("qobuz_token", "") or os.environ.get("QOBUZ_AUTH_TOKEN", "")
+
             # 7. Incorpora tutti i metadati sul file FLAC
             embed_metadata(
                 dest,
                 metadata,
                 first_artist_only=first_artist_only,
                 cover_url=metadata.cover_url,
-                session=self._http._session,          # Aggiunto
+                session=self._http._session,
                 extra_tags=mb_tags,
                 embed_lyrics=embed_lyrics,
                 lyrics_providers=lyrics_providers,
                 lyrics_spotify_token=lyrics_spotify_token,
                 enrich=enrich_metadata,
                 enrich_providers=enrich_providers,
-                enrich_qobuz_token=qobuz_token,       # Aggiunto
+                enrich_qobuz_token=qobuz_token,
             )
 
             return DownloadResult.ok(self.name, str(dest), fmt="flac")
