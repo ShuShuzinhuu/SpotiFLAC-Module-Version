@@ -95,13 +95,13 @@ def download_one(
         result = provider.download_track(
             metadata,
             output_dir,
-            filename_format     = opts.filename_format,
-            position            = position,
-            include_track_num   = opts.use_track_numbers,
-            use_album_track_num = opts.use_album_track_numbers,
-            first_artist_only   = opts.first_artist_only,
-            allow_fallback      = opts.allow_fallback,
-            quality             = opts.quality,          # FIX #1: quality ora propagata
+            filename_format         = opts.filename_format,
+            position                = position,
+            include_track_num       = opts.use_track_numbers,
+            use_album_track_num     = opts.use_album_track_numbers,
+            first_artist_only       = opts.first_artist_only,
+            allow_fallback          = opts.allow_fallback,
+            quality                 = opts.quality,          # FIX #1: quality ora propagata
             embed_lyrics            = opts.embed_lyrics,
             lyrics_providers        = opts.lyrics_providers,
             lyrics_spotify_token    = opts.lyrics_spotify_token,
