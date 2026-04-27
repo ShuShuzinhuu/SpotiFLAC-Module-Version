@@ -55,7 +55,7 @@ from SpotiFLAC import SpotiFLAC
 SpotiFLAC(
     url="https://open.spotify.com/album/41MnTivkwTO3UUJ8DrqEJJ",
     output_dir="./MusicLibrary",
-    services=["qobuz", "amazon", "tidal", "youtube"],
+    services=["qobuz", "amazon", "tidal", "spoti"],
     filename_format="{year} - {album}/{track}. {title}",
     use_artist_subfolders=True,
     use_album_subfolders=True,

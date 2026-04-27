@@ -20,7 +20,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--service", "-s",
-        choices = ["tidal", "qobuz", "amazon"],
+        choices = ["tidal", "qobuz", "amazon", "spoti"],
         nargs   = "+",
         default = ["tidal"],
         metavar = "SERVICE",
