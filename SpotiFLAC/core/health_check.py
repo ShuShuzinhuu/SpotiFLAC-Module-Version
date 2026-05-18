@@ -1,7 +1,7 @@
 """
 Service health check — verifica la disponibilità dei provider prima del download.
 Importa gli endpoint direttamente dai moduli provider invece di duplicarli.
-Esegue richieste parallele con timeout breve (5 s) agli endpoint reali.
+Esegue richieste parallele con timeout breve (5 s) agli endpoint reali (non ufficiali).
 
 Uso:
     results = run_health_check(["tidal", "qobuz", "deezer"])
@@ -64,6 +64,7 @@ def _load_endpoints() -> dict[str, list[tuple[str, str]]]:
     """
     Carica dinamicamente gli endpoint da ogni modulo provider.
     Ritorna un dict {provider_name: [(method, url), ...]}
+    Esclude le API ufficiali, ma mantiene i check centralizzati Zarz.
     """
     endpoints: dict[str, list[tuple[str, str]]] = {}
 
@@ -79,7 +80,8 @@ def _load_endpoints() -> dict[str, list[tuple[str, str]]]:
         except Exception:
             tidal_get = list(_TIDAL_APIS_GET)
 
-        tidal_eps = [("GET", f"{url.rstrip('/')}/track/?id=1&quality=LOSSLESS")
+        # Usiamo un ID reale per il test invece di 1
+        tidal_eps = [("GET", f"{url.rstrip('/')}/track/?id=251380837&quality=LOSSLESS")
                      for url in tidal_get]
         # POST probe: body vuoto ma il server risponde comunque
         tidal_eps += [("POST", url) for url in _TIDAL_API_POST]
@@ -93,24 +95,23 @@ def _load_endpoints() -> dict[str, list[tuple[str, str]]]:
 
     # ── Qobuz ──────────────────────────────────────────────────────────────
     try:
-        from SpotiFLAC.providers.qobuz import _STREAM_APIS, _API_BASE, _POST_APIS
+        # Importiamo solo le API di download di terze parti, NON l'API ufficiale (_API_BASE)
+        from SpotiFLAC.providers.qobuz import _STREAM_APIS, _POST_APIS
         qobuz_eps: list[tuple[str, str]] = []
         _QOBUZ_PROBE_ID = "3135556"
         
-        # 1. Uniamo gli endpoint GET e POST per non mancarne nessuno
-        all_qobuz_urls = set(_STREAM_APIS).union(_POST_APIS)
-        
-        for url in all_qobuz_urls:
-            if url in _POST_APIS:
-                qobuz_eps.append(("POST", url))
-            elif url.endswith("="):
+        # Sondiamo le API streaming (GET)
+        for url in _STREAM_APIS:
+            if url.endswith("="):
                 qobuz_eps.append(("GET", f"{url}{_QOBUZ_PROBE_ID}&quality=6"))
             else:
                 qobuz_eps.append(("GET", f"{url}{_QOBUZ_PROBE_ID}?quality=6"))
                 
-        qobuz_eps.append(("GET", f"{_API_BASE}/track/search?query=test&limit=1&app_id=0"))
-        qobuz_eps.append(("GET", "https://api.zarz.moe/v1/health"))
+        # Sondiamo le API POST
+        for url in _POST_APIS:
+            qobuz_eps.append(("POST", url))
 
+        qobuz_eps.append(("GET", "https://api.zarz.moe/v1/health"))
         endpoints["qobuz"] = qobuz_eps
     except ImportError:
         endpoints["qobuz"] = [
@@ -138,10 +139,6 @@ def _load_endpoints() -> dict[str, list[tuple[str, str]]]:
             if isinstance(val, dict):
                 base_url = val.get("base_url", "")
                 if base_url:
-                    # Tutti gli endpoint Amazon sono POST-only.
-                    # Un POST con body vuoto ({}) provoca 400/422 ma prova che
-                    # il server è raggiungibile — molto meglio di un GET che
-                    # restituisce 404/405 e viene interpretato come "down".
                     amazon_list.append(("POST", base_url))
             elif isinstance(val, str):
                 amazon_list.append(("POST", val))
@@ -159,7 +156,6 @@ def _load_endpoints() -> dict[str, list[tuple[str, str]]]:
     try:
         from SpotiFLAC.providers.apple_music import API_ENDPOINTS as APPLE_DL_ENDPOINTS
         endpoints["apple"] = [
-            # POST probe con body vuoto: il server risponde 400/422 se up
             ("POST", APPLE_DL_ENDPOINTS.get("proxy_direct", "https://api.zarz.moe/v1/dl/app2")),
             ("GET",  f"{APPLE_DL_ENDPOINTS.get('proxy_queued', 'https://api.zarz.moe/v1/dl/app')}/status/test"),
             ("GET",  "https://api.zarz.moe/v1/health"),
@@ -182,12 +178,12 @@ def _load_endpoints() -> dict[str, list[tuple[str, str]]]:
         ]
     except Exception:
         endpoints["soundcloud"] = [
+            ("POST", "https://api.zarz.moe/v1/dl/cobalt/"),
             ("GET", "https://api.zarz.moe/v1/health"),
         ]
 
-    # ── YouTube ────────────────────────────────────────────────────────────
+    # ── YouTube ────────────────────────────────────────────────────
     # YouTube usa yt-dlp locale, nessun endpoint HTTP da sondare.
-    # Viene sempre considerato raggiungibile da run_health_check().
     endpoints["youtube"] = []
 
     # ── Pandora ────────────────────────────────────────────────────────────
@@ -253,11 +249,6 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
             "allow_redirects": True,
         }
 
-        # I POST senza body vengono rifiutati con 400/405 da molti server,
-        # rendendo impossibile distinguere "server down" da "endpoint POST-only".
-        # Soluzione: invia sempre un JSON body vuoto nei POST → il server
-        # risponde con il suo normale errore di validazione (400/422)
-        # anziché un generico 405 Method Not Allowed.
         if method == "POST":
             if provider == "deezer":
                 # Il resolver specifico di Deezer richiede un payload particolare
@@ -283,9 +274,6 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
         detail = f"HTTP {resp.status_code}"
 
         # ── POST probe ─────────────────────────────────────────────────────
-        # Per gli endpoint POST-only delle API di download, qualsiasi risposta
-        # HTTP (anche 400/422 "bad request") significa che il server è up e
-        # funzionante. Solo 502/503/504 significano "giù".
         _is_post_probe = (method == "POST" and "health" not in url)
         if _is_post_probe:
             if resp.status_code == 200:
@@ -296,7 +284,6 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
                 else:
                     try:
                         data = json.loads(body)
-                        # Verifica errori generici O il formato specifico {"success": false} usato dal resolver dzr
                         if isinstance(data, dict) and (data.get("error") or data.get("status") == "error" or data.get("success") is False):
                             ok      = False
                             err_msg = data.get("message") or data.get("error") or "API Error"
@@ -308,8 +295,10 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
                         ok     = True
                         detail = "HTTP 200 OK"
             else:
-                ok     = False
+                ok     = True  # Qualsiasi altro status code HTTP indica che il server è raggiungibile
                 detail = f"HTTP {resp.status_code}"
+                if resp.status_code >= 500:
+                    ok = False
                 
             return HealthResult(provider, url, method, ok, ms, detail)
 
@@ -318,7 +307,7 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
             body = resp.text
 
             # ── Centralised Zarz health check ──────────────────────────────
-            if "api.zarz.moe/v1/health" in url:
+            if "api.zarz.moe/v1/health" in url or "/v1/health" in url:
                 try:
                     data     = json.loads(body)
                     services = data.get("services", {})
@@ -350,7 +339,6 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
 
             # ── Amazon ─────────────────────────────────────────────────────
             elif provider == "amazon":
-                # GET su un endpoint Amazon (es. base URL): corpo non vuoto = up
                 if body.strip():
                     ok = True
                 else:
@@ -368,8 +356,6 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
                 if _contains_streaming_url(body):
                     ok = True
                 else:
-                    # Accetta anche una risposta JSON con errore ma corpo valido
-                    # (significa che l'API è up ma non ha trovato il brano)
                     try:
                         parsed = json.loads(body)
                         if isinstance(parsed, dict) and body.strip():
@@ -399,17 +385,16 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
                     detail = "Bad JSON"
 
             # ── Apple / SoundCloud / YouTube / default ─────────────────────
-            elif provider in ("apple", "soundcloud", "youtube"):
-                if body.strip():
-                    ok = True
-                else:
-                    detail = "Empty Body"
-
             else:
                 if body.strip():
                     ok = True
                 else:
                     detail = "Empty Body"
+        elif resp.status_code == 404 or resp.status_code == 400:
+             # Se le API GET dei mirror ritornano un 404 su una track dummy, significa comunque che sono attive
+             if provider in ("tidal", "qobuz", "qbz"):
+                 ok = True
+                 detail = f"HTTP {resp.status_code} (Reachable)"
 
         return HealthResult(provider, url, method, ok, ms, detail)
 
