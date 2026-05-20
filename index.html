@@ -154,32 +154,12 @@
     .view.active { display: flex; }
 
     /* ─────────────────────────────────────────────────────────────────────── */
-    /* HOME VIEW — horizontal two-column layout                                */
+    /* HOME VIEW — Full Width Layout                                           */
     /* ─────────────────────────────────────────────────────────────────────── */
     #view-home {
-      flex-direction: row !important;
-      gap: 10px;
-      padding: 14px 14px 12px 14px;
-    }
-
-    /* Left column: search + meta + tracklist + recent fetches */
-    #home-left {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 9px;
-      min-width: 0;
-      overflow: hidden;
-    }
-
-    /* Right column: progress + log */
-    #home-right {
-      width: 500px;
-      flex-shrink: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 9px;
-      overflow: hidden;
+      flex-direction: column !important;
+      gap: 12px;
+      padding: 16px 20px;
     }
 
     /* ── App hero (header inside home) ─────────────────────────────────────── */
@@ -232,15 +212,23 @@
     .icon-btn:hover { background: var(--surface2); border-color: var(--border2); }
     .icon-btn:active { transform: scale(0.94); }
     #actionBtn {
-      padding: 0 16px; height: 36px; background: var(--yellow); color: #000;
+      padding: 0 16px; height: 36px; background: var(--blue); color: #fff;
       border: none; border-radius: 9px; font-family: 'DM Sans', sans-serif;
-      font-size: 13px; font-weight: 700; cursor: pointer;
+      font-size: 13px; font-weight: 600; cursor: pointer;
       transition: opacity 0.15s, transform 0.1s; white-space: nowrap;
       display: flex; align-items: center; gap: 6px; flex-shrink: 0;
     }
     #actionBtn:hover { opacity: 0.88; }
     #actionBtn:active { transform: scale(0.96); }
     #actionBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── Progress row ─────────────────────────────────────────────────────── */
+    #progress-wrap { flex-shrink: 0; padding: 2px 4px; }
+    #progress-label {
+      font-size: 11px; color: var(--muted); margin-bottom: 5px;
+      display: flex; justify-content: space-between;
+      font-family: 'JetBrains Mono', monospace; letter-spacing: 0.02em;
+    }
 
     /* ── Meta card ────────────────────────────────────────────────────────── */
     #meta-card {
@@ -257,7 +245,7 @@
       opacity: 0; transition: opacity 0.4s; pointer-events: none;
     }
     #meta-card:not(.empty)::before { opacity: 1; }
-    #meta-card.empty { opacity: 0.45; }
+    #meta-card.empty { display: none; }
     #cover {
       width: 44px; height: 44px; border-radius: 7px; background: var(--surface2);
       flex-shrink: 0; border: 1px solid var(--border);
@@ -282,42 +270,48 @@
     #tracklist-panel {
       background: var(--surface); border: 1.5px solid var(--border);
       border-radius: 11px; overflow: hidden; flex-shrink: 0;
-      display: none; animation: slideDown 0.18s ease; box-shadow: var(--shadow-sm);
+      display: none; flex-direction: column; flex: 1; min-height: 0;
+      animation: slideDown 0.18s ease; box-shadow: var(--shadow-sm);
     }
     #tracklist-header {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 8px 13px; background: var(--surface2); border-bottom: 1px solid var(--border);
+      padding: 10px 14px; background: var(--surface); border-bottom: 1.5px solid var(--border);
+      flex-shrink: 0;
     }
     #tracklist-header label {
       display: flex; align-items: center; gap: 8px;
-      font-weight: 600; font-size: 12px; cursor: pointer; color: var(--text2);
+      font-weight: 600; font-size: 13px; cursor: pointer; color: var(--text);
     }
     #track-count-badge {
-      font-family: 'JetBrains Mono', monospace; font-size: 10px;
-      background: var(--yellow-dim); color: #7a5f00;
-      border: 1px solid var(--yellow); padding: 1px 8px; border-radius: 99px; display: none;
+      font-family: 'DM Sans', sans-serif; font-size: 11px; font-weight: 600;
+      background: var(--surface2); color: var(--text2);
+      border: 1px solid var(--border); padding: 3px 8px; border-radius: 6px; display: none;
     }
-    [data-theme="dark"] #track-count-badge { color: var(--yellow); }
+    [data-theme="dark"] #track-count-badge { color: var(--text); background: var(--surface3); }
     #track-items {
-      max-height: 120px; overflow-y: auto; padding: 5px 7px;
-      display: flex; flex-direction: column; gap: 2px;
+      flex: 1; overflow-y: auto; padding: 4px;
+      display: flex; flex-direction: column; gap: 0;
     }
-    #track-items::-webkit-scrollbar { width: 3px; }
+    #track-items::-webkit-scrollbar { width: 4px; }
     #track-items::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
     .track-item {
-      display: flex; align-items: center; gap: 8px;
-      padding: 4px 8px; border-radius: 7px; cursor: pointer;
-      transition: background var(--t);
+      display: flex; align-items: center; gap: 12px;
+      padding: 7px 10px; border-radius: 6px; cursor: pointer;
+      transition: background 0.1s;
     }
-    .track-item:hover { background: var(--surface2); }
+    .track-item:nth-child(even) { background: var(--surface2); }
+    .track-item:hover { background: var(--surface3) !important; }
+    .track-title { font-size: 12.5px; font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+    .track-artist { font-size: 12.5px; font-weight: 400; color: var(--text); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .track-num {
-      font-family: 'JetBrains Mono', monospace; font-size: 10px;
-      color: var(--muted2); width: 18px; text-align: right; flex-shrink: 0;
+      font-family: 'JetBrains Mono', monospace; font-size: 11px;
+      color: var(--muted2); width: 22px; text-align: right; flex-shrink: 0;
     }
-    .track-title { font-size: 12px; font-weight: 500; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .track-artist { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px; }
-    input[type="checkbox"] { accent-color: var(--yellow); width: 14px; height: 14px; cursor: pointer; flex-shrink: 0; }
-
+    .track-badge {
+      font-family: 'JetBrains Mono', monospace; font-size: 9.5px; padding: 2px 6px;
+      border-radius: 4px; background: var(--surface3); color: var(--text2); border: 1px solid var(--border); flex-shrink: 0;
+    }
+    input[type="checkbox"] { accent-color: var(--blue); width: 14px; height: 14px; cursor: pointer; flex-shrink: 0; border-radius: 3px; }
     /* ── Recent Fetches ───────────────────────────────────────────────────── */
     #recent-section {
       flex: 1;
@@ -335,8 +329,8 @@
     }
     #recent-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 7px;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 10px;
       overflow-y: auto;
       padding-bottom: 4px;
     }
@@ -386,28 +380,11 @@
     [data-theme="dark"] .recent-type-badge.track    { background: #1e3a5f30; color: #60a5fa; border-color: #1d4ed8; }
     [data-theme="dark"] .recent-type-badge.artist   { background: #78350f30; color: #fbbf24; border-color: #d97706; }
 
-    /* ── Right column: progress ───────────────────────────────────────────── */
-    #progress-wrap { flex-shrink: 0; }
-    #progress-label {
-      font-size: 11px; color: var(--muted); margin-bottom: 5px;
-      display: flex; justify-content: space-between;
-      font-family: 'JetBrains Mono', monospace; letter-spacing: 0.02em;
-    }
-    #progress-bar-bg { height: 3px; background: var(--surface3); border-radius: 99px; overflow: hidden; }
-    #progress-bar {
-      height: 100%; width: 0%;
-      background: linear-gradient(90deg, var(--yellow), #ffe066);
-      border-radius: 99px; transition: width 0.4s ease; position: relative;
-      box-shadow: 0 0 6px var(--yellow-glow);
-    }
-    #progress-bar::after {
-      content: ''; position: absolute; inset: 0;
-      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent);
-      transform: translateX(-100%); animation: shimmer 1.8s infinite;
-    }
-    @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 
-    /* ── Log area ─────────────────────────────────────────────────────────── */
+    /* ── Logs View ────────────────────────────────────────────────────────── */
+    #view-logs {
+      padding: 16px 20px;
+    }
     #log-panel {
       flex: 1;
       min-height: 0;
@@ -455,6 +432,7 @@
     .log-msg.error  { color: var(--red); }
     .log-msg.info   { color: var(--blue); }
     .log-msg.warn   { color: #d97706; }
+
 
     /* ── Settings view ────────────────────────────────────────────────────── */
     #view-settings { padding: 0; }
@@ -647,7 +625,6 @@
 </head>
 <body>
 
-<!-- ── Titlebar ───────────────────────────────────────────────────────────── -->
 <div id="titlebar">
   <div class="traffic-lights">
     <div class="dot close" onclick="pyWin('Quit')" title="Close"></div>
@@ -660,14 +637,18 @@
   </div>
 </div>
 
-<!-- ── App body ───────────────────────────────────────────────────────────── -->
 <div id="app-body">
 
-  <!-- Sidebar -->
   <nav id="sidebar">
     <button class="nav-btn active" id="nav-home" onclick="switchView('home')" title="Home">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M3 9.5L12 3l9 6.5V21H15v-5h-6v5H3z"/>
+      </svg>
+    </button>
+    <button class="nav-btn" id="nav-logs" onclick="switchView('logs')" title="Terminal Logs">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="4 17 10 11 4 5"></polyline>
+        <line x1="12" y1="19" x2="20" y2="19"></line>
       </svg>
     </button>
     <button class="nav-btn" id="nav-settings" onclick="switchView('settings')" title="Settings">
@@ -684,101 +665,80 @@
     </button>
   </nav>
 
-  <!-- Content -->
   <div id="content">
 
-    <!-- ── HOME VIEW ─────────────────────────────────────────────────────── -->
     <div class="view active" id="view-home">
+      <div id="home-hero">
+        <div id="hero-logo">🎵</div>
+        <div id="hero-text">
+          <div id="hero-title">SpotiFLAC <span style="font-family:'JetBrains Mono';font-size:10px;font-weight:400;color:var(--muted);background:var(--yellow-dim);border:1px solid var(--yellow);padding:1px 6px;border-radius:5px;vertical-align:middle;">v0.6.1</span></div>
+          <div id="hero-sub">Tidal · Qobuz · Amazon · Deezer · Apple</div>
+        </div>
+      </div>
 
-      <!-- LEFT COLUMN -->
-      <div id="home-left">
+      <div id="search-row">
+        <div class="input-wrapper">
+          <span class="input-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/>
+            </svg>
+          </span>
+          <input id="urlInput" type="text"
+                 placeholder="Spotify · Tidal · Apple Music · Deezer · YouTube · Pandora…"
+                 onkeydown="if(event.key==='Enter') handleAction()">
+        </div>
+        <button id="actionBtn" onclick="handleAction()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Search Tracks
+        </button>
+      </div>
 
-        <!-- Hero header -->
-        <div id="home-hero">
-          <div id="hero-logo">🎵</div>
-          <div id="hero-text">
-            <div id="hero-title">SpotiFLAC <span style="font-family:'JetBrains Mono';font-size:10px;font-weight:400;color:var(--muted);background:var(--yellow-dim);border:1px solid var(--yellow);padding:1px 6px;border-radius:5px;vertical-align:middle;">v0.6.1</span></div>
-            <div id="hero-sub">Tidal · Qobuz · Amazon · Deezer · Apple</div>
+      <div id="progress-wrap">
+        <div id="progress-label">
+          <span id="progress-text" style="font-size: 11px;">Waiting…</span>
+        </div>
+      </div>
+
+      <div id="meta-card" class="empty">
+        <div id="cover">🎵</div>
+        <div id="meta-info">
+          <div id="meta-title">—</div>
+          <div id="meta-artist">—</div>
+        </div>
+        <div id="meta-badge">FLAC</div>
+      </div>
+
+      <div id="tracklist-panel">
+        <div id="tracklist-header">
+          <label>
+            <input type="checkbox" id="check-all" checked onchange="toggleAllTracks(this)">
+            Select / Deselect All
+          </label>
+          <span id="track-count-badge"></span>
+        </div>
+        <div id="track-items"></div>
+      </div>
+
+      <div id="recent-section">
+        <div class="recent-label">Recent Fetches</div>
+        <div id="recent-grid"></div>
+      </div>
+    </div><div class="view" id="view-logs">
+      <div id="log-panel">
+        <div id="log-panel-header">
+          <span>Terminal Logs</span>
+          <button id="log-clear-btn" onclick="clearLog()" title="Clear log">clr</button>
+        </div>
+        <div id="logArea">
+          <div class="log-line">
+            <span class="log-time">--:--:--</span>
+            <span class="log-msg info">Ready. Background service logging active.</span>
           </div>
         </div>
+      </div>
+    </div>
 
-        <!-- Search row -->
-        <div id="search-row">
-          <div class="input-wrapper">
-            <span class="input-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/>
-              </svg>
-            </span>
-            <input id="urlInput" type="text"
-                   placeholder="Spotify · Tidal · Apple Music · Deezer · YouTube · Pandora…"
-                   onkeydown="if(event.key==='Enter') handleAction()">
-          </div>
-          <button id="actionBtn" onclick="handleAction()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Search Tracks
-          </button>
-        </div>
 
-        <!-- Tracklist panel -->
-        <div id="tracklist-panel">
-          <div id="tracklist-header">
-            <label>
-              <input type="checkbox" id="check-all" checked onchange="toggleAllTracks(this)">
-              Select / Deselect All
-            </label>
-            <span id="track-count-badge"></span>
-          </div>
-          <div id="track-items"></div>
-        </div>
-
-        <!-- Meta card -->
-        <div id="meta-card" class="empty">
-          <div id="cover">🎵</div>
-          <div id="meta-info">
-            <div id="meta-title">—</div>
-            <div id="meta-artist">—</div>
-          </div>
-          <div id="meta-badge">FLAC</div>
-        </div>
-
-        <!-- Recent Fetches -->
-        <div id="recent-section">
-          <div class="recent-label">Recent Fetches</div>
-          <div id="recent-grid"></div>
-        </div>
-
-      </div><!-- /home-left -->
-
-      <!-- RIGHT COLUMN -->
-      <div id="home-right">
-
-        <!-- Progress -->
-        <div id="progress-wrap">
-          <div id="progress-label">
-            <span id="progress-text">Waiting…</span>
-          </div>
-        </div>
-
-        <!-- Log panel -->
-        <div id="log-panel">
-          <div id="log-panel-header">
-            <span>Log</span>
-            <button id="log-clear-btn" onclick="clearLog()" title="Clear log">clr</button>
-          </div>
-          <div id="logArea">
-            <div class="log-line">
-              <span class="log-time">--:--:--</span>
-              <span class="log-msg info">Ready. Paste a link and press Search Tracks.</span>
-            </div>
-          </div>
-        </div>
-
-      </div><!-- /home-right -->
-
-    </div><!-- /view-home -->
-
-    <!-- ── SETTINGS VIEW ──────────────────────────────────────────────────── -->
     <div class="view" id="view-settings" style="gap:0;">
 
       <div class="settings-header">
@@ -799,7 +759,6 @@
 
       <div class="settings-body">
 
-        <!-- TAB: SOURCES -->
         <div class="tab-content active" id="tab-download">
           <div class="settings-section">
             <div class="section-title">Audio Sources — drag to set priority</div>
@@ -826,7 +785,6 @@
           </div>
         </div>
 
-        <!-- TAB: FILES -->
         <div class="tab-content" id="tab-files">
           <div class="settings-section">
             <div class="section-title">Filename</div>
@@ -865,7 +823,6 @@
           </div>
         </div>
 
-        <!-- TAB: FEATURES -->
         <div class="tab-content" id="tab-features">
           <div class="settings-section">
             <div class="panel-row">
@@ -900,7 +857,6 @@
           </div>
         </div>
 
-        <!-- TAB: ADVANCED -->
         <div class="tab-content" id="tab-advanced">
           <div class="settings-section">
             <div class="section-title">Retries &amp; Loops</div>
@@ -958,7 +914,8 @@
               </span>
               <input type="text" id="config-tidal-api" placeholder="https://..." style="width:180px;">
             </div>
-          </div> <div class="settings-section">
+          </div> 
+          <div class="settings-section">
             <div class="section-title">Profiles</div>
             <div class="panel-row">
               <span class="row-label">Save Profile</span>
@@ -973,8 +930,9 @@
               <button onclick="loadProfile()" style="padding:4px 8px;">Load</button>
             </div>
           </div>
+        </div>
 
-        </div> <div class="tab-content" id="tab-health">
+        <div class="tab-content" id="tab-health">
 
           <div class="settings-section">
             <div class="section-title">Service Health Check</div>
@@ -983,13 +941,11 @@
               Results reflect current server availability, not account access.
             </p>
 
-            <!-- Services to check (multi-select chips) -->
             <div style="margin-bottom:12px;">
               <div class="sort-section-label" style="margin-bottom:6px;">Services to test</div>
               <div id="hc-service-chips" style="display:flex;flex-wrap:wrap;gap:5px;"></div>
             </div>
 
-            <!-- Run button + spinner + status -->
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
               <button id="hc-run-btn" onclick="runHealthCheck()">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -1003,21 +959,11 @@
             </div>
           </div>
 
-          <!-- Summary bar (hidden until results arrive) -->
           <div id="hc-summary-bar" style="display:none;"></div>
 
-          <!-- Results -->
           <div id="hc-results"></div>
 
-        </div><!-- /tab-health -->
-
-      </div><!-- /settings-body -->
-    </div><!-- /view-settings -->
-
-  </div><!-- /content -->
-</div><!-- /app-body -->
-
-<script>
+        </div></div></div></div></div><script>
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const pyWin = method => window.pywebview?.api?.[method]?.();
@@ -1126,11 +1072,11 @@ const ALL_SERVICES = [
   { id: 'qobuz',      label: 'Qobuz',           badge: 'FLAC', checked: true  },
   { id: 'deezer',     label: 'Deezer',          badge: 'FLAC', checked: true  },
   { id: 'amazon',     label: 'Amazon Music',    badge: 'FLAC', checked: false },
+  { id: 'spoti',      label: 'SpotiDownloader', badge: 'FLAC', checked: false },
   { id: 'soundcloud', label: 'SoundCloud',      badge: 'MP3',  checked: false },
   { id: 'youtube',    label: 'YouTube Music',   badge: 'M4A',  checked: false },
   { id: 'apple',      label: 'Apple Music',     badge: 'M4A',  checked: false },
   { id: 'pandora',    label: 'Pandora',         badge: 'MP3',  checked: false },
-  { id: 'spoti',      label: 'SpotiDownloader', badge: 'FLAC', checked: false },
 ];
 const ALL_LYRICS_PROVIDERS = [
   { id: 'spotify',    label: 'Spotify',     checked: true },
@@ -1187,7 +1133,7 @@ const HC_SERVICES = [
   { id: 'soundcloud', label: 'SoundCloud', on: false },
   { id: 'youtube',    label: 'YouTube',    on: false },
   { id: 'pandora',    label: 'Pandora',    on: false },
-  { id: 'spoti',      label: 'SpotiDL',   on: false },
+  { id: 'spoti',      label: 'SpotiDL',    on: false },
 ];
 
 function buildHcChips() {
@@ -1369,26 +1315,36 @@ function showTracklist(tracksJson) {
   const tracks = typeof tracksJson === 'string' ? JSON.parse(tracksJson) : tracksJson;
   const container = $('track-items');
   container.innerHTML = '';
+  
+  // Estrae la qualità selezionata (es: M4A, FLAC) per mostrarla come badge
+  let badgeText = 'FLAC';
+  try { badgeText = $('meta-badge').textContent.split('—')[0].trim(); } catch(e){}
+
   tracks.forEach((t, i) => {
     const label = document.createElement('label');
     label.className = 'track-item';
     label.innerHTML = `
       <input type="checkbox" class="track-checkbox" value="${t.index}" checked>
-      <span class="track-num">${i + 1}</span>
       <span class="track-title">${t.title}</span>
       <span class="track-artist">${t.artist}</span>
+      <span class="track-num">${i + 1}</span>
+      <span class="track-badge">${badgeText}</span>
     `;
     container.appendChild(label);
   });
   const badge = $('track-count-badge');
   badge.textContent = `${tracks.length} tracks`;
   badge.style.display = 'inline-block';
-  $('tracklist-panel').style.display = 'block';
-  $('recent-section').classList.add('hidden');
+  $('tracklist-panel').style.display = 'flex'; 
+  
+  // Non nascondiamo la recent-section, la lasciamo scorrere sotto
+  $('recent-section').classList.remove('hidden');
+  
   $('urlInput').disabled = true;
   const btn = $('actionBtn');
   btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Selected`;
-  btn.style.background = '#3b82f6';
+  btn.style.background = 'var(--blue)';
+  btn.style.color = '#fff';
   btn.disabled = false;
 }
 
@@ -1399,13 +1355,14 @@ function toggleAllTracks(cb) {
 function resetUI() {
   const btn = $('actionBtn');
   btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Search Tracks`;
-  btn.style.background = 'var(--yellow)';
+  btn.style.background = 'var(--blue)';
+  btn.style.color = '#fff';
   btn.disabled = false;
   $('urlInput').disabled = false;
   $('tracklist-panel').style.display = 'none';
   $('check-all').checked = true;
   $('track-count-badge').style.display = 'none';
-  setProgress(0, 'Waiting…');
+  setProgress('Waiting…');
   loadHistoryAndProfiles();
 }
 
@@ -1542,9 +1499,12 @@ async function handleAction() {
     if (!url) return logMessage('Please enter a valid URL.', 'error');
     const includeFeaturing = $('config-featuring').checked;
     btn.disabled = true;
-    setProgress(5, 'Searching…');
+    setProgress('Processing tracklist...');
     $('tracklist-panel').style.display = 'none';
-    $('recent-section').classList.add('hidden');
+    
+    // Non nascondiamo la History
+    $('recent-section').classList.remove('hidden');
+    
     if (window.pywebview?.api) {
       await window.pywebview.api.fetch_metadata(url, includeFeaturing);
     } else {
