@@ -238,22 +238,22 @@ spotiflac https://open.spotify.com/album/... ./out \
 ---
 
 ## Post-Download Actions
- 
+
 | Action        | Description                                                                       |
 |---------------|-----------------------------------------------------------------------------------|
 | `none`        | Do nothing (default)                                                              |
 | `open_folder` | Open the output folder in the system file manager                                 |
 | `notify`      | Send an OS desktop notification with a summary                                    |
 | `command`     | Run a custom shell command — placeholders: `{folder}`, `{succeeded}`, `{failed}` |
- 
+
 ```python
 SpotiFLAC(url="...", output_dir="./downloads", post_download_action="open_folder")
- 
+
 SpotiFLAC(url="...", output_dir="./downloads",
           post_download_action="command",
           post_download_command="rsync -av {folder}/ user@nas:/music/")
 ```
- 
+
 ```bash
 spotiflac https://... ./out --post-action notify
 spotiflac https://... ./out --post-action command --post-command "rsync -av {folder}/ user@nas:/music/"
@@ -262,49 +262,48 @@ spotiflac https://... ./out --post-action command --post-command "rsync -av {fol
 ---
 
 ## Discography Download
- 
+
 Download the complete discography of an artist. Duplicate tracks (same ISRC across different releases) are automatically skipped.
- 
+
 ```python
 from SpotiFLAC import SpotiFLAC
- 
+
 # Spotify — albums + singles
 SpotiFLAC(url="https://open.spotify.com/artist/1Xyo4u8uXC1ZmMpatF05PJ", output_dir="./MusicLibrary",
           services=["qobuz", "tidal"], use_album_subfolders=True, filename_format="{year} - {album}/{track}. {title}")
- 
+
 # Tidal — full discography (append /discography/albums or /discography/singles to filter)
 SpotiFLAC(url="https://listen.tidal.com/artist/7804", output_dir="./MusicLibrary",
           services=["tidal"], use_album_subfolders=True, filename_format="{year} - {album}/{track}. {title}")
 ```
- 
+
 ```bash
 spotiflac https://open.spotify.com/artist/... ./MusicLibrary \
   --service tidal --include-featuring \
   --use-album-subfolders --filename-format "{year} - {album}/{track}. {title}"
 ```
- 
+
 > Recommended layout: `--use-album-subfolders` + `--filename-format "{year} - {album}/{track}. {title}"`.
- 
+
 ---
 
 ## SoundCloud Download
- 
-SpotiFLAC can download tracks, sets and full artist pages from SoundCloud. The output format is always **MP3 128kbps**.
-Metadata enrichment is supported; lyrics embedding is skipped as SoundCloud does not provide synchronized lyrics data.
- 
+
+SoundCloud tracks are typically downloaded as MP3 128kbps, though the provider attempts to fetch the highest quality transcoding available (including Opus or Ogg if supported).
+
 ```python
 from SpotiFLAC import SpotiFLAC
- 
+
 # Single track
 SpotiFLAC(url="https://soundcloud.com/artist/track-slug", output_dir="./downloads", services=["soundcloud"])
- 
+
 # Playlist / set
 SpotiFLAC(url="https://soundcloud.com/artist/sets/set-slug", output_dir="./downloads", services=["soundcloud"], use_album_subfolders=True)
- 
+
 # Artist page (all public tracks)
 SpotiFLAC(url="https://soundcloud.com/artist", output_dir="./downloads", services=["soundcloud"], use_artist_subfolders=True)
 ```
- 
+
 ---
 
 ## Deezer Download
@@ -361,30 +360,30 @@ SpotiFLAC(
 ---
 
 ## Pandora Download
- 
+
 SpotiFLAC can download individual tracks from **Pandora** using both web URLs and app links. Output: **MP3** (`mp3_192` default) or **M4A** (`aac_64` / `aac_32`). Album and playlist downloads are not supported.
- 
+
 ```python
 from SpotiFLAC import SpotiFLAC
- 
+
 # Web URL
 SpotiFLAC(url="https://www.pandora.com/artist/name/album/song/TR:12345678",
           output_dir="./downloads", services=["pandora"], quality="mp3_192")
- 
+
 # App link — resolved automatically
 SpotiFLAC(url="https://pandora.app.link/abcdef1234", output_dir="./downloads", services=["pandora"])
- 
+
 # With fallback to Tidal
 SpotiFLAC(url="https://www.pandora.com/artist/.../TR:12345678",
           output_dir="./downloads", services=["pandora", "tidal"])
 ```
- 
+
 ```bash
 spotiflac https://www.pandora.com/artist/.../TR:12345678 ./downloads --service pandora --quality aac_64
 ```
- 
+
 > **Quality options:** `mp3_192` (High, default), `aac_64` (Medium), `aac_32` (Low).
- 
+
 ---
 
 ## Custom Output Path (single tracks)
@@ -446,6 +445,8 @@ SpotiFLAC(
     "qobuz_token": "YOUR_QOBUZ_TOKEN"
 }
 ```
+
+---
 
 ## Custom Tidal API Instance
 
@@ -614,7 +615,7 @@ When customizing the `filename_format` string, you can use the following dynamic
 | `--service`                 | `-s`  | `tidal`                                       | One or more providers in priority order. Choices: `tidal`, `qobuz`, `deezer`, `amazon`, `spoti`, `soundcloud`, `youtube`, `apple`, `pandora`.                                                               |
 | `--filename-format`         | `-f`  | `{title} - {artist}`                          | Filename template with placeholders.                                                                                                                                                                        |
 | `--output-path`             | `-o`  | `None`                                        | Exact output file path for single track downloads. Ignored for albums, playlists and discographies.                                                                                                         |
-| `--quality` | `-q` | `LOSSLESS` | Audio quality. Tidal: `DOLBY_ATMOS`, `HI_RES_LOSSLESS`, `LOSSLESS`, `HIGH`, `LOW`. Qobuz: `6`, `7`, `27`. Apple Music: `alac`, `atmos`, `ac3`, `aac`, `aac-legacy`. Pandora: `mp3_192`, `aac_64`, `aac_32`. |
+| `--quality`                 | `-q`  | `LOSSLESS`                                    | Audio quality. Tidal: `DOLBY_ATMOS`, `HI_RES_LOSSLESS`, `LOSSLESS`, `HIGH`, `LOW`. Qobuz: `6`, `7`, `27`. Apple Music: `alac`, `atmos`, `ac3`, `aac`, `aac-legacy`. Pandora: `mp3_192`, `aac_64`, `aac_32`. |
 | `--use-track-numbers`       |       | `False`                                       | Prefix filenames with track numbers.                                                                                                                                                                        |
 | `--use-album-track-numbers` |       | `False`                                       | Use the track's original album number instead of queue position.                                                                                                                                            |
 | `--use-artist-subfolders`   |       | `False`                                       | Organize files into per-artist subfolders.                                                                                                                                                                  |
@@ -687,4 +688,4 @@ Your support helps keep development going._
 
 > [!TIP]
 >
-> **Star Us**, You will receive all release notifications from GitHub without any delay ~
+> **Star Us**, You will receive all release notifications from GitHub without any delay
