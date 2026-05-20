@@ -34,6 +34,8 @@ class SpotiFLAC_API:
         self.current_url    = ""
 
     def set_window(self, window):
+        self._window = window
+        self._on_loaded()
 
     def _on_loaded(self):
         self.log("Python Backend connected.", "info")
@@ -42,14 +44,30 @@ class SpotiFLAC_API:
     # ── UI communication ──────────────────────────────────────────────────────
 
     def log(self, message, type=""):
-            safe = json.dumps(str(message))
+        safe = json.dumps(str(message))
+        safe_type = json.dumps(type)
+        try:
+            if self._window:
+                self._window.evaluate_js(f"window.app_log({safe}, {safe_type});")
+        except Exception:
+            pass
 
     def set_progress(self, pct, label=""):
-            safe_label = json.dumps(label)
+        safe_label = json.dumps(label)
+        try:
+            if self._window:
+                self._window.evaluate_js(f"window.app_set_progress({pct}, {safe_label});")
+        except Exception:
+            pass
 
     def set_metadata(self, title, artist, cover="", quality="FLAC"):
-            data = json.dumps({"title": title, "artist": artist,
-                               "cover": cover, "quality": quality})
+        data = json.dumps({"title": title, "artist": artist,
+                           "cover": cover, "quality": quality})
+        try:
+            if self._window:
+                self._window.evaluate_js(f"window.app_set_metadata({data});")
+        except Exception:
+            pass
 
     # ── Window and folder controls ────────────────────────────────────────────
 
@@ -67,9 +85,9 @@ class SpotiFLAC_API:
 
     def choose_folder(self):
         """Opens the folder dialog to choose the download directory."""
-            if result and len(result) > 0:
-                self.download_dir = result[0]
-                self.log(f"Download folder changed: {self.download_dir}", "ok")
+        if result and len(result) > 0:
+            self.download_dir = result[0]
+            self.log(f"Download folder changed: {self.download_dir}", "ok")
 
     # ── Phase 1: Metadata and track lookup ───────────────────────────────────
 
