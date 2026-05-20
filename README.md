@@ -239,176 +239,69 @@ spotiflac https://open.spotify.com/album/... ./out \
 
 ## Post-Download Actions
 
-Trigger an automatic action when all downloads in a session finish.
-
-| Action        | Description                                              |
-|---------------|----------------------------------------------------------|
-| `none`        | Do nothing (default)                                     |
-| `open_folder` | Open the output folder in the system file manager        |
-| `notify`      | Send an OS desktop notification with a summary           |
-| `command`     | Run a custom shell command with `{folder}`, `{succeeded}`, `{failed}` placeholders |
-
-### Python
+| Action        | Description                                                                       |
+|---------------|-----------------------------------------------------------------------------------|
+| `none`        | Do nothing (default)                                                              |
+| `open_folder` | Open the output folder in the system file manager                                 |
+| `notify`      | Send an OS desktop notification with a summary                                    |
+| `command`     | Run a custom shell command — placeholders: `{folder}`, `{succeeded}`, `{failed}` |
 
 ```python
-from SpotiFLAC import SpotiFLAC
+SpotiFLAC(url="...", output_dir="./downloads", post_download_action="open_folder")
 
-# Open folder when done
-SpotiFLAC(
-    url="https://open.spotify.com/album/...",
-    output_dir="./downloads",
-    post_download_action="open_folder",
-)
-
-# Custom command — sync to NAS when done
-SpotiFLAC(
-    url="https://open.spotify.com/playlist/...",
-    output_dir="./downloads",
-    post_download_action="command",
-    post_download_command="rsync -av {folder}/ user@nas:/music/ && echo '{succeeded} tracks synced'",
-)
+SpotiFLAC(url="...", output_dir="./downloads",
+          post_download_action="command",
+          post_download_command="rsync -av {folder}/ user@nas:/music/")
 ```
 
-### CLI
-
 ```bash
-# Desktop notification
 spotiflac https://... ./out --post-action notify
-
-# Open folder
-spotiflac https://... ./out --post-action open_folder
-
-# Custom command
-spotiflac https://... ./out \
-  --post-action command \
-  --post-command "rsync -av {folder}/ user@nas:/music/"
+spotiflac https://... ./out --post-action command --post-command "rsync -av {folder}/ user@nas:/music/"
 ```
 
 ---
 
 ## Discography Download
 
-Download the complete discography of an artist — both from Spotify and Tidal. Duplicate tracks (same ISRC across different releases) are automatically skipped.
-
-### Spotify
+Download the complete discography of an artist. Duplicate tracks (same ISRC across different releases) are automatically skipped.
 
 ```python
 from SpotiFLAC import SpotiFLAC
 
-# Full discography (albums + singles)
-SpotiFLAC(
-    url="https://open.spotify.com/artist/1Xyo4u8uXC1ZmMpatF05PJ",
-    output_dir="./MusicLibrary",
-    services=["qobuz", "tidal"],
-    use_album_subfolders=True,
-    filename_format="{year} - {album}/{track}. {title}",
-)
+# Spotify — albums + singles
+SpotiFLAC(url="https://open.spotify.com/artist/1Xyo4u8uXC1ZmMpatF05PJ", output_dir="./MusicLibrary",
+          services=["qobuz", "tidal"], use_album_subfolders=True, filename_format="{year} - {album}/{track}. {title}")
+
+# Tidal — full discography (append /discography/albums or /discography/singles to filter)
+SpotiFLAC(url="https://listen.tidal.com/artist/7804", output_dir="./MusicLibrary",
+          services=["tidal"], use_album_subfolders=True, filename_format="{year} - {album}/{track}. {title}")
 ```
-
-### Tidal
-
-```python
-from SpotiFLAC import SpotiFLAC
-
-# Full discography
-SpotiFLAC(
-    url="https://listen.tidal.com/artist/7804",
-    output_dir="./MusicLibrary",
-    services=["tidal"],
-    use_album_subfolders=True,
-    filename_format="{year} - {album}/{track}. {title}",
-)
-
-# Albums only
-SpotiFLAC(
-    url="https://listen.tidal.com/artist/7804/discography/albums",
-    output_dir="./MusicLibrary",
-    services=["tidal"],
-)
-
-# Singles only
-SpotiFLAC(
-    url="https://listen.tidal.com/artist/7804/discography/singles",
-    output_dir="./MusicLibrary",
-    services=["tidal"],
-)
-```
-
-### CLI
 
 ```bash
-# Spotify artist — albums, singles + featuring tracks
 spotiflac https://open.spotify.com/artist/... ./MusicLibrary \
-  --service tidal \
-  --include-featuring \
-  --use-album-subfolders \
-  --filename-format "{year} - {album}/{track}. {title}"
-
-# Tidal artist (albums + singles)
-spotiflac https://listen.tidal.com/artist/7804 ./MusicLibrary \
-  --service tidal \
-  --use-album-subfolders \
-  --filename-format "{year} - {album}/{track}. {title}"
+  --service tidal --include-featuring \
+  --use-album-subfolders --filename-format "{year} - {album}/{track}. {title}"
 ```
 
-### Recommended folder structure for discographies
-
-```
-MusicLibrary/
-  Artist Name/
-    2019 - Album Title/
-      01. Song One.flac
-      02. Song Two.flac
-    2023 - Single Title/
-      01. Song Title.flac
-```
-
-Use `--use-album-subfolders` and `--filename-format "{year} - {album}/{track}. {title}"` to achieve this layout automatically.
+> Recommended layout: `--use-album-subfolders` + `--filename-format "{year} - {album}/{track}. {title}"`.
 
 ---
 
 ## SoundCloud Download
 
-SpotiFLAC can download tracks, sets/albums, and full artist pages directly from SoundCloud.
-The output format is always **MP3 128kbps** (SoundCloud does not offer lossless streams).
-Metadata enrichment is supported; lyrics embedding is skipped as SoundCloud does not provide synchronized lyrics data.
-
-### Single Track
+SoundCloud tracks are typically downloaded as MP3 128kbps, though the provider attempts to fetch the highest quality transcoding available (including Opus or Ogg if supported).
 
 ```python
 from SpotiFLAC import SpotiFLAC
 
-SpotiFLAC(
-    url="https://soundcloud.com/artist/track-slug",
-    output_dir="./downloads",
-    services=["soundcloud"],
-)
-```
+# Single track
+SpotiFLAC(url="https://soundcloud.com/artist/track-slug", output_dir="./downloads", services=["soundcloud"])
 
-### Playlist / Set
+# Playlist / set
+SpotiFLAC(url="https://soundcloud.com/artist/sets/set-slug", output_dir="./downloads", services=["soundcloud"], use_album_subfolders=True)
 
-```python
-from SpotiFLAC import SpotiFLAC
-
-SpotiFLAC(
-    url="https://soundcloud.com/artist/sets/set-slug",
-    output_dir="./downloads",
-    services=["soundcloud"],
-    use_album_subfolders=True,
-)
-```
-
-### Artist Page (all public tracks)
-
-```python
-from SpotiFLAC import SpotiFLAC
-
-SpotiFLAC(
-    url="https://soundcloud.com/artist",
-    output_dir="./downloads",
-    services=["soundcloud"],
-    use_artist_subfolders=True,
-)
+# Artist page (all public tracks)
+SpotiFLAC(url="https://soundcloud.com/artist", output_dir="./downloads", services=["soundcloud"], use_artist_subfolders=True)
 ```
 
 ---
@@ -468,86 +361,28 @@ SpotiFLAC(
 
 ## Pandora Download
 
-SpotiFLAC can download individual tracks from **Pandora** using both web URLs and app links. The output format is **MP3** (mp3_192 by default) or **M4A** (aac_64 / aac_32). Metadata enrichment via Deezer and the full MusicBrainz + lyrics pipeline are supported.
-
-> **Note:** Pandora does not offer lossless streams. Album and playlist downloads are not supported — only individual tracks.
-
-### Single Track (web URL)
+SpotiFLAC can download individual tracks from **Pandora** using both web URLs and app links. Output: **MP3** (`mp3_192` default) or **M4A** (`aac_64` / `aac_32`). Album and playlist downloads are not supported.
 
 ```python
 from SpotiFLAC import SpotiFLAC
 
-SpotiFLAC(
-    url="https://www.pandora.com/artist/artist-name/album-name/song-name/TR:12345678",
-    output_dir="./downloads",
-    services=["pandora"],
-)
+# Web URL
+SpotiFLAC(url="https://www.pandora.com/artist/name/album/song/TR:12345678",
+          output_dir="./downloads", services=["pandora"], quality="mp3_192")
+
+# App link — resolved automatically
+SpotiFLAC(url="https://pandora.app.link/abcdef1234", output_dir="./downloads", services=["pandora"])
+
+# With fallback to Tidal
+SpotiFLAC(url="https://www.pandora.com/artist/.../TR:12345678",
+          output_dir="./downloads", services=["pandora", "tidal"])
 ```
-
-### Single Track (app link)
-
-```python
-from SpotiFLAC import SpotiFLAC
-
-SpotiFLAC(
-    url="https://pandora.app.link/abcdef1234",
-    output_dir="./downloads",
-    services=["pandora"],
-)
-```
-
-### Quality selection
-
-```python
-from SpotiFLAC import SpotiFLAC
-
-# High quality MP3 (default)
-SpotiFLAC(
-    url="https://www.pandora.com/artist/.../TR:12345678",
-    output_dir="./downloads",
-    services=["pandora"],
-    quality="mp3_192",
-)
-
-# Medium quality AAC
-SpotiFLAC(
-    url="https://www.pandora.com/artist/.../TR:12345678",
-    output_dir="./downloads",
-    services=["pandora"],
-    quality="aac_64",
-)
-```
-
-### With fallback to another provider
-
-```python
-from SpotiFLAC import SpotiFLAC
-
-SpotiFLAC(
-    url="https://www.pandora.com/artist/.../TR:12345678",
-    output_dir="./downloads",
-    services=["pandora", "tidal"],   # Pandora first, Tidal as fallback
-)
-```
-
-### CLI
 
 ```bash
-# High quality MP3 (default)
-spotiflac https://www.pandora.com/artist/.../TR:12345678 ./downloads \
-  --service pandora
-
-# Medium quality AAC
-spotiflac https://www.pandora.com/artist/.../TR:12345678 ./downloads \
-  --service pandora \
-  --quality aac_64
-
-# App link
-spotiflac https://pandora.app.link/abcdef1234 ./downloads \
-  --service pandora
+spotiflac https://www.pandora.com/artist/.../TR:12345678 ./downloads --service pandora --quality aac_64
 ```
 
-> **Pandora quality options:** `mp3_192` (High, default), `aac_64` (Medium), `aac_32` (Low).
+> **Quality options:** `mp3_192` (High, default), `aac_64` (Medium), `aac_32` (Low).
 
 ---
 
@@ -583,7 +418,7 @@ Setting a personal Qobuz token improves metadata resolution reliability. The tok
 6. In the **Request Headers** panel, look for: **x-user-auth-token: your_token_here**
 7. Copy the value — that is your token
 
-### How to Apply Tokens in SpotiFLAC
+### How to Apply Qobuz Token in SpotiFLAC
 
 **Interactive Wizard:** The wizard prompts you to paste your Qobuz token during configuration.
 
@@ -613,6 +448,51 @@ SpotiFLAC(
 
 ---
 
+## Custom Tidal API Instance
+
+SpotiFLAC connects to a shared pool of public hifi-api mirrors to fetch Tidal streams.
+If you want guaranteed availability and full control, you can self-host your own instance
+and point SpotiFLAC to it — it will always be tried first, before any public mirror.
+
+> **How to deploy your own instance:** [github.com/binimum/hifi-api](https://github.com/binimum/hifi-api)
+
+### Python
+
+```python
+from SpotiFLAC import SpotiFLAC
+
+SpotiFLAC(
+    url="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT",
+    output_dir="./downloads",
+    services=["tidal"],
+    tidal_custom_api="https://your-instance.example.com",
+)
+```
+
+### CLI
+
+```bash
+spotiflac https://open.spotify.com/track/... ./downloads \
+  --service tidal \
+  --tidal-api "https://your-instance.example.com"
+```
+
+### Interactive Wizard
+
+The wizard prompts for a custom Tidal API URL at step **12.5**, right after the optional tokens section.
+
+### config.json
+
+```json
+{
+    "tidal_custom_api": "https://your-instance.example.com"
+}
+```
+
+> **Note:** The custom instance is also saved and restored when using `--save-profile` / `--profile`.
+
+---
+
 <h2>CLI program usage</h2>
 <p>Program can be downloaded for <b>Windows</b>, <b>Linux (x86 and ARM)</b> and <b>MacOS</b>. The downloads are available under the releases.<br>
 Program can also be ran by downloading the python files and calling <code>python launcher.py</code> with the arguments.</p>
@@ -632,6 +512,7 @@ Program can also be ran by downloading the python files and calling <code>python
                         [--use-album-subfolders]
                         [--first-artist-only]
                         [--qobuz-token TOKEN]
+                        [--tidal-api URL]
                         [--loop minutes]
                         [--verbose]
                         [--no-lyrics]
@@ -661,6 +542,7 @@ chmod +x SpotiFLAC-Linux-arm64
                         [--use-album-subfolders]
                         [--first-artist-only]
                         [--qobuz-token TOKEN]
+                        [--tidal-api URL]
                         [--loop minutes]
                         [--verbose]
                         [--no-lyrics]
@@ -682,31 +564,32 @@ chmod +x SpotiFLAC-Linux-arm64
 
 ### `SpotiFLAC()` Parameters
 
-| Parameter                      | Type    | Default                                                   | Description                                                                                                                                                                                                                                                                |
-|--------------------------------|---------|-----------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **`url`**                      | `str` / `list[str]` | *Required*                                   | A single URL or a **list of URLs** (batch mode) for Spotify, Tidal, Apple Music, SoundCloud, YouTube or Pandora.                                                                                                                                                          |
-| **`output_dir`**               | `str`   | *Required*                                                | The destination directory path where the audio files will be saved.                                                                                                                                                                                                        |
-| **`output_path`**              | `str`   | `None`                                                    | Exact destination file path for **single track** downloads. Overrides `output_dir` + `filename_format`. Automatically ignored for albums, playlists and artist discographies.                                                                                              |
-| **`services`**                 | `list`  | `["tidal"]`                                               | Specifies which services to use and their priority order. Choices: `tidal`, `qobuz`, `deezer`, `amazon`, `spoti`, `soundcloud`, `youtube`, `apple`, `pandora`.                                                                                                            |
-| **`filename_format`**          | `str`   | `"{title} - {artist}"`                                    | Format for naming downloaded files. See placeholders below.                                                                                                                                                                                                                |
-| **`use_track_numbers`**        | `bool`  | `False`                                                   | Prefixes the filename with the track number.                                                                                                                                                                                                                               |
-| **`use_album_track_numbers`**  | `bool`  | `False`                                                   | Uses the track's original album number instead of the download queue position.                                                                                                                                                                                             |
-| **`use_artist_subfolders`**    | `bool`  | `False`                                                   | Automatically organizes downloaded files into subfolders by artist.                                                                                                                                                                                                        |
-| **`use_album_subfolders`**     | `bool`  | `False`                                                   | Automatically organizes downloaded files into subfolders by album.                                                                                                                                                                                                        |
-| **`first_artist_only`**        | `bool`  | `False`                                                   | Uses only the first artist in tags and filename.                                                                                                                                                                                                                           |
-| **`include_featuring`**        | `bool`  | `False`                                                   | When downloading an artist discography, also includes tracks where the artist appears as a featured artist.                                                                                                                                                                |
-| **`loop`**                     | `int`   | `None`                                                    | Duration in minutes to keep retrying **permanently failed** tracks after a full session completes.                                                                                                                                                                        |
-| **`track_max_retries`**        | `int`   | `0`                                                       | Extra download attempts **per track** when all providers fail on the first try. Each retry cycles through all providers again with exponential backoff (2 s → 4 s → 8 s …, capped at 30 s).                                                                              |
-| **`quality`**                  | `str`   | `"LOSSLESS"`                                              | Download quality. Tidal: `"DOLBY_ATMOS"`, `"HI_RES_LOSSLESS"`, `"LOSSLESS"`, `"HIGH"`, `"LOW"`. Qobuz: `"6"` (CD), `"7"` (Hi-Res), `"27"` (Hi-Res Max). Apple Music: `"alac"`, `"atmos"`, `"ac3"`, `"aac"`, `"aac-legacy"`. Pandora: `"mp3_192"`, `"aac_64"`, `"aac_32"`. |
-| **`allow_fallback`**           | `bool`  | `True`                                                    | Automatically falls back to the next available quality tier if the requested quality is unavailable.                                                                                                                                                                       |
-| **`log_level`**                | `int`   | `logging.WARNING`                                         | Python logging level.                                                                                                                                                                                                                                                      |
-| **`embed_lyrics`**             | `bool`  | `True`                                                    | Whether to fetch and embed synchronized lyrics (LRC) into the audio file.                                                                                                                                                                                                 |
-| **`lyrics_providers`**         | `list`  | `["spotify", "apple", "musixmatch", "lrclib", "amazon"]`  | Priority order of lyrics providers to attempt.                                                                                                                                                                                                                             |
-| **`enrich_metadata`**          | `bool`  | `True`                                                    | Enables multi-provider metadata enrichment (HD covers, BPM, Labels, etc.).                                                                                                                                                                                                |
-| **`enrich_providers`**         | `list`  | `["deezer", "apple", "qobuz", "tidal", "soundcloud"]`     | Priority order of metadata providers to attempt.                                                                                                                                                                                                                           |
-| **`qobuz_token`**              | `str`   | `None`                                                    | Optional Qobuz user auth token used as fallback for metadata resolution. Fallback: env `QOBUZ_AUTH_TOKEN`.                                                                                                                                                                |
-| **`post_download_action`**     | `str`   | `"none"`                                                  | Action after all downloads finish: `"none"`, `"open_folder"`, `"notify"`, `"command"`.                                                                                                                                                                                    |
-| **`post_download_command`**    | `str`   | `""`                                                      | Shell command to run when `post_download_action="command"`. Supports `{folder}`, `{succeeded}`, `{failed}` placeholders.                                                                                                                                                   |
+| Parameter                      | Type    | Default                                                   | Description                                                                                                                                                                                                                                                                  |
+|--------------------------------|---------|-----------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **`url`**                      | `str` / `list[str]` | *Required*                                   | A single URL or a **list of URLs** (batch mode) for Spotify, Tidal, Apple Music, SoundCloud, YouTube or Pandora.                                                                                                                                                             |
+| **`output_dir`**               | `str`   | *Required*                                                | The destination directory path where the audio files will be saved.                                                                                                                                                                                                          |
+| **`output_path`**              | `str`   | `None`                                                    | Exact destination file path for **single track** downloads. Overrides `output_dir` + `filename_format`. Automatically ignored for albums, playlists and artist discographies.                                                                                                |
+| **`services`**                 | `list`  | `["tidal"]`                                               | Specifies which services to use and their priority order. Choices: `tidal`, `qobuz`, `deezer`, `amazon`, `spoti`, `soundcloud`, `youtube`, `apple`, `pandora`.                                                                                                               |
+| **`filename_format`**          | `str`   | `"{title} - {artist}"`                                    | Format for naming downloaded files. See placeholders below.                                                                                                                                                                                                                  |
+| **`use_track_numbers`**        | `bool`  | `False`                                                   | Prefixes the filename with the track number.                                                                                                                                                                                                                                 |
+| **`use_album_track_numbers`**  | `bool`  | `False`                                                   | Uses the track's original album number instead of the download queue position.                                                                                                                                                                                               |
+| **`use_artist_subfolders`**    | `bool`  | `False`                                                   | Automatically organizes downloaded files into subfolders by artist.                                                                                                                                                                                                          |
+| **`use_album_subfolders`**     | `bool`  | `False`                                                   | Automatically organizes downloaded files into subfolders by album.                                                                                                                                                                                                           |
+| **`first_artist_only`**        | `bool`  | `False`                                                   | Uses only the first artist in tags and filename.                                                                                                                                                                                                                             |
+| **`include_featuring`**        | `bool`  | `False`                                                   | When downloading an artist discography, also includes tracks where the artist appears as a featured artist.                                                                                                                                                                  |
+| **`tidal_custom_api`**         | `str`   | `None`                                                    | URL of a self-hosted [hifi-api](https://github.com/binimum/hifi-api) instance. Takes priority over all public mirrors.                                                                                                                                                       |
+| **`loop`**                     | `int`   | `None`                                                    | Duration in minutes to keep retrying **permanently failed** tracks after a full session completes.                                                                                                                                                                           |
+| **`track_max_retries`**        | `int`   | `0`                                                       | Extra download attempts **per track** when all providers fail on the first try. Each retry cycles through all providers again with exponential backoff (2 s → 4 s → 8 s …, capped at 30 s).                                                                                  |
+| **`quality`**                  | `str`   | `"LOSSLESS"`                                              | Download quality. Tidal: `"DOLBY_ATMOS"`, `"HI_RES_LOSSLESS"`, `"LOSSLESS"`, `"HIGH"`, `"LOW"`. Qobuz: `"6"` (CD), `"7"` (Hi-Res), `"27"` (Hi-Res Max). Apple Music: `"alac"`, `"atmos"`, `"ac3"`, `"aac"`, `"aac-legacy"`. Pandora: `"mp3_192"`, `"aac_64"`, `"aac_32"`.    |
+| **`allow_fallback`**           | `bool`  | `True`                                                    | Automatically falls back to the next available quality tier if the requested quality is unavailable.                                                                                                                                                                         |
+| **`log_level`**                | `int`   | `logging.WARNING`                                         | Python logging level.                                                                                                                                                                                                                                                        |
+| **`embed_lyrics`**             | `bool`  | `True`                                                    | Whether to fetch and embed synchronized lyrics (LRC) into the audio file.                                                                                                                                                                                                    |
+| **`lyrics_providers`**         | `list`  | `["spotify", "apple", "musixmatch", "lrclib", "amazon"]`  | Priority order of lyrics providers to attempt.                                                                                                                                                                                                                               |
+| **`enrich_metadata`**          | `bool`  | `True`                                                    | Enables multi-provider metadata enrichment (HD covers, BPM, Labels, etc.).                                                                                                                                                                                                   |
+| **`enrich_providers`**         | `list`  | `["deezer", "apple", "qobuz", "tidal", "soundcloud"]`     | Priority order of metadata providers to attempt.                                                                                                                                                                                                                             |
+| **`qobuz_token`**              | `str`   | `None`                                                    | Optional Qobuz user auth token used as fallback for metadata resolution. Fallback: env `QOBUZ_AUTH_TOKEN`.                                                                                                                                                                   |
+| **`post_download_action`**     | `str`   | `"none"`                                                  | Action after all downloads finish: `"none"`, `"open_folder"`, `"notify"`, `"command"`.                                                                                                                                                                                       |
+| **`post_download_command`**    | `str`   | `""`                                                      | Shell command to run when `post_download_action="command"`. Supports `{folder}`, `{succeeded}`, `{failed}` placeholders.                                                                                                                                                     |
 
 ### Filename Format Placeholders
 
@@ -727,30 +610,31 @@ When customizing the `filename_format` string, you can use the following dynamic
 
 ## CLI Flag Reference
 
-| Flag                        | Short | Default                                       | Description                                                                                                                                        |
-|-----------------------------|-------|-----------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `--service`                 | `-s`  | `tidal`                                       | One or more providers in priority order. Choices: `tidal`, `qobuz`, `deezer`, `amazon`, `spoti`, `soundcloud`, `youtube`, `apple`, `pandora`.     |
-| `--filename-format`         | `-f`  | `{title} - {artist}`                          | Filename template with placeholders.                                                                                                               |
-| `--output-path`             | `-o`  | `None`                                        | Exact output file path for single track downloads. Ignored for albums, playlists and discographies.                                                |
-| `--quality` | `-q` | `LOSSLESS` | Audio quality. Tidal: `DOLBY_ATMOS`, `HI_RES_LOSSLESS`, `LOSSLESS`, `HIGH`, `LOW`. Qobuz: `6`, `7`, `27`. Apple Music: `alac`, `atmos`, `ac3`, `aac`, `aac-legacy`. Pandora: `mp3_192`, `aac_64`, `aac_32`. |
-| `--use-track-numbers`       |       | `False`                                       | Prefix filenames with track numbers.                                                                                                               |
-| `--use-album-track-numbers` |       | `False`                                       | Use the track's original album number instead of queue position.                                                                                   |
-| `--use-artist-subfolders`   |       | `False`                                       | Organize files into per-artist subfolders.                                                                                                         |
-| `--use-album-subfolders`    |       | `False`                                       | Organize files into per-album subfolders.                                                                                                          |
-| `--first-artist-only`       |       | `False`                                       | Use only the first artist in tags and filename.                                                                                                    |
-| `--include-featuring`       |       | `False`                                       | Include tracks where the artist appears as a featured artist. Only applies to artist/discography URLs.                                             |
-| `--qobuz-token`             |       | `None`                                        | Qobuz user auth token (`x-user-auth-token`).                                                                                                       |
-| `--loop`                    | `-l`  | `None`                                        | Keep retrying permanently failed tracks every N minutes.                                                                                           |
-| `--retries`                 |       | `0`                                           | Extra per-track download attempts on failure. Cycles through all providers with exponential backoff.                                               |
-| `--verbose`                 | `-v`  | `False`                                       | Enable debug logging.                                                                                                                              |
-| `--no-lyrics`               |       | `False`                                       | Disable lyrics embedding (lyrics are embedded **by default**).                                                                                     |
-| `--lyrics-providers`        |       | `spotify apple musixmatch lrclib amazon`      | Lyrics provider priority order.                                                                                                                    |
-| `--no-enrich`               |       | `False`                                       | Disable multi-provider metadata enrichment (enrichment is **enabled by default**).                                                                 |
-| `--enrich-providers`        |       | `deezer apple qobuz tidal soundcloud`         | Metadata enrichment provider priority order.                                                                                                       |
-| `--post-action`             |       | `none`                                        | Action after all downloads finish: `none`, `open_folder`, `notify`, `command`.                                                                     |
-| `--post-command`            |       | `""`                                          | Shell command for `--post-action=command`. Placeholders: `{folder}`, `{succeeded}`, `{failed}`.                                                    |
-| `--profile`                 |       | `None`                                        | Load a saved profile. CLI flags override profile values.                                                                                           |
-| `--save-profile`            |       | `None`                                        | Save current CLI configuration as a named profile after the run.                                                                                   |
+| Flag                        | Short | Default                                       | Description                                                                                                                                                                                                 |
+|-----------------------------|-------|-----------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--service`                 | `-s`  | `tidal`                                       | One or more providers in priority order. Choices: `tidal`, `qobuz`, `deezer`, `amazon`, `spoti`, `soundcloud`, `youtube`, `apple`, `pandora`.                                                               |
+| `--filename-format`         | `-f`  | `{title} - {artist}`                          | Filename template with placeholders.                                                                                                                                                                        |
+| `--output-path`             | `-o`  | `None`                                        | Exact output file path for single track downloads. Ignored for albums, playlists and discographies.                                                                                                         |
+| `--quality`                 | `-q`  | `LOSSLESS`                                    | Audio quality. Tidal: `DOLBY_ATMOS`, `HI_RES_LOSSLESS`, `LOSSLESS`, `HIGH`, `LOW`. Qobuz: `6`, `7`, `27`. Apple Music: `alac`, `atmos`, `ac3`, `aac`, `aac-legacy`. Pandora: `mp3_192`, `aac_64`, `aac_32`. |
+| `--use-track-numbers`       |       | `False`                                       | Prefix filenames with track numbers.                                                                                                                                                                        |
+| `--use-album-track-numbers` |       | `False`                                       | Use the track's original album number instead of queue position.                                                                                                                                            |
+| `--use-artist-subfolders`   |       | `False`                                       | Organize files into per-artist subfolders.                                                                                                                                                                  |
+| `--use-album-subfolders`    |       | `False`                                       | Organize files into per-album subfolders.                                                                                                                                                                   |
+| `--first-artist-only`       |       | `False`                                       | Use only the first artist in tags and filename.                                                                                                                                                             |
+| `--include-featuring`       |       | `False`                                       | Include tracks where the artist appears as a featured artist. Only applies to artist/discography URLs.                                                                                                      |
+| `--qobuz-token`             |       | `None`                                        | Qobuz user auth token (`x-user-auth-token`).                                                                                                                                                                |
+| `--tidal-api`               |       | `None`                                        | URL of a self-hosted [hifi-api](https://github.com/binimum/hifi-api) instance. Takes priority over the built-in public mirror pool.                                                                         |
+| `--loop`                    | `-l`  | `None`                                        | Keep retrying permanently failed tracks every N minutes.                                                                                                                                                    |
+| `--retries`                 |       | `0`                                           | Extra per-track download attempts on failure. Cycles through all providers with exponential backoff.                                                                                                        |
+| `--verbose`                 | `-v`  | `False`                                       | Enable debug logging.                                                                                                                                                                                       |
+| `--no-lyrics`               |       | `False`                                       | Disable lyrics embedding (lyrics are embedded **by default**).                                                                                                                                              |
+| `--lyrics-providers`        |       | `spotify apple musixmatch lrclib amazon`      | Lyrics provider priority order.                                                                                                                                                                             |
+| `--no-enrich`               |       | `False`                                       | Disable multi-provider metadata enrichment (enrichment is **enabled by default**).                                                                                                                          |
+| `--enrich-providers`        |       | `deezer apple qobuz tidal soundcloud`         | Metadata enrichment provider priority order.                                                                                                                                                                |
+| `--post-action`             |       | `none`                                        | Action after all downloads finish: `none`, `open_folder`, `notify`, `command`.                                                                                                                              |
+| `--post-command`            |       | `""`                                          | Shell command for `--post-action=command`. Placeholders: `{folder}`, `{succeeded}`, `{failed}`.                                                                                                             |
+| `--profile`                 |       | `None`                                        | Load a saved profile. CLI flags override profile values.                                                                                                                                                    |
+| `--save-profile`            |       | `None`                                        | Save current CLI configuration as a named profile after the run.                                                                                                                                            |
 
 ---
 
@@ -804,4 +688,4 @@ Your support helps keep development going._
 
 > [!TIP]
 >
-> **Star Us**, You will receive all release notifications from GitHub without any delay ~
+> **Star Us**, You will receive all release notifications from GitHub without any delay

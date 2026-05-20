@@ -97,6 +97,15 @@ def parse_args(profile_defaults: dict | None = None) -> argparse.Namespace:
         default = pd.get("include_featuring", False),
     )
     parser.add_argument("--qobuz-token", default=None, dest="qobuz_token")
+    # In parse_args(), nel gruppo esistente o uno nuovo:
+    parser.add_argument(
+        "--tidal-api",
+        default = pd.get("tidal_custom_api", None),
+        dest    = "tidal_custom_api",
+        metavar = "URL",
+        help    = "URL of a self-hosted hifi-api instance (https://github.com/binimum/hifi-api). "
+                "Takes priority over built-in API pool.",
+)
     parser.add_argument("--loop", "-l", type=int, default=None)
     parser.add_argument("--verbose", "-v", action="store_true")
 
@@ -213,6 +222,7 @@ def main() -> None:
             enrich_metadata          = cfg["enrich_metadata"],
             enrich_providers         = cfg["enrich_providers"],
             qobuz_token              = cfg.get("qobuz_token"),
+            tidal_custom_api         = cfg.get("tidal_custom_api") or None,
             include_featuring        = cfg["include_featuring"],
             track_max_retries        = cfg.get("track_max_retries", 0),
             post_download_action     = cfg.get("post_download_action", "none"),
@@ -257,6 +267,7 @@ def main() -> None:
             enrich_metadata          = args.enrich,
             enrich_providers         = args.enrich_providers,
             qobuz_token              = qobuz_token,
+            tidal_custom_api         = args.tidal_custom_api or None,
             include_featuring        = args.include_featuring,
             track_max_retries        = args.retries,
             post_download_action     = args.post_action,
@@ -284,6 +295,7 @@ def main() -> None:
                     "track_max_retries":     args.retries,
                     "post_download_action":  args.post_action,
                     "post_download_command": args.post_command,
+                    "tidal_custom_api":      args.tidal_custom_api,
                 }
                 save_profile(args.save_profile, profile_cfg)
                 print(f"[profile] Saved as: {args.save_profile}")

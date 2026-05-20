@@ -143,29 +143,42 @@ class TidalMetadataClient:
         if extra_params:
             params.update(extra_params)
 
-        resp = self._session.get(
-            f"{_TIDAL_API_BASE}/{path.lstrip('/')}",
-            params  = params,
-            timeout = self._timeout,
-        )
+        url = f"{_TIDAL_API_BASE}/{path.lstrip('/')}"
 
-        if resp.status_code == 401:
-            raise AuthError("tidal_metadata", "Token Tidal non valido o scaduto")
-        if resp.status_code == 404:
-            raise SpotiflacError(
-                ErrorKind.TRACK_NOT_FOUND,
-                f"Risorsa non trovata: {path}",
-                "tidal_metadata",
-            )
-        if resp.status_code == 429:
-            wait = int(resp.headers.get("Retry-After", 5)) + 1
-            logger.warning("[tidal_metadata] Rate limited — attendo %ds", wait)
-            time.sleep(wait)
-            return self._get(path, extra_params)
-        if resp.status_code != 200:
-            raise NetworkError("tidal_metadata", f"HTTP {resp.status_code} da {path}")
+        # Loop iterativo invece di ricorsione: evita RecursionError in caso di
+        # più 429 consecutivi e permette al massimo _MAX_RATE_LIMIT_RETRIES tentativi.
+        _MAX_RATE_LIMIT_RETRIES = 3
+        for _attempt in range(_MAX_RATE_LIMIT_RETRIES + 1):
+            resp = self._session.get(url, params=params, timeout=self._timeout)
 
-        return resp.json()
+            if resp.status_code == 401:
+                raise AuthError("tidal_metadata", "Token Tidal non valido o scaduto")
+            if resp.status_code == 404:
+                raise SpotiflacError(
+                    ErrorKind.TRACK_NOT_FOUND,
+                    f"Risorsa non trovata: {path}",
+                    "tidal_metadata",
+                )
+            if resp.status_code == 429:
+                if _attempt >= _MAX_RATE_LIMIT_RETRIES:
+                    raise NetworkError(
+                        "tidal_metadata",
+                        f"Rate limit persistente dopo {_MAX_RATE_LIMIT_RETRIES} tentativi su {path}",
+                    )
+                wait = int(resp.headers.get("Retry-After", 5)) + 1
+                logger.warning(
+                    "[tidal_metadata] Rate limited (tentativo %d/%d) — attendo %ds",
+                    _attempt + 1, _MAX_RATE_LIMIT_RETRIES, wait,
+                )
+                time.sleep(wait)
+                continue
+            if resp.status_code != 200:
+                raise NetworkError("tidal_metadata", f"HTTP {resp.status_code} da {path}")
+
+            return resp.json()
+
+        # Irraggiungibile, ma soddisfa il type-checker
+        raise NetworkError("tidal_metadata", f"impossibile completare la richiesta a {path}")
 
     # ------------------------------------------------------------------
     # Paginazione generica

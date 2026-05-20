@@ -41,7 +41,7 @@ API_ENDPOINTS = {
     },
     "zarz": {
         "base_url": "https://api.zarz.moe/v1/dl/amazeamazeamaze",
-        "method": "POST"
+        "method": "GET"
     }
 }
 
@@ -146,46 +146,91 @@ class AmazonProvider(BaseProvider):
     # ------------------------------------------------------------------
 
     def _get_amazon_url(self, track_id: str) -> str:
+        """
+        Risolve l'URL di Amazon partendo dal track_id usando fallbacks multipli
+        ispirati al nuovo resolver in index.js.
+        """
+        # Formattiamo l'URL originale per le chiamate API
         if track_id.startswith("tidal_"):
-            tidal_id = track_id.removeprefix("tidal_")
-            url = f"https://song.link/t/{tidal_id}"
+            clean_id = track_id.replace("tidal_", "")
+            source_url = f"https://listen.tidal.com/track/{clean_id}"
+            songlink_url = f"https://song.link/t/{clean_id}"
         elif track_id.startswith("apple_"):
-            apple_id = track_id.removeprefix("apple_")
-            url = f"https://song.link/i/{apple_id}"
+            clean_id = track_id.replace("apple_", "")
+            source_url = f"https://music.apple.com/us/album/track/{clean_id}"
+            songlink_url = f"https://song.link/i/{clean_id}"
         else:
-            url = f"https://song.link/s/{track_id}"
+            source_url = f"https://open.spotify.com/track/{track_id}"
+            songlink_url = f"https://song.link/s/{track_id}"
 
+        amazon_url = None
+
+        # TENTATIVO 1: Zarz.moe Resolve API (Più affidabile)
         try:
-            resp = self._session.get(
-                url,
-                headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"},
-                timeout=20,
+            zarz_resolve_url = "https://api.zarz.moe/v1/resolve"
+            resp = self._session.post(
+                zarz_resolve_url, 
+                json={"url": source_url}, 
+                headers={"User-Agent": _DEFAULT_UA},
+                timeout=15
             )
-            resp.raise_for_status()
-            
-            asin = None
-            
-            match_track_asin = re.search(r'trackAsin=([A-Z0-9]{10})', resp.text)
-            if match_track_asin:
-                asin = match_track_asin.group(1)
-                logger.info("[amazon] Found exact trackAsin: %s", asin)
-            else:
-                track_matches = re.findall(r'https://music\.amazon\.com/tracks/([A-Z0-9]{10})', resp.text)
-                if track_matches:
-                    asin = track_matches[0]
-                    logger.info("[amazon] Found track ASIN: %s", asin)
-
-            if not asin:
-                raise RuntimeError("No valid Track ASIN found in Songlink HTML. Only Album links without track IDs were found.")
-
-            # Ricostruiamo l'URL forzando il formato traccia e la regione USA
-            base = base64.b64decode("aHR0cHM6Ly9tdXNpYy5hbWF6b24uY29tL3RyYWNrcy8=").decode()
-            amazon_url = f"{base}{asin}?musicTerritory=US"
-            logger.info("[amazon] Resolved final URL: %s", amazon_url)
-            return amazon_url
-            
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("success") and "AmazonMusic" in data.get("songUrls", {}):
+                    amz_val = data["songUrls"]["AmazonMusic"]
+                    amazon_url = amz_val[0] if isinstance(amz_val, list) and amz_val else amz_val
+                    if amazon_url:
+                        logger.info("[amazon] Resolved via Zarz.moe API")
         except Exception as exc:
-            raise RuntimeError(f"Failed to resolve Amazon URL: {exc}") from exc
+            logger.warning(f"[amazon] Zarz.moe resolve failed: {exc}")
+
+        # TENTATIVO 2: SongLink API Ufficiale
+        if not amazon_url:
+            try:
+                sl_api_url = f"https://api.song.link/v1-alpha.1/links?url={source_url}&userCountry=US"
+                resp = self._session.get(sl_api_url, headers={"User-Agent": _DEFAULT_UA}, timeout=15)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    links = data.get("linksByPlatform", {})
+                    if "amazonMusic" in links:
+                        amazon_url = links["amazonMusic"].get("url")
+                        logger.info("[amazon] Resolved via SongLink API")
+            except Exception as exc:
+                logger.warning(f"[amazon] SongLink API resolve failed: {exc}")
+
+        # TENTATIVO 3: Fallback originale (Web Scraping su Songlink)
+        if not amazon_url:
+            try:
+                resp = self._session.get(songlink_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+                resp.raise_for_status()
+                # Cerchiamo l'ASIN nell'HTML
+                match_track_asin = re.search(r'trackAsin=([A-Z0-9]{10})', resp.text)
+                if match_track_asin:
+                    amazon_url = f"https://music.amazon.com/tracks/{match_track_asin.group(1)}"
+                else:
+                    track_matches = re.findall(r'https://music\.amazon\.com/tracks/([A-Z0-9]{10})', resp.text)
+                    if track_matches:
+                        amazon_url = f"https://music.amazon.com/tracks/{track_matches[0]}"
+                
+                if amazon_url:
+                    logger.info("[amazon] Resolved via Songlink HTML Scraping")
+            except Exception as exc:
+                logger.warning(f"[amazon] Songlink scraping failed: {exc}")
+
+        if not amazon_url:
+            raise RuntimeError(f"Could not resolve Amazon URL for {track_id} via any method (Zarz API, SongLink API, HTML).")
+
+        # Estraiamo l'ASIN e formattiamo l'URL finale per le chiamate API interne
+        asin_match = re.search(r'([A-Z0-9]{10})', amazon_url)
+        if not asin_match:
+            raise RuntimeError(f"Failed to extract ASIN from resolved URL: {amazon_url}")
+            
+        asin = asin_match.group(1)
+        base = base64.b64decode("aHR0cHM6Ly9tdXNpYy5hbWF6b24uY29tL3RyYWNrcy8=").decode()
+        final_url = f"{base}{asin}?musicTerritory=US"
+        
+        logger.info("[amazon] Resolved final URL: %s", final_url)
+        return final_url
 
     # ------------------------------------------------------------------
     # Download + decrypt
@@ -223,7 +268,7 @@ class AmazonProvider(BaseProvider):
         # Stessi identici headers di getAppUserAgent() in JS
         headers = {
             "Accept": "application/json",
-            "User-Agent": "SpotiFLAC-Mobile"
+            "User-Agent": "SpotiFLAC-Mobile/1.0"
         }
 
         max_retries = 2

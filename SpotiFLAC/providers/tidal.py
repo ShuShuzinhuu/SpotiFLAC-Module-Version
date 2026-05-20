@@ -78,9 +78,48 @@ _POST_USER_AGENT = [
 _TIDAL_API_GIST_URL   = "https://gist.githubusercontent.com/afkarxyz/2ce772b943321b9448b454f39403ce25/raw"
 _TIDAL_API_CACHE_FILE = "tidal-api-urls.json"
 
-_API_TIMEOUT_S = 8
-_MAX_RETRIES   = 1
-_RETRY_DELAY_S = 0.3
+_API_TIMEOUT_S      = 8
+_MAX_RETRIES        = 2          # aumentato da 1 a 2 per gestire errori transitori
+_RETRY_DELAY_S      = 0.3
+_RETRY_JITTER_S     = 0.4        # jitter massimo aggiunto al delay per evitare thundering-herd
+_RATE_LIMIT_DEFAULT = 5.0        # secondi di cooldown per-API se manca header Retry-After
+
+# ---------------------------------------------------------------------------
+# Per-API rate-limit registry
+# ---------------------------------------------------------------------------
+# Mappa: api_url_normalizzata → timestamp UNIX in cui il cooldown scade.
+# Condivisa tra tutti i thread: se un thread riceve HTTP 429 da un'API,
+# la registra qui e gli altri thread la saltano automaticamente finché
+# il cooldown non è scaduto (evita di sprecare thread su API già rate-limited).
+
+import random as _random
+
+_api_cooldown_lock:     threading.Lock       = threading.Lock()
+_api_cooldown_until:    dict[str, float]     = {}   # url → epoch_s
+
+
+def _mark_api_rate_limited(api_url: str, wait_s: float) -> None:
+    """Registra un cooldown per `api_url` valido per i prossimi `wait_s` secondi."""
+    key = api_url.rstrip("/")
+    with _api_cooldown_lock:
+        _api_cooldown_until[key] = time.time() + wait_s
+    logger.debug("[tidal] API %s rate-limited per %.1fs", key, wait_s)
+
+
+def _is_api_rate_limited(api_url: str) -> bool:
+    """Restituisce True se l'API è ancora in cooldown."""
+    key = api_url.rstrip("/")
+    with _api_cooldown_lock:
+        until = _api_cooldown_until.get(key, 0.0)
+    return time.time() < until
+
+
+def _clear_api_rate_limit(api_url: str) -> None:
+    """Rimuove il cooldown dopo una chiamata riuscita (reset ottimistico)."""
+    key = api_url.rstrip("/")
+    with _api_cooldown_lock:
+        _api_cooldown_until.pop(key, None)
+
 
 # ---------------------------------------------------------------------------
 # Quality helpers  (aligned with index.js normalizeDownloadQuality /
@@ -390,8 +429,14 @@ def _fetch_tidal_url_once(
 
     for attempt in range(_MAX_RETRIES + 1):
         if attempt > 0:
-            logger.debug("[tidal] retry %d/%d for %s after %.1fs", attempt, _MAX_RETRIES, api, delay)
-            time.sleep(delay)
+            # Aggiunge jitter casuale per evitare thundering-herd tra thread paralleli
+            jitter = _random.uniform(0, _RETRY_JITTER_S)
+            actual_delay = delay + jitter
+            logger.debug(
+                "[tidal] retry %d/%d for %s after %.2fs (delay=%.2f jitter=%.2f)",
+                attempt, _MAX_RETRIES, api, actual_delay, delay, jitter,
+            )
+            time.sleep(actual_delay)
             delay *= 2
 
         try:
@@ -409,7 +454,11 @@ def _fetch_tidal_url_once(
                         timeout=timeout_s,
                     )
                     if resp.status_code == 429:
-                        delay = max(delay, 2.0)
+                        # Legge Retry-After se presente (come tidal_metadata._get)
+                        wait_s = float(resp.headers.get("Retry-After", _RATE_LIMIT_DEFAULT))
+                        _mark_api_rate_limited(api_cleaning, wait_s)
+                        delay  = max(delay, wait_s)
+                        last_err = RuntimeError(f"HTTP 429 (rate limited, retry-after={wait_s:.0f}s)")
                         continue
                     if resp.status_code != 200:
                         last_err = RuntimeError(f"HTTP {resp.status_code}")
@@ -442,6 +491,7 @@ def _fetch_tidal_url_once(
                         timeout=timeout_s,
                     )
                     mpd_resp.raise_for_status()
+                    _clear_api_rate_limit(api_cleaning)
                     return "MANIFEST:" + base64.b64encode(mpd_resp.content).decode()
 
                 # ----------------------------------------------------------------
@@ -458,7 +508,12 @@ def _fetch_tidal_url_once(
                 resp = requests.get(url, headers=headers, timeout=timeout_s)
 
             if resp.status_code == 429:
-                delay = max(delay, 2.0)
+                # Legge Retry-After dall'header se presente; altrimenti usa il default.
+                # Poi registra il cooldown nel registry condiviso tra thread.
+                wait_s = float(resp.headers.get("Retry-After", _RATE_LIMIT_DEFAULT))
+                _mark_api_rate_limited(api_cleaning, wait_s)
+                delay  = max(delay, wait_s)
+                last_err = RuntimeError(f"HTTP 429 (rate limited, retry-after={wait_s:.0f}s)")
                 continue
             if resp.status_code != 200:
                 last_err = RuntimeError(f"HTTP {resp.status_code}")
@@ -480,12 +535,14 @@ def _fetch_tidal_url_once(
                     asset = inner_data.get("assetPresentation", "") if isinstance(inner_data, dict) else ""
                     if asset == "PREVIEW":
                         raise RuntimeError("returned PREVIEW instead of FULL")
+                    _clear_api_rate_limit(api_cleaning)
                     return "MANIFEST:" + manifest
 
             # Fallback per mirror che restituiscono una lista di URL diretti
             if isinstance(data, list):
                 for item in data:
                     if isinstance(item, dict) and item.get("OriginalTrackUrl"):
+                        _clear_api_rate_limit(api_cleaning)
                         return item["OriginalTrackUrl"]
 
             last_err = RuntimeError("no download URL or manifest in response")
@@ -509,14 +566,22 @@ def _fetch_tidal_url_parallel(
     if not apis:
         raise SpotiflacError(ErrorKind.UNAVAILABLE, "no Tidal APIs configured", "tidal")
 
+    # Filtra le API ancora in cooldown dal rate-limit registry condiviso.
+    # Se tutte le API sono in cooldown, usa comunque la lista completa
+    # (meglio riprovare che fallire subito).
+    available = [a for a in apis if not _is_api_rate_limited(a)]
+    if not available:
+        logger.debug("[tidal] tutte le API sono in cooldown, uso la lista completa")
+        available = apis
+
     start  = time.time()
     errors: list[str] = []
 
-    pool = ThreadPoolExecutor(max_workers=min(len(apis), 8))
+    pool = ThreadPoolExecutor(max_workers=min(len(available), 8))
     try:
         futures: dict[Future, str] = {
             pool.submit(_fetch_tidal_url_once, api, track_id, quality, timeout_s): api
-            for api in apis
+            for api in available
         }
         for fut in as_completed(futures, timeout=timeout_s + 2):
             api = futures[fut]
@@ -537,7 +602,7 @@ def _fetch_tidal_url_parallel(
     logger.debug("[tidal] All APIs failed details: %s", "; ".join(errors))
     raise SpotiflacError(
         ErrorKind.UNAVAILABLE,
-        f"All {len(apis)} Tidal APIs failed.",
+        f"All {len(available)} Tidal APIs failed (of {len(apis)} total, {len(apis)-len(available)} in cooldown).",
         "tidal",
     )
 
@@ -547,13 +612,12 @@ def _fetch_tidal_url_parallel(
 # ---------------------------------------------------------------------------
 
 class TidalProvider(BaseProvider):
-    name = "tidal"
-
     def __init__(
             self,
-            apis:          list[str] | None = None,
-            timeout_s:     int              = 15,
-            qobuz_token:   str | None       = None,   # FIX #6: aggiunto parametro mancante
+            apis:            list[str] | None = None,
+            timeout_s:       int              = 15,
+            qobuz_token:     str | None       = None,
+            custom_api_url:  str | None       = None,   # ← nuovo parametro
     ) -> None:
         super().__init__(timeout_s=timeout_s, retry=RetryConfig(max_attempts=2))
         self._session = self._http._session
@@ -561,13 +625,18 @@ class TidalProvider(BaseProvider):
 
         try:
             prime_tidal_api_list()
-            self._apis = apis or get_tidal_api_list()
+            base_apis = apis or get_tidal_api_list()
         except Exception as exc:
             logger.warning("[tidal] API list unavailable, using built-in fallback: %s", exc)
-            self._apis = list(apis or _TIDAL_APIS_GET)
+            base_apis = list(apis or _TIDAL_APIS_GET)
 
-        # FIX #6: _qobuz_token non era mai settabile — ora accetta il parametro
-        # e fallback a variabile d'ambiente, come QobuzProvider.
+        # La custom instance va sempre in cima alla lista — ha priorità assoluta
+        if custom_api_url:
+            clean = custom_api_url.strip().rstrip("/")
+            base_apis = [clean] + [a for a in base_apis if a.rstrip("/") != clean]
+            logger.info("[tidal] Custom API instance registered: %s", clean)
+
+        self._apis = base_apis
         self._qobuz_token: str | None = qobuz_token or os.environ.get("QOBUZ_AUTH_TOKEN")
 
     # ------------------------------------------------------------------
@@ -609,10 +678,17 @@ class TidalProvider(BaseProvider):
             ]:
                 try:
                     resp = self._session.get(endpoint, timeout=7)
+                    if resp.status_code == 429:
+                        # Rispetta Retry-After se presente, poi prova la prossima API
+                        wait_s = float(resp.headers.get("Retry-After", _RATE_LIMIT_DEFAULT))
+                        _mark_api_rate_limited(base, wait_s)
+                        logger.debug("[tidal] search rate-limited su %s, salto (cooldown %.0fs)", base, wait_s)
+                        break   # inutile provare altri endpoint della stessa API
                     if resp.status_code != 200:
                         continue
                     t_id = self._extract_best_track_id(resp.json(), clean_track, clean_artist, isrc, duration_ms)
                     if t_id:
+                        _clear_api_rate_limit(base)
                         return f"https://listen.tidal.com/track/{t_id}"
                 except Exception:
                     continue
@@ -703,7 +779,12 @@ class TidalProvider(BaseProvider):
         except Exception:
             rotated = self._apis
 
+        # Assicura che la custom API (testa di self._apis) sia sempre prima
         ordered = prioritize_providers("tidal", rotated)
+        if self._apis and self._apis[0] not in ordered:
+            ordered = [self._apis[0]] + ordered
+        elif self._apis and ordered and self._apis[0] != ordered[0]:
+            ordered = [self._apis[0]] + [a for a in ordered if a != self._apis[0]]
 
         winner_api, dl_url = _fetch_tidal_url_parallel(ordered, track_id, quality, _API_TIMEOUT_S)
         record_success("tidal", winner_api)

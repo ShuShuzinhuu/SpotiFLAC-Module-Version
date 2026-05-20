@@ -559,6 +559,7 @@ class SoundCloudProvider(BaseProvider):
                 track_permalink = sc_url,
             )
         else:
+            # TENTATIVO 1: Odesli (Songlink)
             try:
                 resolver = LinkResolver(HttpClient("odesli"))
                 links    = resolver.resolve_all(metadata.id)
@@ -570,6 +571,23 @@ class SoundCloudProvider(BaseProvider):
                     )
             except Exception as e:
                 logger.warning("[SC] Odesli resolution error: %s", e)
+                
+            # TENTATIVO 2: Fallback (Come in index.js) - Ricerca nativa
+            if not dl_url:
+                search_query = f"{metadata.title} {metadata.artists}".strip()
+                logger.info("[SC] Odesli failed. Native search for: '%s'", search_query)
+                try:
+                    search_results = self.search(search_query, limit=5)
+                    if search_results:
+                        # Prendiamo il primo risultato della ricerca
+                        best_track = search_results[0]
+                        logger.info("[SC] Found fallback via search: %s (ID: %s)", best_track.get("name"), best_track.get("id"))
+                        dl_url = self.get_download_url(
+                            track_id        = best_track.get("id"),
+                            track_permalink = best_track.get("permalink_url"),
+                        )
+                except Exception as e:
+                    logger.warning("[SC] Fallback search failed: %s", e)
 
         if not dl_url:
             return DownloadResult.fail(self.name, "Stream non disponibile")

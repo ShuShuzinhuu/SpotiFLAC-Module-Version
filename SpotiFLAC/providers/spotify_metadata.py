@@ -324,7 +324,8 @@ class SpotifyMetadataClient:
         if isinstance(artists, str):
             return artists
         return ", ".join(
-            a.get("name", "Unknown") if isinstance(a, dict) else str(a)
+            # Use 'or' so that if get() returns None, it falls back to "Unknown"
+            str(a.get("name") or "Unknown") if isinstance(a, dict) else str(a)
             for a in artists
         )
 
@@ -352,7 +353,7 @@ class SpotifyMetadataClient:
             disc_number  = data.get("disc_number", 1),
             total_tracks = album.get("total_tracks", 0),
             duration_ms  = data.get("duration_ms", 0),
-            release_date = album.get("release_date", ""),
+            release_date = album.get("release_date", "") or "",
             cover_url    = cover,
             external_url = data.get("external_urls", {}).get("spotify", ""),
             copyright    = copyright_text,
@@ -382,7 +383,7 @@ class SpotifyMetadataClient:
             disc_number  = item.get("disc_number", 1),
             total_tracks = album.get("total_tracks", 0),
             duration_ms  = item.get("duration_ms", 0),
-            release_date = album.get("release_date", ""),
+            release_date = album.get("release_date", "") or "",
             cover_url    = cover,
             external_url = item.get("external_urls", {}).get("spotify", ""),
             copyright    = copyright_text,

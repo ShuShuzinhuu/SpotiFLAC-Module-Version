@@ -380,6 +380,8 @@ def _summary(cfg: dict) -> None:
 
     if cfg.get("qobuz_token"):
         row("Qobuz token", "✓ set")
+    if cfg.get("tidal_custom_api"):
+        row("Custom Tidal API", cfg["tidal_custom_api"])
     if cfg.get("loop"):
         row("Loop", f"every {cfg['loop']} minutes")
 
@@ -755,6 +757,12 @@ def run_interactive() -> dict:
     _section("12 · Optional Tokens")
     cfg["qobuz_token"] = _ask("Qobuz auth token (leave blank to skip)", "") or None
 
+    # ── 12.5. Custom Tidal API ───────────────────────────────────────────────
+    _section("12.5 · Custom Tidal API Instance")
+    print(f"  {DIM('Self-host your own hifi-api instance for guaranteed availability.')}")
+    print(f"  {DIM('Create one at: https://github.com/binimum/hifi-api')}")
+    cfg["tidal_custom_api"] = _ask("Custom Tidal API URL (leave blank to skip)", cfg.get("tidal_custom_api", "") or "") or None
+
     # ── 13. Loop ─────────────────────────────────────────────────────────────
     loop_str = _ask("Repeat every N minutes (leave blank to disable)", "")
     cfg["loop"] = int(loop_str) if loop_str.isdigit() else None
@@ -806,6 +814,8 @@ def _print_cli_command(cfg: dict) -> None:
             parts.append(f'--post-command "{cfg["post_download_command"]}"')
     if cfg.get("qobuz_token"):
         parts.append(f'--qobuz-token "{cfg["qobuz_token"]}"')
+    if cfg.get("tidal_custom_api"):
+        parts.append(f'--tidal-api "{cfg["tidal_custom_api"]}"')
     if cfg.get("loop"):
         parts.append(f'--loop {cfg["loop"]}')
 

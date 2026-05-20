@@ -297,8 +297,17 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
             else:
                 ok     = True  # Qualsiasi altro status code HTTP indica che il server è raggiungibile
                 detail = f"HTTP {resp.status_code}"
+                
                 if resp.status_code >= 500:
                     ok = False
+                elif resp.status_code == 401:
+                    try:
+                        data = json.loads(resp.text)
+                        if isinstance(data, dict) and data.get("detail") == "auth_required":
+                            ok = False
+                            detail = "Auth required"
+                    except ValueError:
+                        pass
                 
             return HealthResult(provider, url, method, ok, ms, detail)
 
@@ -315,13 +324,22 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
 
                     if svc_key in services:
                         svc_info = services[svc_key]
-                        if svc_info.get("status") == 200:
-                            ok     = True
+                        
+                        # 1. Se Zarz ci segnala 401 auth_required, è sempre non raggiungibile
+                        if svc_info.get("status") == 401 and svc_info.get("detail") == "auth_required":
+                            ok = False
+                            detail = "Auth required"
+                            
+                        # 2. Altrimenti ci fidiamo del flag "ok" fornito da Zarz, oppure di status 200
+                        elif svc_info.get("ok") is True or svc_info.get("status") == 200:
+                            ok = True
                             detail = svc_info.get("detail") or "ok"
+                            
+                        # 3. Altri errori (es. 500)
                         else:
-                            ok           = False
+                            ok = False
                             inner_detail = svc_info.get("detail") or "error"
-                            detail       = f"Zarz {svc_info.get('status')} ({inner_detail})"
+                            detail = f"Zarz {svc_info.get('status')} ({inner_detail})"
                     else:
                         ok     = True
                         detail = "Zarz Link OK"
@@ -395,6 +413,13 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
              if provider in ("tidal", "qobuz", "qbz"):
                  ok = True
                  detail = f"HTTP {resp.status_code} (Reachable)"
+        elif resp.status_code == 401:
+            try:
+                parsed = json.loads(body)
+                if parsed.get("detail") == "auth_required":
+                    detail = "Authentication required"
+            except ValueError:
+                detail = "Unknown error"
 
         return HealthResult(provider, url, method, ok, ms, detail)
 
@@ -411,10 +436,6 @@ def run_health_check(
         *,
         include_all_endpoints: bool = True,
 ) -> list[HealthResult]:
-    """
-    Controlla i provider richiesti in parallelo.
-    YouTube usa yt-dlp locale e viene sempre marcato come raggiungibile.
-    """
     tasks:   list[tuple[str, str, str]] = []
     results: list[HealthResult]         = []
 
@@ -438,6 +459,19 @@ def run_health_check(
         futs = {pool.submit(_check_one, p, m, u): (p, m, u) for p, m, u in tasks}
         for fut in concurrent.futures.as_completed(futs):
             results.append(fut.result())
+
+    # ── Post-processing: auth_required dal Zarz health check blocca l'intero provider ──
+    auth_blocked: set[str] = {
+        r.provider for r in results
+        if "auth" in r.detail.lower() and not r.ok
+    }
+    if auth_blocked:
+        results = [
+            r._replace(ok=False, detail="Auth required")
+            if r.provider in auth_blocked
+            else r
+            for r in results
+        ]
 
     svc_order = {svc: i for i, svc in enumerate(services)}
     results.sort(key=lambda r: (svc_order.get(r.provider, 99), str(r.url)))

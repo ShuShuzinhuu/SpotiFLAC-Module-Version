@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import threading
 import time
@@ -15,6 +16,7 @@ import requests
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .base import BaseProvider
+from urllib.parse import urlparse, quote
 from ..core.console import (
     print_source_banner, print_api_failure, print_quality_fallback,
 )
@@ -74,6 +76,15 @@ _POST_APIS = {
     "https://dl.musicdl.me/qobuz/download",
 }
 
+_GDSTUDIO_APIS: list[str] = [
+    "https://music.gdstudio.xyz/api.php",
+    "https://music.gdstudio.org/api.php",
+]
+
+_WJHE_APIS: list[str] = [
+    "https://music.wjhe.top/api/music/qobuz/url",
+]
+
 _QUALITY_FALLBACK: dict[str, list[str]] = {
     "27":       ["27", "7", "6"],
     "7":        ["7", "6"],
@@ -98,9 +109,12 @@ _TIDAL_TO_QOBUZ_QUALITY: dict[str, str] = {
     "LOW":             "6",
 }
 
-_API_TIMEOUT_S = 8
-_MAX_RETRIES   = 1
-_RETRY_DELAY_S = 0.3
+_API_TIMEOUT_S      = 8
+_MAX_RETRIES_GET    = 1          # GET APIs: pubbliche, veloci, basta 1 retry
+_MAX_RETRIES_POST   = 2          # POST/Zarz: più soggette a rate-limit, 2 retry
+_RETRY_BASE_DELAY_S = 1.0        # backoff iniziale per 429 (was 0.3 — troppo aggressivo)
+_RETRY_MAX_DELAY_S  = 16.0       # cap del backoff (3 tentativi POST = 1+2=3s totali)
+_RETRY_JITTER       = 0.25       # ±25% jitter per evitare thundering herd sui thread paralleli
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +300,55 @@ def _extract_stream_url_from_json(data: dict) -> str | None:
     return None
 
 
+def _backoff_delay(attempt: int, server_hint_s: float | None = None) -> float:
+    """Exponential backoff con jitter. Usa Retry-After del server se disponibile."""
+    if server_hint_s is not None:
+        base = max(server_hint_s, _RETRY_BASE_DELAY_S)
+    else:
+        base = min(_RETRY_BASE_DELAY_S * (2 ** (attempt - 1)), _RETRY_MAX_DELAY_S)
+    jitter = base * _RETRY_JITTER * (2 * random.random() - 1)   # ±25%
+    return max(0.1, base + jitter)
+
+
+def _parse_retry_after(resp: requests.Response) -> float | None:
+    """Legge l'header Retry-After (secondi o HTTP-date). Ritorna None se assente/malformato."""
+    raw = resp.headers.get("Retry-After", "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        import datetime
+        dt = parsedate_to_datetime(raw)
+        secs = (dt - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+        return max(0.0, secs)
+    except Exception:
+        return None
+
+
+def _get_gdstudio_ts9(host: str) -> str:
+    """Recupera il timestamp a 9 cifre dal server GDStudio."""
+    try:
+        r = requests.get(f"https://{host}/time", timeout=5)
+        if r.status_code == 200:
+            ts = r.text.strip()
+            if len(ts) >= 9:
+                return ts[:9]
+    except Exception:
+        pass
+    return str(int(time.time() * 1000))[:9]
+
+def _build_gdstudio_signature(host: str, track_id: str, ts9: str) -> str:
+    """Genera la firma MD5 richiesta da GDStudio."""
+    version = "20260510"  # Corrisponde a qobuzGDStudioPaddedVersion() "2026.5.10"
+    escaped_track_id = quote(track_id).replace("+", "%20")
+    base = f"{host}|{version}|{ts9}|{escaped_track_id}"
+    return hashlib.md5(base.encode("utf-8")).hexdigest().upper()[-8:]
+
+
 def _fetch_stream_url_once(
         api_base:  str,
         track_id:  int,
@@ -294,23 +357,67 @@ def _fetch_stream_url_once(
 ) -> str:
     api_cleaning = api_base.rstrip('/')
     is_zarz = "zarz.moe" in api_cleaning
-    is_post = api_base in _POST_APIS or is_zarz
+    is_musicdl = "musicdl.me" in api_cleaning
+    is_gdstudio = "gdstudio" in api_cleaning
+    is_wjhe = "wjhe.top" in api_cleaning
+    
+    is_post = api_base in _POST_APIS or is_zarz or is_gdstudio
+
+    max_retries = _MAX_RETRIES_POST if is_post else _MAX_RETRIES_GET
 
     headers = {
         "User-Agent": _ZARZ_USER_AGENT if is_zarz else _DEFAULT_UA,
         "Accept": "application/json"
     }
-    delay      = _RETRY_DELAY_S
     last_err: Exception = RuntimeError("no attempts made")
 
-    for attempt in range(_MAX_RETRIES + 1):
+    for attempt in range(max_retries + 1):
         if attempt > 0:
-            logger.debug("[qobuz] retry %d/%d for %s after %.1fs", attempt, _MAX_RETRIES, api_base, delay)
+            delay = _backoff_delay(attempt)
+            logger.debug(
+                "[qobuz] retry %d/%d for %s after %.2fs",
+                attempt, max_retries, api_base, delay,
+            )
             time.sleep(delay)
-            delay *= 2
 
         try:
-            if is_post:
+            if is_gdstudio:
+                host = urlparse(api_base).netloc
+                ts9 = _get_gdstudio_ts9(host)
+                br = "999" if quality in ("27", "7") else "740" if quality in ("", "6") else "320"
+                
+                payload = {
+                    "types": "url",
+                    "id": str(track_id),
+                    "source": "qobuz",
+                    "br": br,
+                    "s": _build_gdstudio_signature(host, str(track_id), ts9)
+                }
+                
+                gdstudio_headers = {
+                    "User-Agent": _DEFAULT_UA,
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "Origin": f"https://{host}",
+                    "Referer": f"https://{host}/",
+                    "Accept": "application/json"
+                }
+                resp = requests.post(api_base, data=payload, headers=gdstudio_headers, timeout=timeout_s)
+
+            elif is_wjhe:
+                q_map = {"27": 2000, "7": 2000, "6": 1000, "": 1000}
+                wjhe_q = q_map.get(quality, 320)
+                wjhe_f = "flac" if wjhe_q >= 1000 else "mp3"
+                url = f"{api_base}?ID={track_id}&quality={wjhe_q}&format={wjhe_f}"
+                
+                # WJHE potrebbe fare un redirect diretto (301/302/307)
+                resp = requests.get(url, headers=headers, timeout=timeout_s, allow_redirects=False)
+                
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    loc = resp.headers.get("Location")
+                    if loc and loc.startswith("http"):
+                        return loc
+
+            elif is_post:
                 if is_zarz:
                     from ..core.http import zarz_rate_limiter
                     zarz_rate_limiter.wait_for_slot()
@@ -320,26 +427,33 @@ def _fetch_stream_url_once(
                     "upload_to_r2": False,
                     "url": f"{_OPEN_URL}{track_id}"
                 }
+                
+                post_headers = {"User-Agent": _ZARZ_USER_AGENT if is_zarz else _DEFAULT_UA}
+                # Fix: Inietta la X-Debug-Key per MusicDL
+                if is_musicdl:
+                    post_headers["X-Debug-Key"] = _get_qobuz_musicdl_key()
+                    post_headers["Content-Type"] = "application/json"
+
                 resp = requests.post(
                     api_base,
                     json=payload,
-                    headers={"User-Agent": _ZARZ_USER_AGENT if is_zarz else _DEFAULT_UA},
+                    headers=post_headers,
                     timeout=timeout_s,
                 )
             else:
                 url = _build_stream_url(api_base, track_id, quality)
-                resp = requests.get(
-                    url,
-                    headers=headers,
-                    timeout=timeout_s,
-                )
+                resp = requests.get(url, headers=headers, timeout=timeout_s)
+
+            if resp.status_code == 429:
+                retry_after = _parse_retry_after(resp)
+                wait = _backoff_delay(attempt + 1, retry_after)
+                last_err = RuntimeError("rate limited (HTTP 429)")
+                if attempt < max_retries:
+                    time.sleep(wait)
+                continue
 
             if resp.status_code >= 500:
                 last_err = RuntimeError(f"HTTP {resp.status_code}")
-                continue
-            if resp.status_code == 429:
-                delay = max(delay, 2.0)
-                last_err = RuntimeError("rate limited")
                 continue
             if resp.status_code != 200:
                 raise RuntimeError(f"HTTP {resp.status_code}")
@@ -357,10 +471,7 @@ def _fetch_stream_url_once(
                 last_err = RuntimeError("invalid JSON in response")
                 continue
 
-            if not isinstance(data, dict):
-                last_err = RuntimeError("unexpected JSON type")
-                continue
-
+            # Per la gestione degli errori standard di fallback
             if isinstance(data.get("error"), str) and data["error"].strip():
                 raise RuntimeError(data["error"].strip())
             if isinstance(data.get("detail"), str) and data["detail"].strip():
@@ -382,7 +493,8 @@ def _fetch_stream_url_once(
             raise
         except Exception as exc:
             last_err = exc
-            if not is_post: break
+            if not is_post:
+                break
             break
 
     raise last_err
@@ -601,19 +713,34 @@ class QobuzProvider(BaseProvider):
             logger.debug("[qobuz] Text search failed: %s", exc)
             return None
 
-    def _get_stream_url(self, track_id: int, quality: str, allow_fallback: bool) -> str:
+    def _get_stream_url(self, track_id: int, quality: str, allow_fallback: bool, exclude_apis: set[str] = None) -> tuple[str, str, str]:
+        if exclude_apis is None:
+            exclude_apis = set()
+            
         chain = _QUALITY_FALLBACK.get(quality, [quality])
-        all_apis = list(_STREAM_APIS) + list(_POST_APIS)
+        
+        # Recupera tutte le API, incluse GDStudio e WJHE aggiunte precedentemente
+        try:
+            all_apis = list(_STREAM_APIS) + list(_POST_APIS) + list(_GDSTUDIO_APIS) + list(_WJHE_APIS)
+        except NameError:
+            all_apis = list(_STREAM_APIS) + list(_POST_APIS)
+            
         ordered_apis = prioritize_providers("qobuz", all_apis)
+        # Rimuove gli endpoint che hanno già restituito una preview
+        ordered_apis = [api for api in ordered_apis if api not in exclude_apis]
+        
         if not allow_fallback:
             chain = chain[:1]
 
         last_exc: Exception | None = None
 
         for i, q in enumerate(chain):
+            if not ordered_apis:
+                raise SpotiflacError(ErrorKind.UNAVAILABLE, "Tutti gli endpoint disponibili sono stati esclusi", self.name)
+            
             try:
                 winner_api, stream_url = _fetch_stream_url_parallel(ordered_apis, track_id, q, _API_TIMEOUT_S)
-                return stream_url
+                return winner_api, stream_url, q
             except SpotiflacError as exc:
                 last_exc = exc
                 if allow_fallback and i + 1 < len(chain):
@@ -680,13 +807,37 @@ class QobuzProvider(BaseProvider):
             if self._file_exists(dest):
                 return DownloadResult.ok(self.name, str(dest))
 
-            stream_url = self._get_stream_url(track_id, quality, allow_fallback)
-            self._http.stream_to_file(stream_url, str(dest), self._progress_cb)
-
             expected_s = metadata.duration_ms // 1000
-            valid, err = validate_downloaded_track(str(dest), expected_s)
-            if not valid:
-                raise SpotiflacError(ErrorKind.UNAVAILABLE, err, self.name)
+            excluded_apis = set()
+            valid = False
+            last_err = None
+            
+            while not valid:
+                try:
+                    winner_api, stream_url, used_quality = self._get_stream_url(
+                        track_id, quality, allow_fallback, exclude_apis=excluded_apis
+                    )
+                except SpotiflacError as exc:
+                    if last_err:
+                        raise SpotiflacError(
+                            ErrorKind.UNAVAILABLE, 
+                            f"Tutte le API hanno fallito (errori o preview). Ultimo motivo: {last_err}", 
+                            self.name
+                        )
+                    raise exc
+
+                self._http.stream_to_file(stream_url, str(dest), self._progress_cb)
+
+                # Verifica se il file scaricato è una preview
+                valid, err = validate_downloaded_track(str(dest), expected_s)
+                if not valid:
+                    logger.warning("[qobuz] API %s ha restituito file non valido: %s. Escludo l'endpoint e riprovo...", winner_api, err)
+                    record_failure("qobuz", winner_api)  # Penalizza questa API nelle statistiche prioritarie
+                    excluded_apis.add(winner_api)
+                    last_err = err
+                    continue # Rilancia il loop saltando l'API appena blacklisted
+                
+                break # Il file ha superato la validazione, esci dal loop
 
             mb_tags: dict[str, str] = {}
             res: dict = {}
