@@ -551,6 +551,10 @@ class SpotifyMetadataClient:
             
             if all_items:
                 playlist_cover = ""
+                playlist_description = ""
+                playlist_followers = 0
+                playlist_owner = ""
+                playlist_source = "Spotify"
                 if playlist_v2:
                     # 1. Gestione corretta della struttura GraphQL per "images"
                     images_data = playlist_v2.get("images")
@@ -569,10 +573,20 @@ class SpotifyMetadataClient:
                         image_obj = playlist_v2.get("image") or {}
                         if isinstance(image_obj, dict):
                             playlist_cover = self._best_image(image_obj.get("sources", []))
-                            
+
                     # 3. Fallback su 'coverArt'
                     if not playlist_cover and isinstance(playlist_v2.get("coverArt"), dict):
                         playlist_cover = self._best_image(playlist_v2["coverArt"].get("sources", []))
+
+                    playlist_description = playlist_v2.get("description", "") or playlist_v2.get("details", {}).get("description", "")
+                    followers_data = playlist_v2.get("followers", {})
+                    if isinstance(followers_data, dict):
+                        playlist_followers = int(followers_data.get("totalCount") or followers_data.get("total") or 0)
+                    elif isinstance(followers_data, (float, int)):
+                        playlist_followers = int(followers_data)
+                    owner_data = playlist_v2.get("owner") or {}
+                    if isinstance(owner_data, dict):
+                        playlist_owner = owner_data.get("displayName") or owner_data.get("name") or owner_data.get("profile", {}).get("name", "")
 
                 graphql_tracks = []
                 for item in all_items:
@@ -642,7 +656,11 @@ class SpotifyMetadataClient:
                 mock_playlist = {
                     "name": playlist_name,
                     "id": playlist_id,
-                    "cover_url": playlist_cover
+                    "cover_url": playlist_cover,
+                    "description": playlist_description,
+                    "followers": playlist_followers,
+                    "owner": playlist_owner,
+                    "source": playlist_source
                 }
                 logger.info(f"[spotify] GraphQL completato con successo! Estratte {len(graphql_tracks)} tracce all'istante.")
                 return mock_playlist, graphql_tracks, playlist_cover
@@ -656,6 +674,22 @@ class SpotifyMetadataClient:
         if not playlist_cover and isinstance(playlist.get("image"), dict):
             playlist_cover = self._best_image(playlist["image"].get("sources", []))
 
+        playlist["description"] = playlist.get("description", "") or ""
+        followers_data = playlist.get("followers", {})
+        if isinstance(followers_data, dict):
+            playlist["followers"] = int(followers_data.get("total") or followers_data.get("totalCount") or 0)
+        elif isinstance(followers_data, (float, int)):
+            playlist["followers"] = int(followers_data)
+        else:
+            playlist["followers"] = 0
+        owner_data = playlist.get("owner", {}) or {}
+        if isinstance(owner_data, dict):
+            playlist["owner"] = owner_data.get("display_name") or owner_data.get("name") or ""
+        else:
+            playlist["owner"] = ""
+        playlist["source"] = "Spotify"
+        playlist["cover_url"] = playlist_cover
+
         tracks: list[TrackMetadata] = []
 
         for item in self._paginate(f"{_API_BASE}/playlists/{playlist_id}/tracks?limit=100"):
@@ -665,6 +699,113 @@ class SpotifyMetadataClient:
             tracks.append(self._track_from_raw(track))
 
         return playlist, tracks, playlist_cover
+
+    def get_artist_profile(self, artist_id: str) -> dict:
+        """
+        Recupera i dati completi del profilo artista tramite GraphQL.
+        
+        Specchiato da FilterArtist del codice Go.
+        Ritorna dict con: name, biography, verified, followers, listeners,
+        rank, avatar, header, gallery, discography_total
+        """
+        try:
+            from ..core.spotfetch import SpotifyWebClient
+            web_client = SpotifyWebClient()
+            web_client.initialize()
+            
+            # GraphQL query per ottenere i dati profilo artista
+            payload = {
+                "operationName": "getArtist",
+                "variables": {
+                    "uri": f"spotify:artist:{artist_id}",
+                    "locale": "en"
+                },
+                "extensions": {
+                    "persistedQuery": {
+                        "version": 1,
+                        "sha256Hash": "608ba37fd80e047b6510cccabc97c560e'5b5490df466c4150a75441793a0286f"
+                    }
+                }
+            }
+            
+            response = web_client.query(payload)
+            data_map = response.get("data", {})
+            artist_data = data_map.get("artistUnion", {})
+            
+            if not artist_data:
+                return {}
+            
+            # Estrai profilo
+            profile_raw = artist_data.get("profile", {})
+            profile = {}
+            if isinstance(profile_raw, dict):
+                if "name" in profile_raw:
+                    profile["name"] = profile_raw.get("name", "")
+                if "biography" in profile_raw:
+                    bio_map = profile_raw.get("biography", {})
+                    if isinstance(bio_map, dict):
+                        bio_text = bio_map.get("text", "")
+                        if bio_text:
+                            # Rimuovi tag HTML
+                            bio_text = re.sub(r'<[^>]+>', '', bio_text)
+                            profile["biography"] = bio_text
+                if "verified" in profile_raw:
+                    profile["verified"] = bool(profile_raw.get("verified", False))
+            
+            # Estrai statistiche
+            stats_raw = artist_data.get("stats", {})
+            stats = {}
+            if isinstance(stats_raw, dict):
+                if "followers" in stats_raw:
+                    stats["followers"] = int(stats_raw.get("followers", 0) or 0)
+                if "monthlyListeners" in stats_raw:
+                    stats["listeners"] = int(stats_raw.get("monthlyListeners", 0) or 0)
+                if "worldRank" in stats_raw:
+                    rank_val = stats_raw.get("worldRank", 0)
+                    stats["rank"] = int(rank_val) if rank_val else None
+            
+            # Estrai avatar (visuals -> avatarImage)
+            avatar_url = None
+            visuals_data = artist_data.get("visuals", {})
+            if isinstance(visuals_data, dict):
+                avatar_obj = visuals_data.get("avatarImage", {})
+                if isinstance(avatar_obj, dict):
+                    data_obj = avatar_obj.get("data", {})
+                    if isinstance(data_obj, dict):
+                        sources = data_obj.get("sources", [])
+                        if sources and isinstance(sources[0], dict):
+                            avatar_url = sources[0].get("url")
+            
+            # Estrai header image
+            header_url = None
+            header_data = artist_data.get("headerImage", {})
+            if isinstance(header_data, dict):
+                data_obj = header_data.get("data", {})
+                if isinstance(data_obj, dict):
+                    sources = data_obj.get("sources", [])
+                    if sources and isinstance(sources[0], dict):
+                        header_url = sources[0].get("url")
+            
+            # Estrai total discography count
+            discography_total = 0
+            discography_data = artist_data.get("discography", {})
+            if isinstance(discography_data, dict):
+                all_data = discography_data.get("all", {})
+                if isinstance(all_data, dict):
+                    discography_total = int(all_data.get("totalCount", 0) or 0)
+            
+            return {
+                "id": artist_id,
+                "profile": profile,
+                "stats": stats,
+                "avatar": avatar_url,
+                "header": header_url,
+                "discography_total": discography_total
+            }
+        
+        except Exception as exc:
+            logger.warning(f"[spotify] get_artist_profile fallito: {exc}")
+            return {}
 
     def get_artist_albums(
             self,
@@ -682,6 +823,11 @@ class SpotifyMetadataClient:
         """
         artist      = self._get(f"/artists/{artist_id}")
         artist_name = artist.get("name", "")
+        
+        # Aggiungi dati profilo completi tramite GraphQL
+        profile_data = self.get_artist_profile(artist_id)
+        if profile_data:
+            artist.update(profile_data)
         tracks: list[TrackMetadata] = []
         seen_isrc:     set[str] = set()
         seen_album_ids: set[str] = set()
@@ -784,36 +930,50 @@ class SpotifyMetadataClient:
             self,
             spotify_url: str,
             include_featuring: bool = False,
-    ) -> tuple[str, list[TrackMetadata]]:
+    ) -> tuple[str, list[TrackMetadata], str, dict]:
         """
         Entry point universale: accetta qualsiasi URL/URI Spotify.
 
         Ora solleva InvalidUrlError (tramite parse_spotify_url) invece
         di restituire silenziosamente ("Unknown", []).
+        Restituisce anche il cover URL e, per playlist, i metadati extra.
         """
         info = parse_spotify_url(spotify_url)
         t    = info["type"]
 
         if t == "track":
             meta = self.get_track(info["id"])
-            return meta.title, [meta]
+            return meta.title, [meta], "", {}
 
         if t == "album":
             album, tracks = self.get_album_tracks(info["id"])
-            return album.get("name", "Unknown Album"), tracks
+            return album.get("name", "Unknown Album"), tracks, "", {}
 
         if t == "playlist":
             result  = self.get_playlist_tracks(info["id"])
             pl      = result[0]
             tracks  = result[1]
             cover   = result[2] if len(result) > 2 else (tracks[0].cover_url if tracks else "")
-            return pl.get("name", "Unknown Playlist"), tracks, cover
+            return pl.get("name", "Unknown Playlist"), tracks, cover, pl
 
         if t in ("artist", "artist_discography"):
             artist, tracks = self.get_artist_albums(
                 info["id"], include_featuring=include_featuring,
             )
-            return artist.get("name", "Unknown Artist"), tracks
+            # Costruisci i metadati dell'artista per il frontend
+            artist_meta = {
+                "name": artist.get("name", "Unknown Artist"),
+                "profile": artist.get("profile", {}),
+                "followers": artist.get("stats", {}).get("followers"),
+                "listeners": artist.get("stats", {}).get("listeners"),
+                "rank": artist.get("stats", {}).get("rank"),
+                "avatar": artist.get("avatar"),
+                "header": artist.get("header"),
+                "verified": artist.get("profile", {}).get("verified", False),
+                "biography": artist.get("profile", {}).get("biography", ""),
+                "discography_total": artist.get("discography_total", 0),
+            }
+            return artist.get("name", "Unknown Artist"), tracks, "", artist_meta
 
         raise SpotiflacError(ErrorKind.INVALID_URL, f"Tipo Spotify non supportato: {t}")
 
@@ -1005,7 +1165,6 @@ class SpotifyMetadataClient:
             external_url = (item.get("external_urls") or {}).get("spotify", ""),
             copyright    = copyright_text,
             composer     = "",
-            # --- campi nuovi ---
             upc          = upc,
             publisher    = publisher,
             total_discs  = total_discs,
