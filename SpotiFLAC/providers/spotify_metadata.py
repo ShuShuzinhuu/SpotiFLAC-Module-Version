@@ -326,6 +326,9 @@ class SpotifyMetadataClient:
         # ------------------------------------------------------------------
         
         composer_str = self.web_client.get_track_composer(track_id)
+        
+        c_items = album_data.get("copyright", {}).get("items", [])
+        copyright_str = " \u00B7 ".join([c.get("text", "") for c in c_items if c.get("text")]) if c_items else ""
 
         return TrackMetadata(
             id=track_id,
@@ -341,7 +344,7 @@ class SpotifyMetadataClient:
             release_date=album_data.get("date", {}).get("isoString", ""),
             cover_url=cover,
             external_url=_track_url(track_id),
-            copyright="",
+            copyright=copyright_str,
             composer=composer_str,
             preview_url="",
             plays=_safe_playcount(track_union.get("playcount")),
@@ -420,6 +423,9 @@ class SpotifyMetadataClient:
         release_date = album_union.get("date", {}).get("isoString", "")
         total_tracks = album_union.get("tracksV2", {}).get("totalCount", 0)
 
+        c_items = album_union.get("copyright", {}).get("items", [])
+        copyright_str = " \u00B7 ".join([c.get("text", "") for c in c_items if c.get("text")]) if c_items else ""
+
         tracks: list[TrackMetadata] = []
         for item in all_items:
             track_node = item.get("track", {})
@@ -430,14 +436,13 @@ class SpotifyMetadataClient:
                 if ":" in uri:
                     track_id = uri.split(":")[-1]
             
-            # Se dopo i tentativi non abbiamo ancora un ID, saltiamo la traccia
             if not track_id:
                 continue
 
             track_artists = _join_artists(track_node.get("artists", {})) or album_artists
 
             tracks.append(TrackMetadata(
-                id=track_id,  # Usa la variabile validata
+                id=track_id,
                 title=track_node.get("name", "Unknown"),
                 artists=track_artists,
                 album=album_name,
@@ -449,8 +454,8 @@ class SpotifyMetadataClient:
                 duration_ms=_safe_duration_ms(track_node.get("duration")),
                 release_date=release_date,
                 cover_url=cover,
-                external_url=_track_url(track_id), # Usa la variabile validata
-                copyright="",
+                external_url=_track_url(track_id),
+                copyright=copyright_str,
                 composer="",
                 preview_url="",
                 plays=_safe_playcount(track_node.get("playcount")),
@@ -527,6 +532,9 @@ class SpotifyMetadataClient:
             cover_urls = self.web_client.extract_cover_image(album_data.get("coverArt", {}))
             album_artists = _join_artists(album_data.get("artists", {})) or artists_list[0]
 
+            c_items = album_data.get("copyright", {}).get("items", [])
+            copyright_str = " \u00B7 ".join([c.get("text", "") for c in c_items if c.get("text")]) if c_items else ""
+
             tracks.append(TrackMetadata(
                 id=track_id,
                 title=track_data.get("name", "Unknown"),
@@ -541,7 +549,7 @@ class SpotifyMetadataClient:
                 release_date="",
                 cover_url=_best_cover(cover_urls),
                 external_url=_track_url(track_id),
-                copyright="",
+                copyright=copyright_str,
                 composer="",
                 preview_url="",
                 plays=_safe_playcount(track_data.get("playcount")),
@@ -704,10 +712,12 @@ class SpotifyMetadataClient:
             profile = artist_data.get("profile", {})
             stats = artist_data.get("stats", {})
 
-            sources = artist_data.get("visuals", {}).get("avatarImage", {}).get("data", {}).get("sources", [])
+            avatar_node = artist_data.get("visuals", {}).get("avatarImage", {})
+            sources = avatar_node.get("sources", []) or avatar_node.get("data", {}).get("sources", [])
             avatar_url = sources[0].get("url") if sources else None
 
-            h_sources = artist_data.get("headerImage", {}).get("data", {}).get("sources", [])
+            h_node = artist_data.get("headerImage", {})
+            h_sources = h_node.get("sources", []) or h_node.get("data", {}).get("sources", [])
             header_url = h_sources[0].get("url") if h_sources else None
 
             return {

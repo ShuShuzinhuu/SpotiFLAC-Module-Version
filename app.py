@@ -471,12 +471,13 @@ class SpotiFLAC_API:
             collection_cover = result[2] if len(result) > 2 else ""
             collection_meta  = result[3] if len(result) > 3 else {}
 
-            # cover: usa quella esplicita, poi il cover della prima traccia quando non è playlist
             cover = collection_cover or ""
+            lower_url = url.lower()
+            is_playlist = ("/playlist/" in lower_url) or ("list=" in lower_url and "olak5uy_" not in lower_url)
+            is_artist = "/artist/" in lower_url or "spotify:artist:" in lower_url
+            
             if not cover:
-                lower_url = url.lower()
-                is_playlist = ("/playlist/" in lower_url) or ("list=" in lower_url and "olak5uy_" not in lower_url)
-                if not is_playlist and tracks:
+                if not is_playlist and not is_artist and tracks:
                     cover = getattr(tracks[0], "cover_url", "") or ""
 
             if not tracks:
@@ -605,7 +606,6 @@ class SpotiFLAC_API:
 
             try:
                 from SpotiFLAC.core.session_memory import add_url_to_history
-                cover = collection_cover or ''
                 _lower = url.lower()
                 if '/track/' in _lower or 'watch?v=' in _lower or 'youtu.be' in _lower:
                     _url_type = 'track'
@@ -617,8 +617,7 @@ class SpotiFLAC_API:
                     _url_type = 'artist'
                 else:
                     _url_type = ''
-                if not cover and tracks:
-                    cover = getattr(tracks[0], 'cover_url', '') or ''
+                
                 _artist = getattr(tracks[0], 'artists', '') if tracks and _url_type == 'track' else ''
                 add_url_to_history(url, label=collection_name, cover=cover,
                                    track_count=len(tracks), url_type=_url_type, artist=_artist)
