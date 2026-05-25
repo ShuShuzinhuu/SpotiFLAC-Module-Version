@@ -522,7 +522,6 @@ class SpotiFLAC_API:
                             album_id = album_match.group(1)
                             playcount_map = sp_client.get_album_stats(album_id)
                         elif is_artist:
-                            self.log("Playcounts per gli artisti ignorati per velocizzare il caricamento...", "info")
                             playcount_map = {}
                         else:
                             pass
