@@ -5,7 +5,6 @@ import re
 from typing import Any
 
 import requests
-from urllib3 import Retry
 
 # Utilizza il path relativo corretto in base a dove hai salvato spotfetch.py
 from ..core.spotify_totp import generate_spotify_totp
@@ -101,7 +100,6 @@ class SpotifyWebClient:
         }
         
         headers = {
-            "Authority": "clienttoken.spotify.com",
             "Content-Type": "application/json",
             "Accept": "application/json"
         }
@@ -114,10 +112,14 @@ class SpotifyWebClient:
             self.client_token = data.get("granted_token", {}).get("token", "")
 
     def initialize(self) -> None:
-        """Esegue l'intera pipeline di handshake."""
-        self._get_session_info()
-        self._get_access_token()
-        self._get_client_token()
+        if not self.client_version or not self.device_id:
+            self._get_session_info()
+
+        if not self.access_token:
+            self._get_access_token()
+
+        if not self.client_token:
+            self._get_client_token()
 
     def extract_cover_image(self, cover_data: dict) -> dict:
         """Algoritmo avanzato di risoluzione delle copertine, estrae la massima risoluzione tramite Hash."""
@@ -157,7 +159,7 @@ class SpotifyWebClient:
             if not image_id and url:
                 for prefix in ["ab67616d0000b273", "ab67616d00001e02", "ab67616d00004851"]:
                     if prefix in url:
-                        image_id = url.split(prefix)[-1]
+                        image_id = url.split(prefix)[-1].split("?")[0].strip("/")
                         break
                 if not image_id and "/image/" in url:
                     part = url.split("/image/")[-1].split("?")[0]
@@ -218,7 +220,7 @@ class SpotifyWebClient:
             logger.debug(f"[spotfetch] Preview URL fetch failed for {track_id}: {exc}")
             return ""
 
-    def query(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def query(self, payload: dict[str, Any], retry: bool = True) -> dict[str, Any]:
         """Esegue una query GraphQL autorizzata puntando all'endpoint pathfinder/v2/query."""
         if not (self.access_token and self.client_token):
             self.initialize()
@@ -235,9 +237,8 @@ class SpotifyWebClient:
         resp = self._session.post("https://api-partner.spotify.com/pathfinder/v2/query", json=payload, headers=headers)
         logger.debug(f"[spotfetch] Response status: {resp.status_code}")
 
-        if resp.status_code == 401 and Retry:
+        if resp.status_code == 401 and retry:
             logger.debug("[spotfetch] Token scaduto. Auto-rinnovo in corso...")
-            self.access_token = ""
             self.initialize()
             return self.query(payload, retry=False)
         
@@ -255,7 +256,7 @@ class SpotifyWebClient:
             resp.raise_for_status()
         
         result = resp.json()
-        logger.debug(f"[spotfetch] Response data: {result}")
+        logger.debug(f"[spotfetch] Response keys: {list(result.keys())}")
         return result
     
     def get_track_stats(self, track_id: str) -> dict:
