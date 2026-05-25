@@ -336,7 +336,7 @@
     }
     #album-card.hidden { display: none; }
     #album-cover {
-      width: 110px; height: 110px; border-radius: 18px;
+      width: 200px; height: 200px; border-radius: 18px;
       background: var(--surface3); flex-shrink: 0;
       border: 1px solid var(--border2);
       display: flex; align-items: center; justify-content: center;
@@ -1080,6 +1080,311 @@
       color: var(--red) !important;
       pointer-events: none;
     }
+
+    
+    .track-detail-card.hidden {
+      display: none;
+    }
+
+
+    .track-detail-header {
+      display: flex; justify-content: flex-end;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .track-detail-close {
+      background: none; border: none;
+      color: var(--muted); cursor: pointer;
+      padding: 4px;
+      display: flex; align-items: center; justify-content: center;
+      transition: color var(--t);
+    }
+    .track-detail-close:hover { color: var(--text2); }
+
+    .track-detail-body {
+      display: flex;
+      gap: 24px;
+      padding: 24px;
+      flex-direction: row;
+    }
+
+    @media (max-width: 600px) {
+      .track-detail-body {
+        flex-direction: column;
+        gap: 16px;
+      }
+    }
+
+    .track-detail-cover-section {
+      flex-shrink: 0;
+    }
+
+    .track-detail-cover {
+      width: 200px;
+      height: 200px;
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--surface2);
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    }
+
+    .track-detail-cover img {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .track-detail-duration {
+      position: absolute;
+      bottom: 8px; right: 8px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .track-detail-info {
+      flex: 1;
+      display: flex; flex-direction: column;
+      gap: 16px;
+      min-width: 0;
+    }
+
+    .track-detail-title-section {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .track-detail-title {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--text);
+      margin: 0;
+      line-height: 1.2;
+      word-break: break-word;
+    }
+
+    .explicit-badge-lg {
+      background: var(--red);
+      color: white;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 4px 6px;
+      border-radius: 3px;
+      font-family: 'JetBrains Mono', monospace;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .track-detail-artist {
+      font-size: 16px;
+      color: var(--text2);
+      margin: 0;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    .track-detail-meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      padding: 16px 0;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .track-detail-meta-item {
+      display: flex; flex-direction: column;
+      gap: 4px;
+    }
+
+    .track-detail-meta-label {
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .track-detail-meta-value {
+      font-size: 14px;
+      color: var(--text);
+      margin: 0;
+      font-weight: 500;
+      word-break: break-word;
+    }
+
+    .track-detail-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .track-detail-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border: 1.5px solid var(--border);
+      background: var(--surface2);
+      color: var(--text2);
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all var(--t);
+      font-family: var(--app-font);
+      white-space: nowrap;
+    }
+
+    .track-detail-btn:hover {
+      background: var(--surface3);
+      border-color: var(--border2);
+      color: var(--text);
+    }
+
+    .track-detail-btn:active {
+      transform: scale(0.96);
+    }
+
+    .track-detail-btn.primary {
+      background: var(--yellow);
+      color: #000;
+      border-color: var(--yellow-d);
+      font-weight: 600;
+    }
+
+    .track-detail-btn.primary:hover {
+      opacity: 0.9;
+    }
+
+    .track-detail-btn svg {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+
+    /* ── FETCHING TOAST ── */
+    #fetching-toast {
+      position: fixed;
+      bottom: 24px;
+      left: 24px;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 16px 20px;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.08);
+      z-index: 1000;
+      opacity: 0;
+      transform: translateY(15px);
+      pointer-events: none;
+      transition: all 0.3s ease;
+    }
+    
+    /* Handle dark theme adaptation if needed */
+    body:not(.light-theme) #fetching-toast {
+      background: var(--surface);
+      border-color: var(--border);
+    }
+    
+    #fetching-toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    
+    .ft-icon {
+      color: #3b82f6;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 2px;
+    }
+    
+    .ft-text {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    
+    .ft-title {
+      font-weight: 700;
+      font-size: 13px;
+      color: var(--text);
+    }
+    
+    .ft-desc {
+      font-size: 12px;
+      color: #3b82f6;
+      font-weight: 500;
+    }
+
+    /* Disable Recent Fetches interaction during loading */
+    #recent-wrap.fetching-disabled {
+      pointer-events: none;
+      opacity: 0.5;
+      transition: opacity 0.3s ease;
+    }
+    /* Toast State Colors */
+    .ft-icon.loading { color: #3b82f6; }
+    .ft-icon.success { color: #22c55e; }
+    .ft-icon.error { color: #ef4444; }
+    .ft-desc.loading { color: #3b82f6; }
+
+    /* ── SINGLE TRACK CARD ENHANCEMENTS ── */
+#album-cover .cover-duration {
+  position: absolute; bottom: 6px; right: 6px;
+  background: rgba(0,0,0,.72); color: #fff;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; font-weight: 700;
+  padding: 3px 7px; border-radius: 4px;
+  pointer-events: none; z-index: 2;
+}
+.track-explicit-title {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--red); color: #fff;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; font-weight: 700;
+  width: 16px; height: 16px; border-radius: 3px;
+  vertical-align: middle; margin-left: 7px; flex-shrink: 0;
+}
+.track-meta-grid {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+  gap: 10px 24px;
+
+  margin-bottom: 12px;
+  padding: 12px 0;
+
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.track-meta-item { display: flex; flex-direction: column; gap: 3px; }
+.track-meta-label {
+  font-size: 10px; color: var(--muted); font-weight: 700;
+  text-transform: uppercase; letter-spacing: .06em;
+}
+.track-meta-value {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.35;
+
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
   </style>
 </head>
 <body>
@@ -1183,6 +1488,7 @@
                   </div>
                 </div>
                 <div id="album-description" class="album-description hidden"></div>
+                <div id="track-meta-section" style="display:none;"></div>
                 <div id="album-actions">
                   <button class="act-btn primary" onclick="downloadAll()">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -1198,6 +1504,9 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
+
+            <!-- Track Detail Card -->
+
 
             <div id="track-controls" class="hidden">
               <div id="track-search-wrap">
@@ -1500,6 +1809,15 @@
         <div class="s-footer">
         </div>
       </div></div><div id="save-toast" class="save-toast hidden">Impostazioni salvate.</div>
+      <div id="fetching-toast">
+  <div class="ft-icon">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+  </div>
+  <div class="ft-text">
+    <div class="ft-title">fetching metadata...</div>
+    <div class="ft-desc">please wait while we retrieve the information</div>
+  </div>
+</div>
 
 <script>
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -2001,6 +2319,19 @@ let queueStartTime = null;
 let queueDurationInterval = null;
 let previewAudio = null;
 let previewPlayingIndex = -1;
+// Distrugge l'audio corrente per rilasciare i tasti multimediali del Sistema Operativo
+function stopCurrentPreview() {
+  if (previewAudio) {
+    previewAudio.pause();
+    previewAudio.removeAttribute('src'); // Rimuove la sorgente
+    previewAudio.load(); // Forza il browser a rilasciare la sessione media!
+  }
+  if (previewPlayingIndex >= 0) {
+    const prevBtn = document.querySelector(`button.ta-preview[data-preview-index="${previewPlayingIndex}"]`);
+    if (prevBtn) setPreviewButtonState(prevBtn, false);
+    previewPlayingIndex = -1;
+  }
+}
 
 // ── Pagination state ──────────────────────────────────────────────────────────
 let currentPage = 1;
@@ -2078,6 +2409,7 @@ window.updateFolderLabel = (path) => {
       }
     };
 window.showTracklist = (tracksJson) => {
+  setFetchingState('success');
   const tracks = typeof tracksJson === 'string' ? JSON.parse(tracksJson) : tracksJson;
   renderTracks(tracks, 1);
   $('fetchBtn').disabled = false;
@@ -2129,6 +2461,25 @@ function setPlaycountHeaderLabel(label) {
 
 // ── Album card ────────────────────────────────────────────────────────────────
 function setAlbumCard(title, artist, coverUrl, quality, description, followers, owner, source, artistListeners, artistRank, artistVerified, artistBiography) {
+  const metaSection = $('track-meta-section');
+  if (metaSection) {
+    metaSection.innerHTML = '';
+    metaSection.style.display = 'none';
+  }
+  $('album-cover').querySelector('.cover-duration')?.remove();
+  $('album-subtitle').style.display = '';
+
+  // Restore the default album actions
+  $('album-actions').innerHTML = `
+    <button class="act-btn primary" onclick="downloadAll()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download All
+    </button>
+    <button class="act-btn secondary" onclick="downloadSelected()" id="dl-selected-btn" style="display:none;">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="9 12 11 14 15 10"/></svg>
+      Download Selected
+    </button>
+  `;
   $('album-title').textContent   = title  || '—';
   $('album-artist').textContent  = artist || '';
   const subtitle = $('album-subtitle');
@@ -2171,7 +2522,7 @@ function setAlbumCard(title, artist, coverUrl, quality, description, followers, 
   // If owner present, prefer showing owner as the album artist (playlist behavior)
   const artistEl = $('album-artist');
   if (owner) {
-    artistEl.textContent = owner;
+    artistEl.textContent = "";
   } else {
     artistEl.textContent = artist || '';
   }
@@ -2226,8 +2577,94 @@ function updateAlbumMeta(trackCount) {
   // Aggiorna anche l'etichetta dell'intestazione della tabella tracce
   setPlaycountHeaderLabel(badgeType === 'PLAYLIST' ? 'Album' : 'Playcount');
 }
+
+function showSingleTrackCard(t) {
+  
+  // Duration overlay sul cover
+  const coverEl = $('album-cover');
+  coverEl.querySelector('.cover-duration')?.remove();
+  const dur = formatDuration(t.duration_ms);
+  if (dur && dur !== '—') {
+    const badge = document.createElement('span');
+    badge.className = 'cover-duration';
+    badge.textContent = dur;
+    coverEl.appendChild(badge);
+  }
+
+  // Explicit badge inline nel titolo
+  const titleEl = $('album-title');
+  titleEl.innerHTML = escHtml(t.title || t.name || '—');
+  if (t.explicit) {
+    titleEl.innerHTML = escHtml(t.title || t.name || '—') +
+      ' <span class="track-explicit-title">E</span>';
+  }
+
+  // Nascondi il subtitle (qualità) — già mostrata altrove
+  $('album-subtitle').style.display = 'none';
+
+  // Popola la griglia meta
+  const section = $('track-meta-section');
+  const playcountRaw = t.plays ?? t.playcount ?? t.playCount ?? t.plays_count;
+  const playcountVal = playcountRaw != null
+    ? Number(playcountRaw).toLocaleString('it-IT')
+    : null;
+
+  const metas = [
+    { label: 'Album',        value: t.album || t.album_name || t.release || null },
+    { label: 'Release Date', value: t.release_date || t.year || null },
+    { label: 'Total Plays',  value: playcountVal },
+    { label: 'Copyright',    value: t.copyright || null },
+  ].filter(m => m.value);
+
+  if (metas.length) {
+    const grid = document.createElement('div');
+    grid.className = 'track-meta-grid';
+    metas.forEach(m => {
+      const item = document.createElement('div');
+      item.className = 'track-meta-item';
+      item.innerHTML = `
+        <div class="track-meta-label">${escHtml(m.label)}</div>
+        <div class="track-meta-value" title="${escHtml(String(m.value))}">${escHtml(String(m.value))}</div>
+      `;
+      grid.appendChild(item);
+    });
+    section.innerHTML = '';
+    section.appendChild(grid);
+    section.style.display = '';
+  } else {
+    section.style.display = 'none';
+  }
+
+  // Bottoni azione specifici per la traccia
+  const previewUrl = t.preview_url || t.previewUrl || '';
+  const extUrl     = t.external_url || t.externalUrl || t.link || '';
+  const trackId    = t.id || '';
+  $('album-actions').innerHTML = `
+    <button class="act-btn primary" onclick="downloadSingle(0)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download
+    </button>
+    <button class="act-btn secondary" title="Play Preview" data-track-id="${trackId}" onclick="playPreview(0)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+    </button>
+    <button class="act-btn secondary" title="Save Lyrics (.lrc)" onclick="downloadLyrics(0)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+    </button>
+    <button class="act-btn secondary" title="Save Cover (.jpg)" onclick="downloadCover(0)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+    </button>
+    ${extUrl ? `
+    <button class="act-btn secondary" title="Open in Spotify" onclick="openExternal(0)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+    </button>` : ''}
+  `;
+}
+
 function closeAlbumCard() {
+  setFetchingState(false);
+  stopCurrentPreview();
   $('album-card').classList.add('hidden');
+  $('album-subtitle').style.display = '';
   $('track-controls').classList.add('hidden');
   $('track-table-wrap').classList.add('hidden');
   $('recent-wrap').style.display = '';
@@ -2240,6 +2677,12 @@ function closeAlbumCard() {
   setStatus('Ready — paste a link and press Fetch');
   $('fetchBtn').disabled  = false;
   $('urlInput').disabled  = false;
+  const metaSection = $('track-meta-section');
+  if (metaSection) {
+  metaSection.innerHTML = '';
+  metaSection.style.display = 'none';
+}
+  $('album-cover').querySelector('.cover-duration')?.remove();
   loadHistoryAndProfiles();
 }
 
@@ -2262,6 +2705,7 @@ function formatDuration(ms) {
 
 // ── Track rendering ───────────────────────────────────────────────────────────
 function renderTracks(tracks, page = 1) {
+  stopCurrentPreview();
   currentTracks = tracks;
   currentPage = page;
   
@@ -2313,19 +2757,13 @@ function renderTracks(tracks, page = 1) {
       const playcount = playcountValue ? String(playcountValue).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '—';
       const albumName = t.album || t.album_name || t.release || t.release_name || '';
       const playcountCell = isPlaylist ? escHtml(albumName || '—') : playcount;
-      // Find preview URL: common keys or any string value that looks like a preview or mp3
-      let previewUrl = t.preview_url || t.previewUrl || t.preview || t.preview_uri || t.previewUri || '';
-      if (!previewUrl) {
-        const vals = Object.values(t || {});
-        for (const v of vals) {
-          if (typeof v === 'string' && /(preview|mp3|p\.scdn\.co)/i.test(v)) { previewUrl = v; break; }
-        }
-      }
-      const previewBtn = previewUrl
-        ? `<button class="ta-btn ta-preview" data-preview-index="${globalIndex}" data-tip="Play 30s Preview" onclick="playPreview(${globalIndex})">
-             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v14a1 1 0 0 0 1 1h3l5 3V4L9 7H6a1 1 0 0 0-1 1z"/></svg>
-           </button>`
-        : `<button class="ta-btn" data-tip="No preview" disabled style="opacity:.3">
+      let previewUrl = t.preview_url || '';
+      
+      // Se non c'è, controlliamo se è una proprietà dell'oggetto traccia
+      if (!previewUrl && t.previewUrl) previewUrl = t.previewUrl;
+      
+      // Lazy Loading: il pulsante è sempre abilitato, ma recupererà il preview al click se necessario
+      const previewBtn = `<button class="ta-btn ta-preview" data-preview-index="${globalIndex}" data-track-id="${t.id || ''}" data-tip="Play Preview" onclick="playPreview(${globalIndex})">
              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v14a1 1 0 0 0 1 1h3l5 3V4L9 7H6a1 1 0 0 0-1 1z"/></svg>
            </button>`;
 
@@ -2364,6 +2802,9 @@ function renderTracks(tracks, page = 1) {
           ${linkBtn}
         </div>
       `;
+      
+
+      
       fragment.appendChild(row);
     }
 
@@ -2381,12 +2822,13 @@ function renderTracks(tracks, page = 1) {
       updateAlbumMeta(tracks.length);
       const urlLower = (currentUrl || '').toLowerCase();
       const isTrackUrl = urlLower.includes('/track/') || urlLower.includes('spotify:track:') || urlLower.includes('watch?v=') || urlLower.includes('youtu.be/');
-      if (!(isTrackUrl && tracks.length === 1)) {
-        $('track-controls').classList.remove('hidden');
-        $('track-table-wrap').classList.remove('hidden');
-      } else {
+      if (isTrackUrl && tracks.length === 1) {
         $('track-controls').classList.add('hidden');
         $('track-table-wrap').classList.add('hidden');
+        showSingleTrackCard(tracks[0]);
+      } else {
+        $('track-controls').classList.remove('hidden');
+        $('track-table-wrap').classList.remove('hidden');
       }
       $('recent-wrap').style.display = 'none';
       
@@ -2506,18 +2948,15 @@ function downloadCover(i) {
 function playPreview(i) {
   const t = currentTracks[i];
   let previewUrl = t?.preview_url || t?.previewUrl || t?.preview || t?.preview_uri || t?.previewUri || '';
-  if (!previewUrl) {
-    const vals = Object.values(t || {});
-    for (const v of vals) {
-      if (typeof v === 'string' && /(preview|mp3|p\.scdn\.co)/i.test(v)) { previewUrl = v; break; }
-    }
-  }
-  if (!t || !previewUrl) {
-    logMessage('Preview unavailable for this track', 'warn');
+  
+  const button = document.querySelector(`button.ta-preview[data-preview-index="${i}"]`);
+  const trackId = button?.dataset.trackId || t?.id || '';
+
+  if (!t || !trackId) {
+    logMessage('Track ID missing', 'warn');
     return;
   }
 
-  const button = document.querySelector(`button.ta-preview[data-preview-index="${i}"]`);
   if (!previewAudio) {
     previewAudio = document.createElement('audio');
     previewAudio.id = 'preview-player';
@@ -2526,35 +2965,53 @@ function playPreview(i) {
     document.body.appendChild(previewAudio);
 
     previewAudio.addEventListener('ended', () => {
-      if (previewPlayingIndex >= 0) {
-        const prevBtn = document.querySelector(`button.ta-preview[data-preview-index="${previewPlayingIndex}"]`);
-        setPreviewButtonState(prevBtn, false);
-        previewPlayingIndex = -1;
-      }
+      stopCurrentPreview(); // Rilascia i tasti quando la preview finisce naturalmente
     });
   }
 
   // Toggle pause if already playing this track
   if (previewPlayingIndex === i && !previewAudio.paused) {
-    previewAudio.pause();
-    setPreviewButtonState(button, false);
-    previewPlayingIndex = -1;
+    stopCurrentPreview(); // Ferma e rilascia i tasti
     return;
   }
 
   // Stop previous track
   if (previewPlayingIndex !== -1 && previewPlayingIndex !== i) {
-    const previousButton = document.querySelector(`button.ta-preview[data-preview-index="${previewPlayingIndex}"]`);
-    setPreviewButtonState(previousButton, false);
+    stopCurrentPreview(); // Ferma la traccia precedente
   }
 
   // Show spinner while loading
   setTaBtnState(button, 'loading');
 
+  // Se preview_url è vuoto, recuperalo dal backend (lazy loading)
+  if (!previewUrl) {
+    console.log(`Fetching preview for track ${trackId}…`);
+    pywebview.api.get_track_preview(trackId).then((url) => {
+      if (url) {
+        previewUrl = url;
+        t.preview_url = url; // Aggiorna la traccia in cache
+        playPreviewWithUrl(i, previewUrl, button, t);
+      } else {
+        setTaBtnState(button, 'error');
+        setTimeout(() => setTaBtnState(button, 'default'), 2200);
+        logMessage('No preview available for this track', 'warn');
+      }
+    }).catch((err) => {
+      console.error('Error fetching preview:', err);
+      setTaBtnState(button, 'error');
+      setTimeout(() => setTaBtnState(button, 'default'), 2200);
+      logMessage('Failed to fetch preview', 'error');
+    });
+  } else {
+    // Altrimenti, usa direttamente il preview_url
+    playPreviewWithUrl(i, previewUrl, button, t);
+  }
+}
+
+function playPreviewWithUrl(i, previewUrl, button, t) {
   previewAudio.src = previewUrl;
   previewAudio.currentTime = 0;
   previewAudio.play().then(() => {
-    // Reset loading state, then switch to pause icon
     button.classList.remove('ta-loading', 'ta-state-success', 'ta-state-error');
     setPreviewButtonState(button, true);
     previewPlayingIndex = i;
@@ -2570,10 +3027,22 @@ function playPreview(i) {
 function setPreviewButtonState(button, active) {
   if (!button) return;
   button.classList.toggle('active', active);
-  button.dataset.tip = active ? 'Pause preview' : 'Play 30s Preview';
+  
+  // Controlliamo se è il bottone della card singola (.act-btn) o della tabella
+  const isCardBtn = button.classList.contains('act-btn');
+  const svgSize = isCardBtn ? "13" : "11";
+
+  // Gestione dinamica dei tooltip
+  if (isCardBtn) {
+    button.title = active ? 'Pause preview' : 'Play Preview';
+  } else {
+    button.dataset.tip = active ? 'Pause preview' : 'Play Preview';
+  }
+
+  // Cambio icona dinamico mantenendo le proporzioni corrette
   button.innerHTML = active
-    ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>`
-    : `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v14a1 1 0 0 0 1 1h3l5 3V4L9 7H6a1 1 0 0 0-1 1z"/></svg>`;
+    ? `<svg width="${svgSize}" height="${svgSize}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>`
+    : `<svg width="${svgSize}" height="${svgSize}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v14a1 1 0 0 0 1 1h3l5 3V4L9 7H6a1 1 0 0 0-1 1z"/></svg>`;
 }
 
 // ── Effetto Typewriter per il Placeholder ──
@@ -2743,6 +3212,7 @@ function renderCodeResults(results) {
 }
 
 window.app_handle_provider_search_results = function(results) {
+  setFetchingState('success');
   if (!results || !results.length) {
     $('track-rows').innerHTML = `<div class="queue-empty">No provider results found.</div>`;
     $('track-controls').classList.add('hidden');
@@ -2757,6 +3227,7 @@ window.app_handle_provider_search_results = function(results) {
 };
 
 window.app_handle_provider_search_error = function(message) {
+  setFetchingState('error');
   $('track-rows').innerHTML = `<div class="queue-empty">Provider search failed.</div>`;
   $('track-controls').classList.add('hidden');
   $('track-table-wrap').classList.remove('hidden');
@@ -3164,68 +3635,134 @@ async function startDownloadQueue() {
   }
 }
 
+// ── UI State Helpers ────────────────────────────────────────────────────────
+// Global flag to prevent spam clicks
+let isFetchingData = false;
+let toastTimeout;
+
+function setFetchingState(state) {
+  // Backward compatibility
+  if (state === true) state = 'start';
+  if (state === false) state = 'hide';
+
+  const rw = $('recent-wrap');
+  const fetchBtn = $('fetchBtn');
+  const urlInput = $('urlInput');
+  const toast = $('fetching-toast');
+
+  // Update global lock state
+  isFetchingData = (state === 'start');
+
+  // Lock/Unlock UI components
+  if (rw) {
+    if (isFetchingData) rw.classList.add('fetching-disabled');
+    else rw.classList.remove('fetching-disabled');
+  }
+  if (fetchBtn) fetchBtn.disabled = isFetchingData;
+  if (urlInput) urlInput.disabled = isFetchingData;
+
+  if (!toast) return;
+
+  const iconContainer = toast.querySelector('.ft-icon');
+  const textContainer = toast.querySelector('.ft-text');
+
+  clearTimeout(toastTimeout);
+
+  if (state === 'start') {
+    // Loading State (Blue) - Allineato in alto per 2 righe
+    toast.style.alignItems = 'flex-start';
+    iconContainer.className = 'ft-icon loading';
+    iconContainer.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
+    textContainer.innerHTML = `<div class="ft-title">fetching metadata...</div><div class="ft-desc loading">retrieving the information</div>`;
+    toast.classList.add('show');
+  } 
+  else if (state === 'success') {
+    // Success State (Green) - Centrato per 1 riga (come nello screenshot!)
+    toast.style.alignItems = 'center';
+    iconContainer.className = 'ft-icon success';
+    iconContainer.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`;
+    textContainer.innerHTML = `<div class="ft-title" style="font-weight: 600; font-family: var(--app-font); letter-spacing: 0.02em;">metadata fetched successfully</div>`;
+    toast.classList.add('show');
+    toastTimeout = setTimeout(() => toast.classList.remove('show'), 3000); // Scompare dopo 3 secondi
+  } 
+  else if (state === 'error') {
+    // Error State (Red) - Centrato per 1 riga
+    toast.style.alignItems = 'center';
+    iconContainer.className = 'ft-icon error';
+    iconContainer.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
+    textContainer.innerHTML = `<div class="ft-title" style="font-weight: 600;">error fetching metadata</div>`;
+    toast.classList.add('show');
+    toastTimeout = setTimeout(() => toast.classList.remove('show'), 3000); // Scompare dopo 3 secondi
+  } 
+  else if (state === 'hide') {
+    // Force Hide
+    toast.classList.remove('show');
+  }
+}
+
 // ── Main fetch action ─────────────────────────────────────────────────────────
 async function onFetch() {
+  // ANTI-SPAM: Blocca le richieste se stiamo già caricando
+  if (isFetchingData) return;
+
   const mode = $('searchMode').value;
   const url = $('urlInput').value.trim();
   if (!url) { setStatus('Please enter a URL or search term.'); return; }
 
+  // Avvia il caricamento: blocca la UI e mostra il toast blu
+  setFetchingState('start');
+
   if (mode === 'search') {
     highlightRecentCard(url);
-    $('fetchBtn').disabled = true;
-    $('urlInput').disabled = true;
-    setStatus(`Ricerca "${url}" in corso…`, true);
-    logMessage(`Ricerca testuale: ${url}`, 'info');
+    setStatus(`Searching "${url}"...`, true);
+    logMessage(`Text search: ${url}`, 'info');
     currentUrl = url;
 
     if (window.pywebview?.api) {
       window.pywebview.api.search_provider_async(url, 50)
         .then(() => {
-          setStatus(`Ricerca "${url}" in corso…`, true);
+          setStatus(`Searching "${url}"...`, true);
+          // Non sbloccare qui! Ci penserà app_handle_provider_search_results
         })
         .catch((e) => {
           setStatus('Errore nella ricerca provider.', false);
           logMessage('Search error: ' + e, 'error');
-          $('urlInput').disabled = false;
-          $('fetchBtn').disabled = false;
+          setFetchingState('error'); // Sblocca e mostra errore
         });
     } else {
-      const searchUrl = `https://open.spotify.com/search/${encodeURIComponent(url)}`;
+      const searchUrl = `https://open.spotify.com/search/$${encodeURIComponent(url)}`;
       window.open(searchUrl, '_blank');
       setStatus('Demo: aperto Spotify nel browser (Python non connesso)', false);
-      $('fetchBtn').disabled = false;
-      $('urlInput').disabled = false;
+      setFetchingState('success'); // Sblocca demo
     }
     return;
   }
 
   highlightRecentCard(url);
-  $('fetchBtn').disabled  = true;
-  $('urlInput').disabled  = true;
   setStatus('Fetching metadata…', true);
   logMessage(`Fetching: ${url}`, 'info');
   currentUrl = url;
 
   if (window.pywebview?.api) {
-    // Python will call showTracklist() and set_metadata()
-    await window.pywebview.api.fetch_metadata(url);
-    $('urlInput').disabled = false;
-    // fetchBtn is re-enabled in showTracklist callback
+    try {
+      await window.pywebview.api.fetch_metadata(url);
+      // Non sblocchiamo l'interfaccia qui. Aspettiamo le Callback di Python!
+    } catch (e) {
+      logMessage('Fetch error: ' + e, 'error');
+      setFetchingState('error'); // Sblocca in caso di crash Python
+    }
   } else {
     // Demo mode
     setTimeout(() => {
       setAlbumCard('ICEMAN', 'Drake', '', 'FLAC · 3 tracks');
       const demo = [
-        { index:0, id:'abc1', title:'Make Them Cry', artist:'Drake', duration_ms:307000, explicit:true,  cover:'', isrc:'USRC12345678', external_url:'https://open.spotify.com/track/abc1', preview_url:'https://p.scdn.co/mp3-preview/abc1', playcount:'1234567' },
-        { index:1, id:'abc2', title:'Dust',          artist:'Drake', duration_ms:189000, explicit:true,  cover:'', isrc:'USRC12345679', external_url:'https://open.spotify.com/track/abc2', preview_url:'https://p.scdn.co/mp3-preview/abc2', playcount:'987654' },
-        { index:2, id:'abc3', title:'Whisper My Name',artist:'Drake',duration_ms:222000, explicit:false, cover:'', isrc:'USRC12345680', external_url:'https://open.spotify.com/track/abc3', preview_url:'https://p.scdn.co/mp3-preview/abc3', playcount:'456789' },
+        { index:0, id:'abc1', title:'Make Them Cry', artist:'Drake', duration_ms:307000, explicit:true,  cover:'', isrc:'USRC12345678', external_url:'https://open.spotify.com/track/abc1', preview_url:'https://p.scdn.co/mp3-preview/abc1', playcount:'1234567' }
       ];
       renderTracks(demo, 1);
-      setStatus('Found: ICEMAN (3 tracks) — demo mode', false);
-      $('fetchBtn').disabled = false;
-      $('urlInput').disabled = false;
+      setStatus('Found: ICEMAN (1 track) — demo mode', false);
       logMessage('Demo data loaded (Python not connected)', 'warn');
-    }, 800);
+      setFetchingState('success'); // Sblocca demo con successo
+    }, 1500);
   }
 }
 
@@ -3336,6 +3873,8 @@ setTimeout(() => {
     ]);
   }
 }, 500);
+
+
 </script>
 </body>
 </html>
