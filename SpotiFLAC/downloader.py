@@ -281,13 +281,13 @@ class DownloadWorker:
 
     def _track_output_dir(self, base: str, track: TrackMetadata) -> str:
         out = base
-        if self._is_playlist:
-            if self._opts.use_artist_subfolders:
-                folder = re.sub(r'[<>:"/\\|?*]', "_", track.first_artist)
-                out = os.path.join(out, folder)
-            if self._opts.use_album_subfolders:
-                folder = re.sub(r'[<>:"/\\|?*]', "_", track.album)
-                out = os.path.join(out, folder)
+        # Apply subfolders for all types: playlist, album, single tracks, and artist collections
+        if self._opts.use_artist_subfolders:
+            folder = re.sub(r'[<>:"/\\|?*]', "_", track.first_artist)
+            out = os.path.join(out, folder)
+        if self._opts.use_album_subfolders:
+            folder = re.sub(r'[<>:"/\\|?*]', "_", track.album)
+            out = os.path.join(out, folder)
         os.makedirs(out, exist_ok=True)
         return out
 
