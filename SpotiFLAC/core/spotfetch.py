@@ -204,6 +204,19 @@ class SpotifyWebClient:
         except Exception as exc:
             logger.debug(f"[spotfetch] Errore recupero compositori per {track_id}: {exc}")
             return ""
+        
+    def get_preview_url(self, track_id: str) -> str:
+        """Recupera la preview URL dalla pagina embed (stessa logica di Go GetPreviewURL)."""
+        try:
+            embed_url = f"https://open.spotify.com/embed/track/{track_id}"
+            resp = self._session.get(embed_url, timeout=10)
+            if resp.status_code != 200:
+                return ""
+            match = re.search(r'https://p\.scdn\.co/mp3-preview/[a-zA-Z0-9]+', resp.text)
+            return match.group(0) if match else ""
+        except Exception as exc:
+            logger.debug(f"[spotfetch] Preview URL fetch failed for {track_id}: {exc}")
+            return ""
 
     def query(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Esegue una query GraphQL autorizzata puntando all'endpoint pathfinder/v2/query."""
