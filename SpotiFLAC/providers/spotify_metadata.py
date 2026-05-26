@@ -597,16 +597,6 @@ class SpotifyMetadataClient:
             logger.debug(f"[spotify] Search error: {e}")
             return {"tracks": [], "albums": [], "artists": [], "playlists": []}
 
-        # ── DIAGNOSTIC: logga il primo item grezzo per ogni tipo ──────────────
-        import json as _json
-        for _key in ("albums", "artists", "playlists", "tracksV2"):
-            _items = search_v2.get(_key, {}).get("items", [])
-            if _items:
-                logger.warning(f"[DIAG] {_key} first item raw:\n{_json.dumps(_items[0], indent=2, default=str)[:800]}")
-            else:
-                logger.warning(f"[DIAG] {_key}: NO ITEMS (key absent or empty)")
-        # ─────────────────────────────────────────────────────────────────────
-
         def _parse_tracks(items: list) -> list[TrackMetadata]:
             results = []
             for item in items:
