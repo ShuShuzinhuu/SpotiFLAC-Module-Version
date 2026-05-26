@@ -2873,15 +2873,14 @@ function updateAlbumMeta(trackCount) {
     const albumSet = new Set(
       currentTracks.map(t => t.album || t.album_name || t.release).filter(Boolean)
     );
-    let albumTracksLine = $('artist-album-tracks-line');
-    if (!albumTracksLine) {
-      albumTracksLine = document.createElement('div');
-      albumTracksLine.id = 'artist-album-tracks-line';
-      albumTracksLine.style.cssText = 'font-size:12px;color:var(--text2);margin-top:5px;';
-      $('album-meta-details')?.appendChild(albumTracksLine);
+    const artistStatsRow = $('artist-stats-row');
+    if (artistStatsRow) {
+      const ac = albumSet.size;
+      const albumTrackText = `${ac} album${ac !== 1 ? 's' : ''} · ${trackCount} track${trackCount !== 1 ? 's' : ''}`;
+      
+      // Aggiunge la parte album/track in coda alla riga esistente
+      artistStatsRow.innerHTML += `<span class="dot-sep"> · </span><span>${escHtml(albumTrackText)}</span>`;
     }
-    const ac = albumSet.size;
-    albumTracksLine.textContent = `${ac} album${ac !== 1 ? 's' : ''} · ${trackCount} track${trackCount !== 1 ? 's' : ''}`;
   }
   
   // Per gli album, mostra artista, data e numero di tracce nel subtitle
