@@ -194,16 +194,19 @@ def parse_args(profile_defaults: dict | None = None) -> argparse.Namespace:
 def main() -> None:
     check_for_updates()
 
-    # ── Lancio della GUI se richiesto ─────────────────────────────────
+    # ── Modifica: Aggiungi la cartella corrente al path prima di importare app ──
     if "--gui" in sys.argv:
+        # Aggiunge la cartella dove si trova launcher.py al path di Python
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.append(current_dir)
+            
         try:
             import app
             app.run_gui()
-        except ImportError:
-            from SpotiFLAC import app
-            app.run_gui()
+        except ImportError as e:
+            print(f"Errore: impossibile trovare app.py. Dettagli: {e}")
         return
-
     if len(sys.argv) == 1:
         # ── Interactive wizard ─────────────────────────────────────────────
         cfg = run_interactive()
