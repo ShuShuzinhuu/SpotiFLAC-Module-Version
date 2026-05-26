@@ -193,10 +193,7 @@ def parse_args(profile_defaults: dict | None = None) -> argparse.Namespace:
 
 def main() -> None:
     check_for_updates()
-
-    # ── Modifica: Aggiungi la cartella corrente al path prima di importare app ──
     if "--gui" in sys.argv:
-        # Aggiunge la cartella dove si trova launcher.py al path di Python
         current_dir = os.path.dirname(os.path.abspath(__file__))
         if current_dir not in sys.path:
             sys.path.append(current_dir)
