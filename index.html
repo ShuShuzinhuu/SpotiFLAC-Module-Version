@@ -4139,7 +4139,7 @@ window.app_handle_provider_search_results = function(results) {
   };
 
   // ── State ─────────────────────────────────────────────────────────────────
-  let activeTab = 'all';
+  let activeTab = 'track';
   let filterVal = '';
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -4155,11 +4155,16 @@ window.app_handle_provider_search_results = function(results) {
 
   function makeItemHTML(item) {
     const url  = item.external_url || item.external_urls || '';
-    const img  = item.images || item.cover || '';
+    const img  = item.cover_url || item.images || item.cover || item.image || '';
     const name = escHtml(item.name || item.title || '');
     const meta = escHtml(item.artists || item.artist || item.owner || '');
     const dur  = item._kind === 'track' ? fmtMs(item.duration_ms) : '';
+    const typeLabel = item._kind === 'artist' ? 'Artist' : '';
     const thumbClass = item._kind === 'artist' ? 'search-result-thumbnail artist-thumb' : 'search-result-thumbnail';
+    // Debug log per gli artisti
+    if (item._kind === 'artist') {
+      console.log('[Artist] Name:', name, 'cover_url:', item.cover_url, 'images:', item.images, 'cover:', item.cover, 'image:', item.image, 'full item:', item);
+    }
     return `
       <div class="search-result-item" data-url="${escHtml(url)}" data-name="${name}|${meta}">
         <div class="${thumbClass}">
@@ -4167,7 +4172,8 @@ window.app_handle_provider_search_results = function(results) {
         </div>
         <div class="search-result-info">
           <div class="search-result-title">${name}</div>
-          ${meta ? `<div class="search-result-meta">${meta}</div>` : ''}
+          ${typeLabel ? `<div class="search-result-meta">${typeLabel}</div>` : ''}
+          ${meta && typeLabel ? `<div class="search-result-meta">${meta}</div>` : meta ? `<div class="search-result-meta">${meta}</div>` : ''}
         </div>
         ${dur ? `<span class="sr-duration">${dur}</span>` : ''}
       </div>`;
@@ -4184,7 +4190,6 @@ window.app_handle_provider_search_results = function(results) {
   const tabBar = document.createElement('div');
   tabBar.className = 'sr-tab-bar';
   const tabs = [
-    { id: 'all',      label: 'All' },
     { id: 'track',    label: 'Tracks' },
     { id: 'album',    label: 'Albums' },
     { id: 'artist',   label: 'Artists' },
