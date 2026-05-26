@@ -7,6 +7,68 @@ import subprocess
 import logging
 import requests as req_lib
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
+
+class ImageCache:
+    def __init__(self, base_dir, max_size_mb=100):
+        self.cache_dir = os.path.join(base_dir, 'assets', 'cache')
+        self.max_size = max_size_mb * 1024 * 1024
+        self.lock = threading.Lock()
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+    def _get_hash(self, url):
+        return hashlib.md5(url.encode('utf-8')).hexdigest()
+
+    def get_cached_url(self, url):
+        if not url or url.startswith("data:") or url.startswith("assets"):
+            return url
+            
+        url_hash = self._get_hash(url)
+        filename = f"{url_hash}.jpg"
+        file_path = os.path.join(self.cache_dir, filename)
+
+        with self.lock:
+            # Se esiste già aggiorna la data di accesso e restituisci il link locale
+            if os.path.exists(file_path):
+                os.utime(file_path, None)
+                return f"assets/cache/{filename}"
+                
+            try:
+                # Altrimenti scarica, salva e pulisci
+                resp = req_lib.get(url, timeout=10)
+                if resp.status_code == 200:
+                    with open(file_path, 'wb') as f:
+                        f.write(resp.content)
+                    self._cleanup()
+                    return f"assets/cache/{filename}"
+            except Exception:
+                pass
+                
+        return url # Fallback in caso di errore
+
+    def _cleanup(self):
+        files = []
+        total_size = 0
+        for f in os.listdir(self.cache_dir):
+            p = os.path.join(self.cache_dir, f)
+            if os.path.isfile(p):
+                st = os.stat(p)
+                files.append((p, st.st_atime, st.st_size))
+                total_size += st.st_size
+                
+        if total_size <= self.max_size:
+            return
+            
+        # Ordina per "tempo di accesso" crescente (i più vecchi prima)
+        files.sort(key=lambda x: x[1])
+        for p, _, size in files:
+            try:
+                os.remove(p)
+                total_size -= size
+                if total_size <= self.max_size:
+                    break
+            except Exception:
+                pass
 
 DEFAULT_DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Music", "SpotiFLAC")
 
@@ -31,6 +93,9 @@ class SpotiFLAC_API:
         self.download_dir   = DEFAULT_DOWNLOAD_DIR
         self.current_tracks = []
         self.current_url    = ""
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.image_cache = ImageCache(base_dir, max_size_mb=100)
 
     def set_window(self, window):
         self._window = window
@@ -160,6 +225,9 @@ class SpotiFLAC_API:
             return get_profile(name) or {}
         except Exception:
             return {}
+        
+    def cache_image(self, url):
+        return self.image_cache.get_cached_url(url)
 
     def search_provider(self, query, limit=50):
         """Search music providers (Spotify) for metadata matching `query`.
