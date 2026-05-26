@@ -373,6 +373,7 @@ class SpotiFLAC_API:
             daemon=True,
         ).start()
 
+
     def _download_cover_task(self, track_data):
         try:
             title     = track_data.get("title", "Unknown")
@@ -402,6 +403,113 @@ class SpotiFLAC_API:
 
         except Exception as e:
             self.log(f"Cover download error: {e}", "error")
+
+    # ── Bulk: cover di tutte le tracce ───────────────────────────────────────────
+
+    def download_all_covers(self, tracks_data):
+        """Salva la cover .jpg di ogni traccia della lista corrente."""
+        threading.Thread(
+            target=self._download_all_covers_task,
+            args=(tracks_data,),
+            daemon=True,
+        ).start()
+
+    def _download_all_covers_task(self, tracks_data):
+        import re
+        total   = len(tracks_data)
+        success = 0
+        skipped = 0
+
+        self.log(f"Saving covers for {total} tracks…", "info")
+        os.makedirs(self.download_dir, exist_ok=True)
+
+        for i, track_data in enumerate(tracks_data, 1):
+            title     = track_data.get("title", "Unknown")
+            artist    = track_data.get("artist", "")
+            cover_url = track_data.get("cover", "")
+
+            if not cover_url:
+                self.log(f"[{i}/{total}] No cover URL: {title} — skipped", "warn")
+                skipped += 1
+                continue
+
+            try:
+                resp = req_lib.get(cover_url, timeout=15)
+                resp.raise_for_status()
+
+                safe_title  = re.sub(r'[\\/*?:"<>|]', "", title).strip()
+                safe_artist = re.sub(r'[\\/*?:"<>|]', "", artist).strip()
+                filename    = f"{safe_artist} - {safe_title}.jpg" if safe_artist else f"{safe_title}.jpg"
+                out_path    = os.path.join(self.download_dir, filename)
+
+                with open(out_path, "wb") as f:
+                    f.write(resp.content)
+
+                self.log(f"[{i}/{total}] Cover saved: {filename}", "ok")
+                success += 1
+
+            except Exception as e:
+                self.log(f"[{i}/{total}] Cover error for '{title}': {e}", "error")
+
+        self.log(f"All covers done — {success} saved, {skipped} skipped.", "ok")
+
+    # ── Bulk: lyrics di tutte le tracce ──────────────────────────────────────────
+
+    def download_all_lyrics(self, tracks_data):
+        """Salva il file .lrc per ogni traccia della lista corrente."""
+        threading.Thread(
+            target=self._download_all_lyrics_task,
+            args=(tracks_data,),
+            daemon=True,
+        ).start()
+
+    def _download_all_lyrics_task(self, tracks_data):
+        import re
+        total   = len(tracks_data)
+        success = 0
+        skipped = 0
+
+        self.log(f"Fetching lyrics for {total} tracks…", "info")
+        os.makedirs(self.download_dir, exist_ok=True)
+
+        from SpotiFLAC.core.lyrics import fetch_lyrics
+
+        for i, track_data in enumerate(tracks_data, 1):
+            title    = track_data.get("title", "Unknown")
+            artist   = track_data.get("artist", "")
+            isrc     = track_data.get("isrc", "")
+            dur_ms   = track_data.get("duration_ms", 0)
+            track_id = track_data.get("id", "")
+
+            try:
+                lyrics_text, provider = fetch_lyrics(
+                    track_name  = title,
+                    artist_name = artist,
+                    duration_s  = dur_ms // 1000 if dur_ms else 0,
+                    track_id    = track_id,
+                    isrc        = isrc,
+                )
+
+                if not lyrics_text:
+                    self.log(f"[{i}/{total}] No lyrics: {title} — skipped", "warn")
+                    skipped += 1
+                    continue
+
+                safe_title  = re.sub(r'[\\/*?:"<>|]', "", title).strip()
+                safe_artist = re.sub(r'[\\/*?:"<>|]', "", artist).strip()
+                filename    = f"{safe_artist} - {safe_title}.lrc" if safe_artist else f"{safe_title}.lrc"
+                out_path    = os.path.join(self.download_dir, filename)
+
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write(lyrics_text)
+
+                self.log(f"[{i}/{total}] Lyrics saved: {filename} (via {provider})", "ok")
+                success += 1
+
+            except Exception as e:
+                self.log(f"[{i}/{total}] Lyrics error for '{title}': {e}", "error")
+
+        self.log(f"All lyrics done — {success} saved, {skipped} skipped.", "ok")
 
     # ── Lazy Loading - Anteprima traccia ──────────────────────────────────────
 
