@@ -1214,12 +1214,14 @@
     .svc-icon {
       display: inline-flex; align-items: center; justify-content: center;
       width: 36px; height: 36px; border-radius: 12px;
-      background: #ffffff; border: none;
+      background: var(--surface);
+      border: none;
       flex-shrink: 0; overflow: hidden;
       color: var(--text);
     }
     .svc-icon.icon-image {
-      background: #ffffff; border: none;
+      background: var(--surface);
+      border: none;
     }
     .svc-icon img {
       width: 24px; height: 24px; object-fit: contain;
@@ -1234,16 +1236,16 @@
     .svc-icon.youtube,
     .svc-icon.apple,
     .svc-icon.pandora {
-      background: #ffffff;
+      background: var(--surface);
       color: var(--text);
     }
     .sort-item {
       display: flex; align-items: center; gap: 8px;
       padding: 7px 10px; background: var(--surface);
-      border: 1.5px solid #d1d1d6; border-radius: var(--radius-sm);
+      border: 1.5px solid var(--border2); border-radius: var(--radius-sm);
       cursor: grab; transition: border-color var(--t), background var(--t);
     }
-    .sort-item:hover { border-color: #a0a0a8; background: #f8fafc; }
+    .sort-item:hover { border-color: var(--border2); background: var(--surface2); }
     .sort-item.dragging  { opacity: .3; }
     .sort-item.drag-over { border-color: var(--yellow); background: var(--yellow-bg); }
     .drag-h { color: var(--muted); font-size: 12px; cursor: grab; }
@@ -1282,7 +1284,7 @@
     }
     /* Status card ridotto e reso più compatto */
     .status-card {
-      padding: 16px 18px; border-radius: 18px; background: #fff;
+      padding: 16px 18px; border-radius: 18px; background: var(--surface);
       border: 1px solid var(--border2); box-shadow: 0 12px 24px rgba(0,0,0,.04);
     }
     .status-card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -1765,7 +1767,7 @@
   </div>
   <div id="tb-logo">
     <span>SpotiFLAC</span>
-    <span id="tb-version">v7.1.7</span>
+    <span id="tb-version">v0.6.6</span>
   </div>
 </div>
 
@@ -1799,7 +1801,7 @@
             </div>
             <div class="hero-main">
               <div class="hero-title">SpotiFLAC</div>
-              <span id="hero-version" class="hero-version">v0.6.1</span>
+              <span id="hero-version" class="hero-version">v0.6.6</span>
             </div>
           </div>
           <div class="hero-subtitle">Get Spotify tracks in true FLAC from Tidal, Qobuz, Deezer & Amazon Music — no account required.</div>
@@ -4929,12 +4931,11 @@ async function onFetch() {
       window.pywebview.api.search_provider_async(url, 50)
         .then(() => {
           setStatus(`Searching "${url}"...`, true);
-          // Non sbloccare qui! Ci penserà app_handle_provider_search_results
         })
         .catch((e) => {
           setStatus('Errore nella ricerca provider.', false);
           logMessage('Search error: ' + e, 'error');
-          setFetchingState('error'); // Sblocca e mostra errore
+          setFetchingState('error');
         });
     } else {
       const searchUrl = `https://open.spotify.com/search/$${encodeURIComponent(url)}`;
@@ -4983,12 +4984,12 @@ function buildConfig() {
     lyrics_providers:       getChecked('lyrics-list'),
     enrich_metadata:        $('config-enrich').checked,
     enrich_providers:       getChecked('enrich-list'),
-    filename_format:        $('config-filename').value.trim() || '{title} - {artist}',
+    filename_format:         $('config-filename').value.trim() || '{title} - {artist}',
     use_track_numbers:      $('config-track-numbers').checked,
     use_album_track_numbers:$('config-album-track-numbers').checked,
     use_artist_subfolders:  $('config-artist-sub').checked,
     use_album_subfolders:   $('config-album-sub').checked,
-    first_artist_only:      $('config-first-artist').checked,
+    first_artist_only:       $('config-first-artist').checked,
     track_max_retries:      parseInt($('config-retries').value) || 0,
     post_download_action:   $('config-post-action').value,
     post_download_command:  $('config-post-cmd')?.value?.trim() || '',

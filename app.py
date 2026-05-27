@@ -984,6 +984,9 @@ class SpotiFLAC_API:
         handler   = UILogHandler(self)
         handler.setFormatter(logging.Formatter("[%(name)s] %(message)s"))
         sf_logger.addHandler(handler)
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(logging.Formatter("  %(message)s"))
+        sf_logger.addHandler(console_handler)
         monitor_stop = None
         monitor_thread = None
 
