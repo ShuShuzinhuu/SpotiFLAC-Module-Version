@@ -1214,12 +1214,14 @@
     .svc-icon {
       display: inline-flex; align-items: center; justify-content: center;
       width: 36px; height: 36px; border-radius: 12px;
-      background: #ffffff; border: none;
+      background: var(--surface);
+      border: none;
       flex-shrink: 0; overflow: hidden;
       color: var(--text);
     }
     .svc-icon.icon-image {
-      background: #ffffff; border: none;
+      background: var(--surface);
+      border: none;
     }
     .svc-icon img {
       width: 24px; height: 24px; object-fit: contain;
@@ -1234,16 +1236,16 @@
     .svc-icon.youtube,
     .svc-icon.apple,
     .svc-icon.pandora {
-      background: #ffffff;
+      background: var(--surface);
       color: var(--text);
     }
     .sort-item {
       display: flex; align-items: center; gap: 8px;
       padding: 7px 10px; background: var(--surface);
-      border: 1.5px solid #d1d1d6; border-radius: var(--radius-sm);
+      border: 1.5px solid var(--border2); border-radius: var(--radius-sm);
       cursor: grab; transition: border-color var(--t), background var(--t);
     }
-    .sort-item:hover { border-color: #a0a0a8; background: #f8fafc; }
+    .sort-item:hover { border-color: var(--border2); background: var(--surface2); }
     .sort-item.dragging  { opacity: .3; }
     .sort-item.drag-over { border-color: var(--yellow); background: var(--yellow-bg); }
     .drag-h { color: var(--muted); font-size: 12px; cursor: grab; }
@@ -1282,7 +1284,7 @@
     }
     /* Status card ridotto e reso più compatto */
     .status-card {
-      padding: 16px 18px; border-radius: 18px; background: #fff;
+      padding: 16px 18px; border-radius: 18px; background: var(--surface);
       border: 1px solid var(--border2); box-shadow: 0 12px 24px rgba(0,0,0,.04);
     }
     .status-card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
