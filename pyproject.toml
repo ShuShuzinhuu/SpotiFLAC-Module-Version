@@ -38,8 +38,6 @@ dependencies = [
     "mutagen>=1.47.0",
     "pydantic>=2.7.0",
     "cryptography>=42.0.0",
-    # FIX #6: pycryptodome era usato in deezer.py e amazon.py ma non dichiarato
-    # come dipendenza — causava ImportError silenzioso gestito con HAS_CRYPTO=False.
     "pycryptodome>=3.20.0",
     "packaging>=23.0",
     "yt-dlp>=2024.04.09",
