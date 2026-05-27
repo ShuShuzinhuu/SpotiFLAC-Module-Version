@@ -565,7 +565,7 @@ class AmazonProvider(BaseProvider):
             return zarz_result
 
         logger.info("[amazon] Download with %s didn't work. Starting fallback (LOSSLESS forced)", zarz_url)
-        fallback_quality = "lossless"
+        fallback_quality = "LOSSLESS"
 
         # 2. SPOTBYE 1
         spotbye1_url = API_ENDPOINTS['spotbye1']['base_url']
