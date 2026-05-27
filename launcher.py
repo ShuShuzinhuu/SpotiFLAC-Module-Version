@@ -194,15 +194,32 @@ def parse_args(profile_defaults: dict | None = None) -> argparse.Namespace:
 def main() -> None:
     check_for_updates()
     if "--gui" in sys.argv:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        if current_dir not in sys.path:
-            sys.path.append(current_dir)
-            
+        import importlib.util
+        
+        # Search for app.py: first in launcher's directory, then in cwd
+        search_dirs = [
+            os.path.dirname(os.path.abspath(__file__)),
+            os.getcwd(),
+        ]
+        
+        app_path = None
+        for d in search_dirs:
+            candidate = os.path.join(d, "app.py")
+            if os.path.exists(candidate):
+                app_path = candidate
+                break
+        
+        if app_path is None:
+            print("Error: app.py not found. Run 'spotiflac --gui' from the project directory.")
+            sys.exit(1)
+        
         try:
-            import app
+            spec = importlib.util.spec_from_file_location("app", app_path)
+            app = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(app)
             app.run_gui()
-        except ImportError as e:
-            print(f"Errore: impossibile trovare app.py. Dettagli: {e}")
+        except Exception as e:
+            print(f"Error launching GUI: {e}")
         return
     if len(sys.argv) == 1:
         # ── Interactive wizard ─────────────────────────────────────────────
