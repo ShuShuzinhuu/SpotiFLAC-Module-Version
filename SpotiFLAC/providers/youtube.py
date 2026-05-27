@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import yt_dlp
+import time
 from typing import Callable, List, Optional, Tuple, Dict, Any
 from urllib.parse import quote, urlparse, parse_qs
 
@@ -32,63 +33,6 @@ _DEFAULT_UA = (
 # Parametri InnerTube allineati al JS
 YT_SEARCH_PARAMS_TRACKS = "EgWKAQIIAQ=="
 INNERTUBE_CLIENT_VERSION = "1.20240801.01.00"
-COBALT_API_URL = "https://api.zarz.moe/v1/dl/cobalt"
-_INNERTUBE_CLIENTS = [
-    # 1. ANDROID_VR: Spesso non richiede PO Token (Provato per primo)
-    {
-        "name": "android_vr",
-        "clientName": "ANDROID_VR",
-        "clientVersion": "1.65.10",
-        "ua": "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-        "extra": {
-            "androidSdkVersion": 32, "osName": "Android", "osVersion": "12L",
-            "platform": "MOBILE", "deviceMake": "Oculus", "deviceModel": "Quest 3",
-            "hl": "en", "gl": "US", "timeZone": "UTC", "utcOffsetMinutes": 0,
-        },
-        "key": "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
-        "clientHeader": "28",
-    },
-    # 2. MWEB: Nuovo client web mobile per bypass fallback (Dal JS)
-    {
-        "name": "mweb",
-        "clientName": "MWEB",
-        "clientVersion": "2.20260115.01.00",
-        "ua": "Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1,gzip(gfe)",
-        "extra": {
-            "hl": "en", "gl": "US", "timeZone": "UTC", "utcOffsetMinutes": 0,
-            "userAgent": "Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1,gzip(gfe)",
-        },
-        "key": "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
-        "clientHeader": "2",
-    },
-    # 3. ANDROID: Client standard aggiornato
-    {
-        "name": "android",
-        "clientName": "ANDROID",
-        "clientVersion": "21.02.35",
-        "ua": "com.google.android.youtube/21.02.35 (Linux; U; Android 11) gzip",
-        "extra": {
-            "androidSdkVersion": 30, "osName": "Android", "osVersion": "11",
-            "platform": "MOBILE", "hl": "en", "gl": "US", "timeZone": "UTC", "utcOffsetMinutes": 0,
-        },
-        "key": "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w",
-        "clientHeader": "3",
-    },
-    # 4. IOS: Nuovo client iOS per bypass fallback (Dal JS)
-    {
-        "name": "ios",
-        "clientName": "IOS",
-        "clientVersion": "21.02.3",
-        "ua": "com.google.ios.youtube/21.02.3 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
-        "extra": {
-            "deviceMake": "Apple", "deviceModel": "iPhone16,2",
-            "osName": "iOS", "osVersion": "18.3.2",
-            "platform": "MOBILE", "hl": "en", "gl": "US", "timeZone": "UTC", "utcOffsetMinutes": 0,
-        },
-        "key": "AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc",
-        "clientHeader": "5",
-    }
-]
 
 def _sanitize(value: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", value).strip()
@@ -107,6 +51,8 @@ class YouTubeProvider(BaseProvider):
         super().__init__(timeout_s=timeout_s)
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": _DEFAULT_UA})
+        # Cache per evitare richieste multiple a Odesli/Deezer per la stessa traccia
+        self._enrichment_cache: Dict[str, Dict] = {}
 
     def set_progress_callback(self, cb: Callable[[int, int], None]) -> None:
         super().set_progress_callback(cb)
@@ -173,8 +119,6 @@ class YouTubeProvider(BaseProvider):
     # ------------------------------------------------------------------
 
     def _fetch_container(self, browse_id: str) -> Tuple[str, List[TrackMetadata]]:
-        # [Codice invariato: la logica di fetching container e pagination
-        # era già sufficientemente allineata all'approccio InnerTube]
         logger.info("[youtube] Fetching container: %s", browse_id)
 
         url = "https://music.youtube.com/youtubei/v1/browse?alt=json"
@@ -270,11 +214,59 @@ class YouTubeProvider(BaseProvider):
         return results
 
     # ------------------------------------------------------------------
-    # URL resolution (Allineato a Odesli JSON API e Deezer API)
+    # Odesli & Deezer Metadata Enrichment (Portato da JS)
     # ------------------------------------------------------------------
 
+    def _enrich_metadata_with_odesli(self, metadata: TrackMetadata, platform_url: str) -> Optional[str]:
+        """
+        Interroga Odesli per risolvere l'URL di YouTube Music.
+        Se manca l'ISRC, utilizza il Deezer ID (se disponibile) interrogando l'API di Deezer.
+        (Equivalente alla funzione enrichTrack nel file index.js)
+        """
+        api_url = f"https://api.song.link/v1-alpha.1/links?url={quote(platform_url)}"
+        
+        try:
+            resp = self._session.get(api_url, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                links = data.get("linksByPlatform", {})
+                
+                # 1. Recupera ISRC da Odesli se presente
+                entities = data.get("entitiesByUniqueId", {})
+                for entity_data in entities.values():
+                    if not metadata.isrc and entity_data.get("isrc"):
+                        metadata.isrc = entity_data.get("isrc")
+                        logger.info(f"[youtube] ISRC trovato via Odesli: {metadata.isrc}")
+
+                # 2. Fallback su API Deezer per ISRC se non trovato in Odesli (logica JS)
+                if not metadata.isrc and "deezer" in links:
+                    deezer_url = links["deezer"].get("url", "")
+                    match = re.search(r'/track/(\d+)', deezer_url)
+                    if match:
+                        deezer_id = match.group(1)
+                        logger.debug(f"[youtube] ISRC mancante, tento fallback API Deezer (ID: {deezer_id})")
+                        try:
+                            dz_resp = self._session.get(f"https://api.deezer.com/track/{deezer_id}", timeout=10)
+                            if dz_resp.status_code == 200:
+                                dz_data = dz_resp.json()
+                                if dz_data.get("isrc"):
+                                    metadata.isrc = dz_data["isrc"]
+                                    logger.info(f"[youtube] ISRC recuperato via fallback Deezer API: {metadata.isrc}")
+                        except Exception as e:
+                            logger.warning(f"[youtube] Deezer API fallback fallito: {e}")
+
+                # 3. Ritorna URL YouTube
+                yt_info = links.get("youtubeMusic") or links.get("youtube")
+                if yt_info and yt_info.get("url"):
+                    return yt_info["url"]
+
+        except Exception as exc:
+            logger.warning(f"[youtube] Odesli API enrichTrack failed: {exc}")
+        
+        return None
+
+
     def _get_youtube_url(self, metadata: TrackMetadata) -> str:
-        # Se abbiamo l'URL esterno (es. Apple Music o Spotify originario), usiamo quello per Odesli!
         if metadata.external_url:
             platform_url = metadata.external_url
         elif metadata.id.startswith("tidal_"):
@@ -282,26 +274,14 @@ class YouTubeProvider(BaseProvider):
         elif metadata.id.startswith("spotify:"):
             platform_url = f"https://open.spotify.com/track/{metadata.id.split(':')[-1]}"
         else:
-            # Fallback generico
             platform_url = f"https://song.link/s/{metadata.id}"
 
-        api_url = f"https://api.song.link/v1-alpha.1/links?url={quote(platform_url)}"
+        yt_url = self._enrich_metadata_with_odesli(metadata, platform_url)
+        if yt_url:
+            logger.info(f"[youtube] URL risolto e metadati arricchiti con successo: {yt_url}")
+            return yt_url
 
-        try:
-            resp = self._session.get(api_url, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                links = data.get("linksByPlatform", {})
-                yt_info = links.get("youtubeMusic") or links.get("youtube")
-
-                if yt_info and yt_info.get("url"):
-                    yt_url = yt_info["url"]
-                    logger.info("[youtube] Resolved via Odesli JSON API: %s", yt_url)
-                    return yt_url
-        except Exception as exc:
-            logger.warning("[youtube] Odesli API failed: %s", exc)
-
-        # Fallback alla ricerca testuale diretta se Odesli fallisce
+        # Fallback alla ricerca testuale diretta
         if metadata.title and metadata.artists:
             yt_url = self._search_youtube_direct(metadata.title, metadata.artists)
             if yt_url:
@@ -323,16 +303,15 @@ class YouTubeProvider(BaseProvider):
             resp = self._session.post(url, json=payload, headers={"User-Agent": _DEFAULT_UA}, timeout=10)
             resp.raise_for_status()
 
-            # Invece di usare una Regex fragile, sfruttiamo la funzione ricorsiva per trovare i videoId
             data = resp.json()
             video_ids = self._find_key_recursive(data, "videoId")
 
             if video_ids:
                 video_url = f"https://music.youtube.com/watch?v={video_ids[0]}"
-                logger.info("[youtube] Direct search resolved: %s", video_url)
+                logger.info(f"[youtube] Direct search resolved: {video_url}")
                 return video_url
         except Exception as exc:
-            logger.warning("[youtube] Direct search failed: %s", exc)
+            logger.warning(f"[youtube] Direct search failed: {exc}")
 
         return None
 
@@ -346,14 +325,10 @@ class YouTubeProvider(BaseProvider):
     # ------------------------------------------------------------------
 
     def _download_direct_innertube(self, video_id: str, dest_path: str) -> bool:
-
         def _yt_dlp_progress(d):
             if d['status'] == 'downloading':
-                # Prendi i byte scaricati e il totale (reale o stimato)
                 downloaded = d.get('downloaded_bytes', 0)
                 total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
-
-                # Comunica l'aggiornamento alla UI di SpotiFLAC
                 if self._progress_cb and total > 0:
                     self._progress_cb(downloaded, total)
 
@@ -362,6 +337,8 @@ class YouTubeProvider(BaseProvider):
             def warning(self, msg): pass
             def error(self, msg): pass
 
+        # Allineamento dei client (Android VR, iOS, mweb) come bypass implementati in index.js
+        # yt-dlp utilizza questi alias nella sintassi moderna per aggirare i blocchi 403 / PO token
         ydl_opts = {
             'format': 'bestaudio/best',
             'quiet': True,
@@ -370,7 +347,10 @@ class YouTubeProvider(BaseProvider):
             'logger': MuteLogger(),
             'outtmpl': dest_path.rsplit('.', 1)[0] + '.%(ext)s',
             'extractor_args': {
-                'youtube': ['player_client=android']
+                'youtube': [
+                    'player_client=android,mweb,ios',  # Catena di client come definito nel JS
+                    'player_skip=webpage,configs,js'
+                ]
             },
             'updatetime': False,
             'postprocessors': [{
@@ -384,7 +364,7 @@ class YouTubeProvider(BaseProvider):
         url = f"https://www.youtube.com/watch?v={video_id}"
 
         try:
-            logger.info(f"[youtube] Native yt-dlp download (ID: {video_id})...")
+            logger.info(f"[youtube] Native yt-dlp download (ID: {video_id}) via Android/Mweb/iOS clients...")
             if os.path.exists(dest_path):
                 os.remove(dest_path)
 
@@ -401,9 +381,10 @@ class YouTubeProvider(BaseProvider):
 
     def _request_cobalt(self, video_url: str) -> str | None:
         """
-        Interroga molteplici mirror di Cobalt. Aggiornato per supportare Cobalt v10 e v7.
+        Interroga Cobalt. Allineato alla priorità JS (api.zarz.moe come primaria)
         """
         cobalt_instances = [
+            "https://api.zarz.moe",       # Priorità alta (Da JS CONFIG.cobaltAudioURL)
             "https://co.wuk.sh",
             "https://cobalt.qiaeru.tech",
             "https://cobalt.cibere.dev",
@@ -420,17 +401,17 @@ class YouTubeProvider(BaseProvider):
         for base_url in cobalt_instances:
             try:
                 logger.debug(f"[youtube] Tentativo Cobalt via: {base_url}")
-                # Prova il nuovo standard Cobalt v10
+                # Nuovo standard Cobalt v10 (Come nel JS)
                 payload_v10 = {
                     "url": video_url,
                     "downloadMode": "audio",
                     "audioFormat": "mp3"
                 }
-                api_url = f"{base_url}/" if not base_url.endswith("/") else base_url
-
+                api_url = f"{base_url.rstrip('/')}/v1/dl" if base_url == "https://api.zarz.moe" else f"{base_url.rstrip('/')}/"
+                
                 resp = self._session.post(api_url, json=payload_v10, headers=headers, timeout=10)
 
-                # Fallback per i server non aggiornati (API v7)
+                # Fallback API v7 (legacy)
                 if resp.status_code == 404:
                     payload_v7 = {"url": video_url, "isAudioOnly": True, "aFormat": "mp3"}
                     api_url = f"{base_url.rstrip('/')}/api/json"
@@ -451,7 +432,7 @@ class YouTubeProvider(BaseProvider):
 
     def _request_yt1d(self, video_url: str) -> str | None:
         """
-        Allineato: Usa GET su /results per il nonce, POST su ajax per il dl.
+        Allineato al parsing avanzato del JS extractYt1dDownloadURL()
         """
         try:
             res_config = self._session.get("https://yt1d.io/results/", headers={"User-Agent": _DEFAULT_UA}, timeout=10)
@@ -475,12 +456,14 @@ class YouTubeProvider(BaseProvider):
             res_audio = self._session.post("https://yt1d.io/wp-admin/admin-ajax.php", data=payload, headers=headers, timeout=15)
             if res_audio.status_code == 200:
                 data = res_audio.json()
-                # Gestione percorsi nidificati come in JS extractYt1dDownloadURL()
-                dl_url = data.get("downloadUrl") or data.get("url")
+                
+                # Allineamento chiavi JS
+                dl_url = data.get("downloadUrl") or data.get("downloadURL") or data.get("url")
                 if not dl_url and data.get("data"):
-                    dl_url = data["data"].get("downloadUrl") or data["data"].get("url")
+                    nested = data["data"]
+                    dl_url = nested.get("downloadUrl") or nested.get("downloadURL") or nested.get("url")
 
-                if dl_url:
+                if dl_url and dl_url.startswith("http"):
                     logger.info("[youtube] YT1D URL generated successfully")
                     return dl_url
         except Exception as exc:
@@ -490,8 +473,6 @@ class YouTubeProvider(BaseProvider):
     # ------------------------------------------------------------------
     # Metadata embedding per MP3 (ID3)
     # ------------------------------------------------------------------
-    # [Codice embed_metadata invariato - la libreria Python usa standard nativi
-    # diversi dalla UI JavaScript]
 
     def _embed_metadata(self, filepath: str, title: str, artist: str, album: str, album_artist: str, date: str, track_num: int, total_tracks: int, disc_num: int, total_discs: int, cover_url: str = "", publisher: str = "", url: str = "", lyrics: str = "", genre: str = "", bpm: str = "") -> None:
         try:
@@ -573,10 +554,9 @@ class YouTubeProvider(BaseProvider):
             except ImportError:
                 pass
 
-            # Catena di Download: yt-dlp nativo prima, fallback poi.
             download_success = False
 
-            # 1. Download nativo yt-dlp (Massima velocità, niente throttling del parametro 'n')
+            # 1. Download nativo yt-dlp configurato con i client JS per aggirare PO Tokens
             if self._download_direct_innertube(video_id, str(dest)):
                 download_success = True
             else:
