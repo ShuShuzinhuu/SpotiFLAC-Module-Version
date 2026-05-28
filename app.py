@@ -1177,8 +1177,11 @@ class SpotiFLAC_API:
 
 def run_gui():
     api = SpotiFLAC_API()
-    base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    import SpotiFLAC as spotiflac_pkg
+    base_path = os.path.dirname(os.path.abspath(spotiflac_pkg.__file__))
     html_path = os.path.join(base_path, 'index.html')
+    
     if not os.path.exists(html_path):
         raise FileNotFoundError(
             f"index.html not found at expected location: {html_path}"

@@ -1,2 +1,2 @@
-include index.html
-recursive-include assets *.*
+include SpotiFLAC/index.html
+recursive-include SpotiFLAC/assets *
