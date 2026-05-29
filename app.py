@@ -1,3 +1,4 @@
+import asyncio
 import webview
 import threading
 import json
@@ -5,6 +6,7 @@ import os
 import sys
 import subprocess
 import logging
+import re
 import requests as req_lib
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -378,7 +380,9 @@ class SpotiFLAC_API:
 
     def get_network_status(self):
         try:
-            resp = req_lib.get("https://ipapi.co/json/", timeout=10)
+            from SpotiFLAC.core.http import NetworkManager
+            client = NetworkManager.get_sync_client()
+            resp = client.get("https://ipapi.co/json/", timeout=10)
             data = resp.json() if resp.status_code == 200 else {}
             return {
                 "ip": data.get("ip", "Unavailable"),
@@ -478,7 +482,6 @@ class SpotiFLAC_API:
                 self.log(f"No lyrics found for: {title}", "error")
                 return
 
-            import re
             safe_title  = re.sub(r'[\\/*?:"<>|]', "", title).strip()
             safe_artist = re.sub(r'[\\/*?:"<>|]', "", artist).strip()
             filename    = f"{safe_artist} - {safe_title}.lrc" if safe_artist else f"{safe_title}.lrc"
@@ -516,10 +519,11 @@ class SpotiFLAC_API:
 
             self.log(f"Downloading cover for: {title}…", "info")
 
-            resp = req_lib.get(cover_url, timeout=15)
+            from SpotiFLAC.core.http import NetworkManager
+            client = NetworkManager.get_sync_client()
+            resp = client.get(cover_url, timeout=15)
             resp.raise_for_status()
 
-            import re
             safe_title  = re.sub(r'[\\/*?:"<>|]', "", title).strip()
             safe_artist = re.sub(r'[\\/*?:"<>|]', "", artist).strip()
             filename    = f"{safe_artist} - {safe_title}.jpg" if safe_artist else f"{safe_title}.jpg"
@@ -554,7 +558,7 @@ class SpotiFLAC_API:
                 self.log(f"No cover URL available for: {title}", "error")
                 return
 
-            import re
+
             safe_title  = re.sub(r'[\\/*?:"<>|]', "", title).strip()
             safe_artist = re.sub(r'[\\/*?:"<>|]', "", artist).strip()
             safe_owner  = re.sub(r'[\\/*?:"<>|]', "", owner).strip()
@@ -610,7 +614,6 @@ class SpotiFLAC_API:
             resp = req_lib.get(cover_url, timeout=15)
             resp.raise_for_status()
 
-            import re
             safe_artist = re.sub(r'[\\/*?:"<>|]', "", artist).strip()
             safe_album  = re.sub(r'[\\/*?:"<>|]', "", title).strip()
             
@@ -631,15 +634,12 @@ class SpotiFLAC_API:
     # ── Bulk: cover di tutte le tracce ───────────────────────────────────────────
 
     def download_all_covers(self, tracks_data):
-        """Salva la cover .jpg di ogni traccia della lista corrente."""
-        threading.Thread(
-            target=self._download_all_covers_task,
-            args=(tracks_data,),
-            daemon=True,
-        ).start()
+        threading.Thread(target=self._run_async_covers, args=(tracks_data,), daemon=True).start()
+
+    def _run_async_covers(self, tracks_data):
+        asyncio.run(self._async_download_all_covers(tracks_data))
 
     def _download_all_covers_task(self, tracks_data):
-        import re
         total   = len(tracks_data)
         success = 0
         skipped = 0
@@ -677,28 +677,76 @@ class SpotiFLAC_API:
 
         self.log(f"All covers done — {success} saved, {skipped} skipped.", "ok")
 
-    # ── Bulk: lyrics di tutte le tracce ──────────────────────────────────────────
+    # ── Bulk: cover di tutte le tracce (VERSIONE ASINCRONA ULTRA-VELOCE) ──
+    def download_all_covers(self, tracks_data):
+        threading.Thread(target=self._run_async_covers, args=(tracks_data,), daemon=True).start()
 
-    def download_all_lyrics(self, tracks_data):
-        """Salva il file .lrc per ogni traccia della lista corrente."""
-        threading.Thread(
-            target=self._download_all_lyrics_task,
-            args=(tracks_data,),
-            daemon=True,
-        ).start()
+    def _run_async_covers(self, tracks_data):
+        asyncio.run(self._async_download_all_covers(tracks_data))
 
-    def _download_all_lyrics_task(self, tracks_data):
-        import re
-        total   = len(tracks_data)
-        success = 0
-        skipped = 0
+    async def _async_download_all_covers(self, tracks_data):
+        import httpx
+        import aiofiles
+        total = len(tracks_data)
+        success, skipped = 0, 0
 
-        self.log(f"Fetching lyrics for {total} tracks…", "info")
+        self.log(f"Saving covers for {total} tracks at warp speed…", "info")
         os.makedirs(self.download_dir, exist_ok=True)
 
-        from SpotiFLAC.core.lyrics import fetch_lyrics
+        async def fetch_and_save(client, track_data, idx):
+            nonlocal success, skipped
+            title = track_data.get("title", "Unknown")
+            artist = track_data.get("artist", "")
+            cover_url = track_data.get("cover", "")
 
-        for i, track_data in enumerate(tracks_data, 1):
+            if not cover_url:
+                skipped += 1
+                return
+
+            try:
+                resp = await client.get(cover_url, timeout=15)
+                resp.raise_for_status()
+
+                safe_title  = re.sub(r'[\\/*?:"<>|]', "", title).strip()
+                safe_artist = re.sub(r'[\\/*?:"<>|]', "", artist).strip()
+                filename    = f"{safe_artist} - {safe_title}.jpg" if safe_artist else f"{safe_title}.jpg"
+                out_path    = os.path.join(self.download_dir, filename)
+
+                async with aiofiles.open(out_path, "wb") as f:
+                    await f.write(resp.content)
+                
+                success += 1
+                self.log(f"[{idx}/{total}] Cover saved: {filename}", "ok")
+            except Exception as e:
+                self.log(f"[{idx}/{total}] Cover error for '{title}': {e}", "error")
+
+        # Crea un client asincrono e avvia i download tutti assieme!
+        async with httpx.AsyncClient(limits=httpx.Limits(max_connections=50)) as client:
+            tasks = [fetch_and_save(client, track, i) for i, track in enumerate(tracks_data, 1)]
+            await asyncio.gather(*tasks)
+
+        self.log(f"All covers done — {success} saved, {skipped} skipped.", "ok")
+
+
+    # ── Bulk: lyrics di tutte le tracce (VERSIONE ASINCRONA) ──
+    def download_all_lyrics(self, tracks_data):
+        threading.Thread(target=self._run_async_lyrics, args=(tracks_data,), daemon=True).start()
+
+    def _run_async_lyrics(self, tracks_data):
+        asyncio.run(self._async_download_all_lyrics(tracks_data))
+
+    async def _async_download_all_lyrics(self, tracks_data):
+        import aiofiles
+        from SpotiFLAC.core.lyrics import fetch_lyrics
+        
+        total = len(tracks_data)
+        success, skipped = 0, 0
+
+        self.log(f"Fetching lyrics for {total} tracks concurrently…", "info")
+        os.makedirs(self.download_dir, exist_ok=True)
+
+        async def fetch_and_save_lyric(track_data, idx):
+            nonlocal success, skipped
             title    = track_data.get("title", "Unknown")
             artist   = track_data.get("artist", "")
             isrc     = track_data.get("isrc", "")
@@ -706,32 +754,34 @@ class SpotiFLAC_API:
             track_id = track_data.get("id", "")
 
             try:
-                lyrics_text, provider = fetch_lyrics(
-                    track_name  = title,
-                    artist_name = artist,
-                    duration_s  = dur_ms // 1000 if dur_ms else 0,
-                    track_id    = track_id,
-                    isrc        = isrc,
+                # Esegue la vecchia funzione sincrona senza bloccare l'Event Loop
+                lyrics_text, provider = await asyncio.to_thread(
+                    fetch_lyrics,
+                    track_name=title, artist_name=artist,
+                    duration_s=dur_ms // 1000 if dur_ms else 0,
+                    track_id=track_id, isrc=isrc
                 )
 
                 if not lyrics_text:
-                    self.log(f"[{i}/{total}] No lyrics: {title} — skipped", "warn")
                     skipped += 1
-                    continue
+                    return
 
                 safe_title  = re.sub(r'[\\/*?:"<>|]', "", title).strip()
                 safe_artist = re.sub(r'[\\/*?:"<>|]', "", artist).strip()
                 filename    = f"{safe_artist} - {safe_title}.lrc" if safe_artist else f"{safe_title}.lrc"
                 out_path    = os.path.join(self.download_dir, filename)
 
-                with open(out_path, "w", encoding="utf-8") as f:
-                    f.write(lyrics_text)
+                async with aiofiles.open(out_path, "w", encoding="utf-8") as f:
+                    await f.write(lyrics_text)
 
-                self.log(f"[{i}/{total}] Lyrics saved: {filename} (via {provider})", "ok")
                 success += 1
-
+                self.log(f"[{idx}/{total}] Lyrics saved: {filename} (via {provider})", "ok")
             except Exception as e:
-                self.log(f"[{i}/{total}] Lyrics error for '{title}': {e}", "error")
+                self.log(f"[{idx}/{total}] Lyrics error for '{title}': {e}", "error")
+
+        # Scarica tutti i testi contemporaneamente
+        tasks = [fetch_and_save_lyric(track, i) for i, track in enumerate(tracks_data, 1)]
+        await asyncio.gather(*tasks)
 
         self.log(f"All lyrics done — {success} saved, {skipped} skipped.", "ok")
 
@@ -837,7 +887,7 @@ class SpotiFLAC_API:
                         sp_client.initialize()
                         
                         # Try to extract playlist / track / artist info from URL
-                        import re
+                    
                         playlist_match = re.search(r'playlist[:/]([a-zA-Z0-9]+)', url)
                         track_match = re.search(r'track[:/]([a-zA-Z0-9]+)', url)
                         album_match = re.search(r'album[:/]([A-Za-z0-9]+)', url)

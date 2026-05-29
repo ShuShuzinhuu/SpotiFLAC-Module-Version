@@ -16,7 +16,8 @@ import json
 from typing import NamedTuple
 from urllib.parse import urlparse
 
-import requests
+import httpx
+from SpotiFLAC.core.http import NetworkManager
 
 # ---------------------------------------------------------------------------
 # Helper per la validazione del payload
@@ -267,7 +268,9 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
                 dummy_url = test_urls.get(provider, "https://example.com/track/123")
                 req_kwargs["json"] = {"url": dummy_url}
 
-        resp = requests.request(method, url, **req_kwargs)
+        # Usiamo il nostro connection pool centralizzato
+        client = NetworkManager.get_sync_client()
+        resp = client.request(method, url, follow_redirects=True, **{k: v for k, v in req_kwargs.items() if k != 'allow_redirects'})
         ms = (time.perf_counter() - t0) * 1000
 
         ok     = False
@@ -423,10 +426,12 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
 
         return HealthResult(provider, url, method, ok, ms, detail)
 
-    except requests.Timeout:
+    except httpx.TimeoutException:
         return HealthResult(provider, url, method, False, -1, "timeout")
-    except requests.ConnectionError:
+    except httpx.ConnectError:
         return HealthResult(provider, url, method, False, -1, "conn refused")
+    except httpx.RequestError as exc:
+        return HealthResult(provider, url, method, False, -1, "req error")
     except Exception as exc:
         return HealthResult(provider, url, method, False, -1, str(exc)[:40])
 

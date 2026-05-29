@@ -194,8 +194,7 @@ class AmazonProvider(BaseProvider):
 
         track_id = metadata.id
         source_url = f"https://open.spotify.com/track/{track_id}"
-
-        # 1. Zarz.moe Resolve API
+        
         try:
             resp = self._session.post(
                 "https://api.zarz.moe/v1/resolve",
@@ -284,6 +283,10 @@ class AmazonProvider(BaseProvider):
             return "m4a"
 
     def _quality_to_zarz_codec(self, quality: str) -> str:
+        # Zarz.moe supports specific non-FLAC codecs for Amazon.
+        # Any other quality (including "best"/"BEST") is treated as FLAC,
+        # which corresponds to the best available parity quality from Amazon
+        # (up to 24-bit/48kHz when available).
         if not quality:
             return "flac"
         q = str(quality).lower().strip()
@@ -358,17 +361,7 @@ class AmazonProvider(BaseProvider):
         logger.info("[amazon] Downloading encrypted stream from Zarz…")
 
         try:
-            with self._session.get(stream_url, stream=True, headers=headers, timeout=120) as r:
-                r.raise_for_status()
-                total = int(r.headers.get("Content-Length") or 0)
-                downloaded = 0
-                with open(temp_file, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if self._progress_cb and total:
-                                self._progress_cb(downloaded, total)
+            self._http.stream_to_file(stream_url, temp_file, self._progress_cb, extra_headers=headers)
         except Exception as exc:
             logger.warning("[amazon] Failed to download Zarz stream: %s", exc)
             if os.path.exists(temp_file):
@@ -446,17 +439,7 @@ class AmazonProvider(BaseProvider):
         if captcha_token:
             download_headers["x-captcha-token"] = str(captcha_token)
 
-        with self._session.get(stream_url, stream=True, headers=download_headers, timeout=120) as r:
-            r.raise_for_status()
-            total      = int(r.headers.get("Content-Length") or 0)
-            downloaded = 0
-            with open(temp_file, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if self._progress_cb and total:
-                            self._progress_cb(downloaded, total)
+        self._http.stream_to_file(stream_url, temp_file, self._progress_cb, extra_headers=download_headers)
 
         if decryption_key:
             codec = self._get_codec(temp_file)
@@ -511,17 +494,7 @@ class AmazonProvider(BaseProvider):
         stream_headers = {"User-Agent": _DEFAULT_UA, "x-captcha-token": captcha_token}
         temp_file = os.path.join(output_dir, f"{asin}.enc")
 
-        with self._session.get(stream_url, stream=True, headers=stream_headers, timeout=120) as r:
-            r.raise_for_status()
-            total      = int(r.headers.get("Content-Length") or 0)
-            downloaded = 0
-            with open(temp_file, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if self._progress_cb and total:
-                            self._progress_cb(downloaded, total)
+        self._http.stream_to_file(stream_url, temp_file, self._progress_cb, extra_headers=stream_headers)
 
         if decryption_key:
             ext = ".flac" if returned_codec == "flac" else ".m4a"
@@ -555,17 +528,27 @@ class AmazonProvider(BaseProvider):
             raise RuntimeError(f"Cannot extract ASIN from: {amazon_url}")
         asin = asin_match.group(1)
 
-        # 1. ZARZ (Primary)
-        codec = self._quality_to_zarz_codec(quality)
-        zarz_url = f"{API_ENDPOINTS['zarz']['base_url']}/media?asin={asin}&codec={codec}"
-        print_source_banner("amazon", zarz_url, quality)
-
-        zarz_result = self._download_from_zarz_api(asin, output_dir, quality)
-        if zarz_result and os.path.exists(zarz_result[0]):
-            return zarz_result
-
-        logger.info("[amazon] Download with %s didn't work. Starting fallback (LOSSLESS forced)", zarz_url)
+        use_zarz = str(quality).upper().strip() != "LOSSLESS"
         fallback_quality = "LOSSLESS"
+
+        if use_zarz:
+            # 1. ZARZ (Primary)
+            # When the codec resolves to FLAC, this means Best available quality
+            # from Amazon via Zarz (up to 24-bit/48kHz if the track supports it).
+            codec = self._quality_to_zarz_codec(quality)
+            zarz_url = f"{API_ENDPOINTS['zarz']['base_url']}/media?asin={asin}&codec={codec}"
+            display_quality = quality
+            if codec == "flac":
+                display_quality = "Best Available Quality (up to 24-bit/48kHz)"
+            print_source_banner("amazon", zarz_url, display_quality)
+
+            zarz_result = self._download_from_zarz_api(asin, output_dir, quality)
+            if zarz_result and os.path.exists(zarz_result[0]):
+                return zarz_result
+
+            logger.info("[amazon] Download with %s didn't work. Starting fallback (LOSSLESS forced)", zarz_url)
+        else:
+            logger.info("[amazon] Skipping Zarz.moe API because quality is LOSSLESS; using Spotbye fallback directly")
 
         # 2. SPOTBYE 1
         spotbye1_url = API_ENDPOINTS['spotbye1']['base_url']

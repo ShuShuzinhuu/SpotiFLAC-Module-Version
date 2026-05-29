@@ -12,7 +12,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
-import requests
+import httpx
 
 from ..core.errors import SpotiflacError, ErrorKind, InvalidUrlError
 from ..core.models import TrackMetadata
@@ -97,13 +97,16 @@ def _artist_in_track(artist_name: str, track_artists: str) -> bool:
 class AppleMusicMetadataClient:
     def __init__(self, timeout_s: int = 15) -> None:
         self._timeout = timeout_s
-        self._session = requests.Session()
-        self._session.headers.update({
-            "User-Agent": _APPLE_UA,
-            "Accept": "application/json",
-            "Origin": "https://music.apple.com",
-            "Referer": "https://music.apple.com/" # Nuovo header richiesto
-        })
+        # Usiamo httpx per massimizzare la velocità dei thread paralleli
+        self._session = httpx.Client(
+            timeout=timeout_s,
+            headers={
+                "User-Agent": _APPLE_UA,
+                "Accept": "application/json",
+                "Origin": "https://music.apple.com",
+                "Referer": "https://music.apple.com/"
+            }
+        )
         self._auth_token = None
 
     def _get_token(self) -> str:

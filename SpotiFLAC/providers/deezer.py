@@ -387,17 +387,7 @@ class DeezerProvider(BaseProvider):
 
         try:
             os.makedirs(output_dir, exist_ok=True)
-            with self._session.get(download_url, stream=True, timeout=_API_TIMEOUT_S) as resp:
-                resp.raise_for_status()
-                total    = int(resp.headers.get("content-length", 0))
-                received = 0
-                with open(temp_path, "wb") as f:
-                    for chunk in resp.iter_content(chunk_size=65536):
-                        if chunk:
-                            f.write(chunk)
-                            received += len(chunk)
-                            if self._progress_cb and total:
-                                self._progress_cb(received, total)
+            self._http.stream_to_file(download_url, temp_path, self._progress_cb)
         except Exception as exc:
             logger.warning("[deezer] Download failed: %s", exc)
             if os.path.exists(temp_path):
@@ -471,7 +461,9 @@ class DeezerProvider(BaseProvider):
 
             try:
                 from ..core.console import print_source_banner
-                print_source_banner("Deezer", _RESOLVER_URL, quality.upper())
+                # Deezer always resolves the best available FLAC stream regardless
+                # of the requested quality label, so show that explicitly.
+                print_source_banner("Deezer", _RESOLVER_URL, "FLAC Best Available")
             except ImportError:
                 pass
 

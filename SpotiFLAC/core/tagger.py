@@ -17,8 +17,8 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-import requests
 from mutagen.flac import FLAC
 from mutagen.flac import Picture as FlacPicture
 from mutagen.id3 import (
@@ -371,7 +371,7 @@ def embed_metadata(
         opts:              EmbedOptions,
         *,
         cover_data:        bytes | None = None,
-        session:           requests.Session | None = None,
+        session:           Any | None = None,
         multi_artist:      bool  = True,
 ) -> None:
     path = Path(filepath)
@@ -503,13 +503,16 @@ def embed_metadata(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _fetch_cover(url: str, session: requests.Session | None) -> bytes | None:
+def _fetch_cover(url: str, session: Any | None = None) -> bytes | None:
     if not url:
         return None
-    s = session or requests.Session()
+    
+    from .http import NetworkManager
+    s = NetworkManager.get_sync_client() # Usa il pool globale ultra-veloce
+    
     for attempt in range(3):
         try:
-            res = s.get(url, timeout=8)
+            res = s.get(url, timeout=8.0)
             if res.status_code == 200:
                 return res.content
             logger.warning("[tagger] cover HTTP %s (attempt %d)", res.status_code, attempt + 1)

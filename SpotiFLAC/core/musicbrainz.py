@@ -4,12 +4,13 @@ Gestisce rate-limiting globale, caching, deduplicazione in-flight e retry.
 """
 from __future__ import annotations
 import logging
+import httpx
 import threading
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 import atexit as _atexit
-import requests
+from .http import NetworkManager
 import threading as _threading
 
 logger = logging.getLogger(__name__)
@@ -93,12 +94,14 @@ def _query_recordings(query: str) -> dict:
     }
 
     last_err = Exception("Empty response")
+    client = NetworkManager.get_sync_client() # <--- Inizializza il nuovo client
 
     for attempt in range(_MB_RETRIES):
         _wait_for_request_slot()
 
         try:
-            resp = requests.get(url, headers=headers, timeout=_MB_TIMEOUT)
+            # Usa il client corretto
+            resp = client.get(url, headers=headers, timeout=_MB_TIMEOUT)
 
             if resp.status_code == 200:
                 return resp.json()
@@ -111,7 +114,7 @@ def _query_recordings(query: str) -> dict:
             if 400 <= resp.status_code < 500 and resp.status_code != 429:
                 break
 
-        except requests.RequestException as e:
+        except httpx.RequestError as e: # <--- Eccezione nativa di httpx
             last_err = e
 
         if attempt < _MB_RETRIES - 1:

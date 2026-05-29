@@ -321,17 +321,7 @@ class AppleMusicProvider(BaseProvider):
 
             print_source_banner("Apple Music", api_used or "Proxy", used_codec.upper())
 
-            with self._session.get(stream_url, stream=True, timeout=30) as r:
-                r.raise_for_status()
-                total = int(r.headers.get("Content-Length") or 0)
-                downloaded = 0
-                with open(str(dest), "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if self._progress_cb and total:
-                                self._progress_cb(downloaded, total)
+            self._http.stream_to_file(stream_url, str(dest), self._progress_cb)
 
             # Validazione Traccia (Controllo File Corrotto/Tronco)
             expected_s = metadata.duration_ms // 1000

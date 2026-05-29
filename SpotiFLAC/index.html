@@ -4074,7 +4074,6 @@ function renderRecentSearches() {
         card.innerHTML = `<span style="font-size:16px;">🔎</span><span class="rc-title" style="font-size:13px; color:var(--text);">${escHtml(q)}</span>`;
         card.onclick = () => {
             $('urlInput').value = q;
-            // Se hai un listener su oninput triggera la ricerca:
             $('urlInput').dispatchEvent(new Event('input'));
         };
         grid.appendChild(card);
@@ -4909,6 +4908,11 @@ async function onFetch() {
     if (!isUrl) {
       setFetchingState('error', "Invalid URL. Please enter a valid URL.");
       return; // Blocca l'esecuzione
+    }
+
+    if (url.toLowerCase().includes('amazon.')) {
+      showToast("Amazon links cannot be inserted.");
+      return; 
     }
   }
 

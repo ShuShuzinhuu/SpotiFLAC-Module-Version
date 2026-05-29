@@ -4,7 +4,7 @@ import logging
 import re
 from typing import Any
 
-import requests
+import httpx
 
 # Utilizza il path relativo corretto in base a dove hai salvato spotfetch.py
 from ..core.spotify_totp import generate_spotify_totp
@@ -15,7 +15,9 @@ class SpotifyWebClient:
     """Client per interagire con le API interne (Web Player/GraphQL v2) di Spotify."""
     
     def __init__(self) -> None:
-        self._session = requests.Session()
+        # Usiamo httpx.Client al posto di requests.Session per connessioni istantanee
+        limits = httpx.Limits(max_keepalive_connections=15, max_connections=30)
+        self._session = httpx.Client(limits=limits, timeout=15.0)
         self._session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
         })

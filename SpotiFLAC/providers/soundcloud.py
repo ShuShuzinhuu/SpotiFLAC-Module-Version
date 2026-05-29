@@ -605,18 +605,7 @@ class SoundCloudProvider(BaseProvider):
         try:
             os.makedirs(output_dir, exist_ok=True)
             logger.info("[SC] Downloading: %s", dest.name)
-
-            with self.session.get(dl_url, stream=True, timeout=60) as r:
-                r.raise_for_status()
-                total      = int(r.headers.get("Content-Length") or 0)
-                downloaded = 0
-                with open(str(dest), "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if self._progress_cb and total:
-                                self._progress_cb(downloaded, total)
+            self._http.stream_to_file(dl_url, str(dest), self._progress_cb)
 
         except Exception as e:
             logger.error("[SC] Download failed: %s", e)

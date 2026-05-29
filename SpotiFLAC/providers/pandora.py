@@ -946,23 +946,13 @@ class PandoraProvider(BaseProvider):
             dest = dest_mp3.with_suffix(ext)
 
             # 5. Scarica il file audio
-            with self._session.get(
+            os.makedirs(output_dir, exist_ok=True)
+            self._http.stream_to_file(
                 stream_url,
-                headers={"User-Agent": _ua_for_url(stream_url)},
-                stream=True,
-                timeout=120,
-            ) as r:
-                r.raise_for_status()
-                total      = int(r.headers.get("Content-Length") or 0)
-                downloaded = 0
-                os.makedirs(output_dir, exist_ok=True)
-                with open(str(dest), "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if self._progress_cb and total:
-                                self._progress_cb(downloaded, total)
+                str(dest),
+                self._progress_cb,
+                extra_headers={"User-Agent": _ua_for_url(stream_url)}
+            )
 
             # 6. Validazione (preview da 30s, durata errata)
             expected_s = metadata.duration_ms // 1000

@@ -574,18 +574,7 @@ class YouTubeProvider(BaseProvider):
                     logger.info(f"[youtube] Attempting download via {source_name}...")
                     try:
                         headers = {"User-Agent": _DEFAULT_UA}
-                        with self._session.get(dl_url, headers=headers, stream=True, timeout=120) as r:
-                            r.raise_for_status()
-                            total = int(r.headers.get("Content-Length") or 0)
-                            downloaded = 0
-                            with open(str(dest), "wb") as f:
-                                for chunk in r.iter_content(chunk_size=262144):
-                                    if chunk:
-                                        f.write(chunk)
-                                        downloaded += len(chunk)
-                                        if self._progress_cb and total:
-                                            self._progress_cb(downloaded, total)
-
+                        self._http.stream_to_file(dl_url, str(dest), self._progress_cb, extra_headers=headers)
                         download_success = True
                         logger.info(f"[youtube] Download successful via {source_name}")
                         break

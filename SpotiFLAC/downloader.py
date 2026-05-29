@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from .core.console import print_track_header, print_summary
 from .core.errors import SpotiflacError, ErrorKind
 from .core.models import TrackMetadata, DownloadResult
-from .core.progress import DownloadManager, ProgressCallback
+from .core.progress import DownloadManager, ProgressManager, ProgressCallback, safe_print, safe_tqdm_write, install_console_interception, uninstall_console_interception
 from .providers.base import BaseProvider
 from .providers.spotify_metadata import SpotifyMetadataClient
 from .core.isrc_helper import IsrcHelper
@@ -101,15 +101,15 @@ def download_one(
     for attempt in range(max_retries + 1):
         if attempt > 0:
             wait = min(2 ** attempt, 30)
-            print(f"\n  ↺  Retry {attempt}/{max_retries} in {wait}s… "
-                  f"({metadata.artists} — {metadata.title})")
+            from tqdm import tqdm
+            safe_tqdm_write(f"\n  ↺  Retry {attempt}/{max_retries} in {wait}s…")
             time.sleep(wait)
             errors.clear()
 
         for provider in providers:
             logger.info("[%s] Trying: %s — %s", provider.name, metadata.artists, metadata.title)
 
-            cb = ProgressCallback(item_id=metadata.id)
+            cb = ProgressCallback(item_id=metadata.id, track_name=metadata.title)
             provider.set_progress_callback(cb)
 
             result = provider.download_track(
@@ -227,34 +227,63 @@ class DownloadWorker:
         start     = time.perf_counter()
         base_out  = self._resolve_output_dir()
 
-        for i, track in enumerate(self._tracks):
-            position = i + 1
-            print_track_header(position, total, track.title, track.artists, track.album)
+        install_console_interception()
+        ProgressManager.initialize_master_bar(total, description="Batch")
+        try:
+            return self._run_downloads(manager, total, base_out, start)
+        finally:
+            ProgressManager.clear_all()
+            uninstall_console_interception()
 
+    def _run_downloads(
+        self,
+        manager:  DownloadManager,
+        total:    int,
+        base_out: str,
+        start:    float,
+    ) -> list[tuple[str, str, str]]:
+        MAX_CONCURRENT_DOWNLOADS = 2
+        
+        # Funzione helper che scarica una singola traccia
+        def worker_task(i: int, track: TrackMetadata):
+            position = i + 1
+            # sys.stdout è ora _TqdmStdoutProxy: qualsiasi print() interno
+            # (incluso print_track_header) passa automaticamente per il lock.
+            print_track_header(position, total, track.title, track.artists, track.album)
             manager.start_download(track.id)
 
             out_dir = self._track_output_dir(base_out, track)
-            result  = download_one(
-                track, out_dir, self._providers, self._opts, position, self._is_album
-            )
+            res = download_one(track, out_dir, self._providers, self._opts, position, self._is_album)
+            
+            return track, res
 
-            if result.success and result.skipped:
-                manager.skip_download(track.id)
-            elif result.success:
-                size_mb = (
-                    os.path.getsize(result.file_path) / (1024 * 1024)
-                    if result.file_path and os.path.exists(result.file_path)
-                    else 0.0
-                )
-                manager.complete_download(track.id, result.file_path or "", size_mb)
-            else:
-                err = result.error or "unknown"
-                self._failed.append((track.id, track.title, track.artists, err))
-                logger.error("[worker] Failed: %s — %s: %s", track.title, track.artists, err)
-                manager.fail_download(track.id, err)
+        # Avvio parallelo!
+        with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DOWNLOADS) as executor:
+            # Sottomettiamo tutte le task
+            futures = [executor.submit(worker_task, i, track) for i, track in enumerate(self._tracks)]
+            
+            # Raccogliamo i risultati man mano che finiscono
+            for future in as_completed(futures):
+                track, result = future.result()
+                
+                if result.success and result.skipped:
+                    manager.skip_download(track.id)
+                elif result.success:
+                    size_mb = (
+                        os.path.getsize(result.file_path) / (1024 * 1024)
+                        if result.file_path and os.path.exists(result.file_path)
+                        else 0.0
+                    )
+                    manager.complete_download(track.id, result.file_path or "", size_mb)
+                else:
+                    err = result.error or "unknown"
+                    self._failed.append((track.id, track.title, track.artists, err))
+                    logger.error("[worker] Failed: %s — %s: %s", track.title, track.artists, err)
+                    manager.fail_download(track.id, err)
+                    from .core.progress import ProgressCallback
+                    ProgressCallback.clear_item(track.id)
 
-            if i < total - 1:
-                time.sleep(self._opts.inter_track_delay_s)
+                ProgressManager.increment_master()
 
         elapsed = time.perf_counter() - start
         self._print_summary(elapsed)
@@ -273,9 +302,13 @@ class DownloadWorker:
             return out
 
         out = os.path.normpath(self._opts.output_dir)
-        if (self._is_album or self._is_playlist) and self._collection_name:
+        if self._is_playlist and self._collection_name:
             safe_name = re.sub(r'[<>:"/\\|?*]', "_", self._collection_name.strip())
             out = os.path.join(out, safe_name)
+        elif self._is_album and self._collection_name and not self._opts.use_album_subfolders:
+            safe_name = re.sub(r'[<>:"/\\|?*]', "_", self._collection_name.strip())
+            out = os.path.join(out, safe_name)
+        
         os.makedirs(out, exist_ok=True)
         return out
 
@@ -388,6 +421,12 @@ class SpotiflacDownloader:
                 ErrorKind.INVALID_URL,
                 "Providing Deezer URLs as primary input is not yet fully supported. "
                 "Use a Spotify link and set 'deezer' as the download provider."
+            )
+        
+        if "amazon." in url.lower():
+            raise SpotiflacError(
+                ErrorKind.INVALID_URL,
+                "Amazon links cannot be inserted."
             )
 
         try:
@@ -505,13 +544,17 @@ class SpotiflacDownloader:
     ) -> list[TrackMetadata]:
         effective = opts if opts is not None else self._opts
         manager = DownloadManager()
+        updated_tracks = []
         for i, t in enumerate(tracks):
             track_item_id = t.id or t.external_url or f"queue-{i}-{uuid.uuid4().hex}"
             track_spotify_id = t.id or t.external_url or track_item_id
             manager.add_to_queue(track_item_id, t.title, t.artists, t.album, track_spotify_id)
+            if not t.id:
+                t = t.model_copy(update={"id": track_item_id})
+            updated_tracks.append(t)
 
         worker = DownloadWorker(
-            tracks          = tracks,
+            tracks          = updated_tracks,
             opts            = effective,
             collection_name = collection_name,
             is_album        = is_album,
@@ -520,7 +563,7 @@ class SpotiflacDownloader:
 
         failed_tuples = worker.run()
         failed_ids = {f[0] for f in failed_tuples}
-        return [t for t in tracks if t.id in failed_ids]
+        return [t for t in updated_tracks if t.id in failed_ids]
 
     def _run_once(self, url: str, target_tracks=None) -> list:
         if target_tracks is not None:

@@ -36,12 +36,14 @@ class ProviderScorer:
     """
     _instance: "ProviderScorer | None" = None
     _lock = threading.Lock()
+    _stats: dict[str, _ProviderStats]
 
     def __new__(cls) -> "ProviderScorer":
         with cls._lock:
             if cls._instance is None:
                 inst = super().__new__(cls)
-                inst._stats: dict[str, _ProviderStats] = {}
+                inst._stats = {} 
+                
                 inst._stats_lock = threading.Lock()
                 cls._instance = inst
         return cls._instance

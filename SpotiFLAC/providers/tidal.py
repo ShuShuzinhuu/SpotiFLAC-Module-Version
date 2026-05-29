@@ -1026,7 +1026,6 @@ class TidalProvider(BaseProvider):
 
             mb_tags = mb_result_to_tags(res)
             
-            # --- NUOVO: Aggiungiamo il sample rate personalizzato ai tag ---
             if sample_rate > 0:
                 mb_tags["SAMPLERATE"] = str(sample_rate)
 

@@ -17,8 +17,9 @@ import logging
 import re
 import unicodedata
 import urllib.parse
+import httpx
 
-import requests
+from .http import NetworkManager
 
 from ..providers.amazon import API_ENDPOINTS
 
@@ -107,7 +108,7 @@ def _get_spotify_anon_token(timeout: int = 7) -> str:
     try:
         session = _spotify_session_cache.get("session")
         if session is None:
-            session = requests.Session()
+            session = httpx.Client(timeout=15.0) 
             _spotify_session_cache["session"] = session
 
         # Step 1: visita open.spotify.com per ottenere i cookie di sessione (sp_t, ecc.)
@@ -135,7 +136,7 @@ def _get_spotify_anon_token(timeout: int = 7) -> str:
             headers={"User-Agent": _UA, **totp_headers},
             timeout=timeout,
         )
-        if r.ok:
+        if r.is_success:
             token = r.json().get("accessToken", "")
             if token:
                 _spotify_session_cache["token"]     = token
@@ -156,7 +157,7 @@ def _fetch_spotify(track_id: str, timeout: int = 7) -> str:
         if not access_token:
             return ""
 
-        r = requests.get(
+        r = NetworkManager.get_sync_client().get(
             f"{_SPOTIFY_LYRICS}/{track_id}",
             params={"format": "json", "market": "from_token"},
             headers={
@@ -173,7 +174,7 @@ def _fetch_spotify(track_id: str, timeout: int = 7) -> str:
             access_token = _get_spotify_anon_token(timeout)
             if not access_token:
                 return ""
-            r = requests.get(
+            r = NetworkManager.get_sync_client().get(
                 f"{_SPOTIFY_LYRICS}/{track_id}",
                 params={"format": "json", "market": "from_token"},
                 headers={
@@ -235,16 +236,16 @@ def _fetch_apple(track_name: str, artist_name: str, duration_s: int, timeout: in
     query = urllib.parse.quote(f"{track_name} {artist_name}")
     search_url = f"{_PAXSENIX_APPLE}/search?q={query}"
     try:
-        r = requests.get(search_url, headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=timeout)
-        if not r.ok: return ""
+        r = NetworkManager.get_sync_client().get(search_url, headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=timeout)
+        if not r.is_success: return ""
         results = r.json()
         if not results: return ""
         best = max(results, key=lambda x: _score_apple_result(x, track_name, artist_name, duration_s))
         song_id = best.get("id")
         if not song_id: return ""
         lyrics_url = f"{_PAXSENIX_APPLE}/lyrics?id={song_id}"
-        r_lyr = requests.get(lyrics_url, headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=timeout)
-        if not r_lyr.ok: return ""
+        r_lyr = NetworkManager.get_sync_client().get(lyrics_url, headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=timeout)
+        if not r_lyr.is_success: return ""
         data = r_lyr.json()
         content = data.get("content", []) if isinstance(data, dict) else data
         lrc_lines = []
@@ -278,8 +279,8 @@ def _fetch_musixmatch(track_name: str, artist_name: str, duration_s: int, timeou
             params["d"] = str(duration_s)
         url = f"{_PAXSENIX_MXM}/lyrics?" + urllib.parse.urlencode(params)
         try:
-            r = requests.get(url, headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=timeout)
-            if r.ok:
+            r = NetworkManager.get_sync_client().get(url, headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=timeout)
+            if r.is_success:
                 body = r.text.strip()
                 import json
                 try:
@@ -307,12 +308,12 @@ def _fetch_amazon(isrc: str, timeout: int = 7) -> str:
     if not isrc:
         return ""
     try:
-        r = requests.get(
+        r = NetworkManager.get_sync_client().get(
             f"{API_ENDPOINTS['spotbye']}/lyrics/{isrc}",
             headers={"User-Agent": _UA},
             timeout=timeout,
         )
-        if not r.ok: return ""
+        if not r.is_success: return ""
         data  = r.json()
         lines = data.get("lines") or data.get("lyrics", [])
         if not lines: return ""
@@ -342,7 +343,7 @@ def _fetch_lrclib(track_name: str, artist_name: str, album_name: str = "", durat
         if al: params["album_name"] = al
         if d:  params["duration"]   = d
         try:
-            r = requests.get(f"{_LRCLIB}/get", params=params, timeout=timeout)
+            r = NetworkManager.get_sync_client().get(f"{_LRCLIB}/get", params=params, timeout=timeout)
             if r.status_code == 200:
                 data = r.json()
                 return data.get("syncedLyrics") or data.get("plainLyrics") or ""
@@ -356,7 +357,7 @@ def _fetch_lrclib(track_name: str, artist_name: str, album_name: str = "", durat
         if result: return result
 
     try:
-        r = requests.get(
+        r = NetworkManager.get_sync_client().get(
             f"{_LRCLIB}/search",
             params={"artist_name": artist_name, "track_name": track_name},
             timeout=timeout,
