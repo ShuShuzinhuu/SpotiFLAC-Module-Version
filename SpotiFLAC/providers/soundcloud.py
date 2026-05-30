@@ -7,7 +7,8 @@ import time
 from typing import Dict, List, Optional, Any
 from urllib.parse import quote
 
-import requests
+import httpx  
+from ..core.http import NetworkManager  
 
 from .base import BaseProvider
 from ..core.http import HttpClient
@@ -29,7 +30,7 @@ class SoundCloudProvider(BaseProvider):
         self.client_id_expiry = 0
         self._sc_version = ""
         self.cobalt_api  = "https://api.zarz.moe/v1/dl/cobalt/"
-        self.session     = requests.Session()
+        self.session     = NetworkManager.get_sync_client() 
         self.session.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -172,9 +173,9 @@ class SoundCloudProvider(BaseProvider):
         Prova prima il tag og:url nell'HTML, poi il canonical.
         """
         try:
-            res = self.session.get(url, timeout=10, allow_redirects=True)
+            res = self.session.get(url, timeout=10, follow_redirects=True) 
             # Metodo 1: URL finale dopo redirect
-            final = res.url
+            final = str(res.url)
             if 'soundcloud.com' in final and 'on.soundcloud.com' not in final:
                 return self._clean_url(final)
             # Metodo 2: og:url nel body
