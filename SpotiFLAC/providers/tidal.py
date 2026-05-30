@@ -19,7 +19,8 @@ from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
 
-import requests
+import httpx
+from ..core.http import NetworkManager
 
 from .base import BaseProvider
 from ..core.console import (
@@ -259,7 +260,8 @@ def _save_tidal_api_list_state_locked(state: dict) -> None:
 
 
 def _fetch_tidal_api_urls_from_gist() -> list[str]:
-    resp = requests.get(_TIDAL_API_GIST_URL, timeout=10, headers={"User-Agent": _TIDAL_USER_AGENT})
+    client = NetworkManager.get_sync_client()
+    resp = client.get(_TIDAL_API_GIST_URL, timeout=10, headers={"User-Agent": _TIDAL_USER_AGENT})
     if resp.status_code != 200:
         raise RuntimeError(f"Tidal API gist returned status {resp.status_code}")
     try:
@@ -473,6 +475,8 @@ def _fetch_tidal_url_once(
 
     delay     = _RETRY_DELAY_S
     last_err: Exception = RuntimeError("no attempts made")
+    
+    client = NetworkManager.get_sync_client() # <-- AGGIUNTO
 
     for attempt in range(_MAX_RETRIES + 1):
         if attempt > 0:
@@ -494,7 +498,7 @@ def _fetch_tidal_url_once(
                 # Response: payload.data.data.attributes.uri  → raw MPD URL
                 # ----------------------------------------------------------------
                 if quality == "DOLBY_ATMOS":
-                    resp = requests.post(
+                    resp = client.post( 
                         api_cleaning,
                         json={"id": str(track_id), "endpoint": "manifests", "formats": ["EAC3_JOC"]},
                         headers=headers,
@@ -529,7 +533,7 @@ def _fetch_tidal_url_once(
                     # Fetch the MPD document and return it as base64 so the
                     # existing _download_from_manifest / parse_manifest path
                     # handles it transparently.
-                    mpd_resp = requests.get(
+                    mpd_resp = client.get( 
                         manifest_uri,
                         headers={
                             "Accept": "application/dash+xml,text/xml,application/xml;q=0.9,*/*;q=0.8",
@@ -544,7 +548,7 @@ def _fetch_tidal_url_once(
                 # ----------------------------------------------------------------
                 # All other qualities: POST {id, quality}
                 # ----------------------------------------------------------------
-                resp = requests.post(
+                resp = client.post( 
                     api_cleaning,
                     json={"id": str(track_id), "quality": quality},
                     headers=headers,
@@ -552,7 +556,7 @@ def _fetch_tidal_url_once(
                 )
             else:
                 url = f"{api_cleaning}/track/?id={track_id}&quality={quality}"
-                resp = requests.get(url, headers=headers, timeout=timeout_s)
+                resp = client.get(url, headers=headers, timeout=timeout_s) 
 
             if resp.status_code == 429:
                 # Legge Retry-After dall'header se presente; altrimenti usa il default.
@@ -594,7 +598,7 @@ def _fetch_tidal_url_once(
 
             last_err = RuntimeError("no download URL or manifest in response")
 
-        except (requests.Timeout, requests.ConnectionError) as exc:
+        except (httpx.TimeoutException, httpx.ConnectError) as exc: 
             last_err = exc
             continue
         except Exception as exc:
@@ -602,7 +606,6 @@ def _fetch_tidal_url_once(
             break
 
     raise last_err
-
 
 def _fetch_tidal_url_parallel(
         apis:      list[str],
@@ -667,7 +670,7 @@ class TidalProvider(BaseProvider):
             custom_api_url:  str | None       = None,   # ← nuovo parametro
     ) -> None:
         super().__init__(timeout_s=timeout_s, retry=RetryConfig(max_attempts=2))
-        self._session = self._http._session
+        self._session = NetworkManager.get_sync_client()
         self._session.headers.update({"User-Agent": self._random_ua()})
 
         try:
