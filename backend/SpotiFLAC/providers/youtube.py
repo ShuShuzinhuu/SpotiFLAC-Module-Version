@@ -5,7 +5,6 @@ import logging
 import os
 import re
 import yt_dlp
-import time
 from typing import Callable, List, Optional, Tuple, Dict, Any
 from urllib.parse import quote, urlparse, parse_qs
 
@@ -187,7 +186,8 @@ class YouTubeProvider(BaseProvider):
                     external_url=f"https://music.youtube.com/watch?v={v_id}",
                     extra_info={"provider": "youtube"}
                 ))
-            except:
+            except (KeyError, IndexError, TypeError) as e:
+                logger.debug(f"[youtube] Errore nel parsing della traccia: {e}")
                 continue
 
         return len(track_list) - count_before
