@@ -824,6 +824,46 @@ class QobuzProvider(BaseProvider):
             track_id = track.get("id")
             if not track_id:
                 raise TrackNotFoundError(self.name, "Missing track ID in Qobuz response")
+            # ==========================================================
+            # INIZIO: INTEGRAZIONE METADATI DIRETTAMENTE DA QOBUZ
+            # ==========================================================
+            album_data = track.get("album", {})
+            
+            # 1. Copertina Originale ad Altissima Risoluzione (sovrascrive quella compressa di Spotify)
+            images = album_data.get("image", {})
+            qobuz_cover = images.get("large") or images.get("small")
+            if qobuz_cover:
+                # Trasformiamo l'URL per scaricare l'immagine originale (senza resize)
+                metadata.cover_url = qobuz_cover.replace("_600.jpg", "_max.jpg").replace("_230.jpg", "_max.jpg")
+                
+            # 2. Date, Copyright e Compositore
+            metadata.release_date = track.get("release_date_original") or album_data.get("release_date_original") or metadata.release_date
+            metadata.copyright = track.get("copyright") or album_data.get("copyright") or metadata.copyright
+            
+            composer_obj = track.get("composer")
+            if composer_obj and composer_obj.get("name"):
+                metadata.composer = composer_obj["name"]
+                
+            # 3. Tag Extra (Genere, Etichetta Discografica, UPC/Barcode)
+            qobuz_extra_tags = {}
+            if album_data.get("genre") and album_data["genre"].get("name"):
+                qobuz_extra_tags["GENRE"] = album_data["genre"]["name"]
+                
+            if album_data.get("label") and album_data["label"].get("name"):
+                qobuz_extra_tags["LABEL"] = album_data["label"]["name"]
+                qobuz_extra_tags["ORGANIZATION"] = album_data["label"]["name"]
+                
+            if album_data.get("upc"):
+                qobuz_extra_tags["BARCODE"] = album_data["upc"]
+                
+            if track.get("isrc"):
+                metadata.isrc = track["isrc"]
+                
+            if track.get("track_number"):
+                metadata.track_number = track["track_number"]
+                
+            if album_data.get("tracks_count"):
+                metadata.total_tracks = album_data["tracks_count"]
             dest = self._build_output_path(
                 metadata, output_dir, filename_format,
                 position, include_track_num, use_album_track_num, first_artist_only,
@@ -868,6 +908,7 @@ class QobuzProvider(BaseProvider):
                 res = mb_fetcher.future.result()
 
             mb_tags = mb_result_to_tags(res)
+            mb_tags.update(qobuz_extra_tags)
             _print_mb_summary(mb_tags)
 
             opts = EmbedOptions(
