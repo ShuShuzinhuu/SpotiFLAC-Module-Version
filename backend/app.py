@@ -485,17 +485,37 @@ class SpotiFLAC_API:
                     if result:
                         width = work_area.right - work_area.left
                         height = work_area.bottom - work_area.top
-                        # First move to top-left, then resize to ensure proper positioning
-                        self._window.move(work_area.left, work_area.top)
-                        self._window.resize(width, height)
+                        # Use SetWindowPos API for more reliable positioning
+                        hwnd = ctypes.windll.user32.FindWindowW(None, self._window.title)
+                        if hwnd:
+                            # SWP_NOZORDER = 4, SWP_FRAMECHANGED = 0x20
+                            ctypes.windll.user32.SetWindowPos(
+                                hwnd, 
+                                None,
+                                work_area.left,
+                                work_area.top,
+                                width,
+                                height,
+                                4 | 0x20
+                            )
+                        else:
+                            self._window.move(work_area.left, work_area.top)
+                            self._window.resize(width, height)
+                        self._is_maximized = True
                     else:
-                        # Fallback if SystemParametersInfoW fails
+                        # Fallback - use maximize but with adjustment
                         self._window.maximize()
-                except Exception:
-                    self._window.maximize()
+                        self._is_maximized = True
+                except Exception as e:
+                    self.log(f"Maximize error: {e}", "warn")
+                    try:
+                        self._window.maximize()
+                        self._is_maximized = True
+                    except:
+                        pass
             else:
                 self._window.maximize()
-            self._is_maximized = True
+                self._is_maximized = True
 
     def Quit(self):
         if self._window:
