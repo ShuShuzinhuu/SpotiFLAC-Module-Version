@@ -38,7 +38,7 @@ from .providers import (
 )
 from .core import TrackMetadata, DownloadResult
 
-__version__ = "0.7.9"
+__version__ = "0.8.0"
 
 __all__ = [
     "SpotiFLAC",
@@ -84,6 +84,7 @@ def SpotiFLAC(
         enrich_metadata:       bool             = True,
         enrich_providers:      list[str] | None = None,
         qobuz_token:           str | None       = None,
+        qobuz_local_api_url:   str | None       = None,
         track_max_retries:     int              = 0,
         post_download_action:  str              = "none",
         post_download_command: str              = "",
@@ -119,6 +120,7 @@ def SpotiFLAC(
         enrich_metadata         = enrich_metadata,
         enrich_providers        = enrich_providers or ["deezer", "apple", "qobuz", "tidal", "soundcloud"],
         qobuz_token             = qobuz_token,
+        qobuz_local_api_url     = qobuz_local_api_url,
         track_max_retries       = track_max_retries,
         post_download_action    = post_download_action,
         post_download_command   = post_download_command,

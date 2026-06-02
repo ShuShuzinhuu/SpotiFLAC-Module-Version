@@ -373,15 +373,16 @@ def _build_gdstudio_signature(host: str, track_id: str, ts9: str) -> str:
 
 
 def _fetch_stream_url_once(
-        api_base:  str,
-        track_id:  int,
-        quality:   str,
-        timeout_s: int = _API_TIMEOUT_S,
+        api_base:      str,
+        track_id:      int,
+        quality:       str,
+        timeout_s:     int = _API_TIMEOUT_S,
+        local_api_url: str | None = None,
 ) -> str:
     api_cleaning = api_base.rstrip('/')
     
-    # Rilevamento API locale configurata dall'utente
-    local_api_url = os.environ.get("QOBUZ_LOCAL_API_URL", "http://localhost:8000").rstrip('/')
+    if local_api_url:
+        local_api_url = local_api_url.rstrip('/')
     is_local_api = (api_cleaning == local_api_url) and bool(local_api_url)
     
     is_zarz = "zarz.moe" in api_cleaning
@@ -532,10 +533,11 @@ def _fetch_stream_url_once(
 
 
 def _fetch_stream_url_parallel(
-        apis:      list[str],
-        track_id:  int,
-        quality:   str,
-        timeout_s: int = _API_TIMEOUT_S,
+        apis:          list[str],
+        track_id:      int,
+        quality:       str,
+        timeout_s:     int = _API_TIMEOUT_S,
+        local_api_url: str | None = None,
 ) -> tuple[str, str]:
     if not apis:
         raise SpotiflacError(ErrorKind.UNAVAILABLE, "no stream APIs configured", "qobuz")
@@ -546,7 +548,7 @@ def _fetch_stream_url_parallel(
     pool = ThreadPoolExecutor(max_workers=min(len(apis), 4))
     try:
         futures: dict[Future, str] = {
-            pool.submit(_fetch_stream_url_once, api, track_id, quality, timeout_s): api
+            pool.submit(_fetch_stream_url_once, api, track_id, quality, timeout_s, local_api_url): api
             for api in apis
         }
         for fut in as_completed(futures, timeout=timeout_s + 2):
@@ -582,16 +584,22 @@ def _fetch_stream_url_parallel(
 class QobuzProvider(BaseProvider):
     name = "qobuz"
 
-    def __init__(self, timeout_s: int = 30, qobuz_token: str | None = None) -> None:
+    def __init__(
+            self,
+            timeout_s: int = 30,
+            qobuz_token: str | None = None,
+            local_api_url: str | None = None,
+    ) -> None:
         super().__init__(
             timeout_s = timeout_s,
             retry     = RetryConfig(max_attempts=2),
             headers   = {"User-Agent": _DEFAULT_UA, "Accept": "application/json"},
         )
-        self._session    = NetworkManager.get_sync_client() 
+        self._session     = NetworkManager.get_sync_client()
         self._creds:      QobuzCredentials | None = None
         self._creds_lock = threading.Lock()
         self._qobuz_token = qobuz_token or os.environ.get("QOBUZ_AUTH_TOKEN")
+        self._local_api_url = local_api_url or os.environ.get("QOBUZ_LOCAL_API_URL")
 
     def _get_credentials(self, force_refresh: bool = False) -> QobuzCredentials:
         with self._creds_lock:
@@ -766,6 +774,7 @@ class QobuzProvider(BaseProvider):
         if not allow_fallback:
             chain = chain[:1]
 
+        local_api_url = self._local_api_url.rstrip('/') if self._local_api_url else None
         last_exc: Exception | None = None
 
         for i, q in enumerate(chain):
@@ -773,7 +782,7 @@ class QobuzProvider(BaseProvider):
                 raise SpotiflacError(ErrorKind.UNAVAILABLE, "All available endpoints have been excluded", self.name)
             
             try:
-                winner_api, stream_url = _fetch_stream_url_parallel(ordered_apis, track_id, q, _API_TIMEOUT_S)
+                winner_api, stream_url = _fetch_stream_url_parallel(ordered_apis, track_id, q, _API_TIMEOUT_S, local_api_url)
                 return winner_api, stream_url, q
             except SpotiflacError as exc:
                 last_exc = exc

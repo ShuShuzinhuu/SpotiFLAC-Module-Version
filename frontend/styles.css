@@ -427,6 +427,115 @@
     .act-btn.secondary:hover { background: var(--surface3); border-color: var(--border2); color: var(--text); }
     .act-btn:active { transform: scale(.95); }
 
+    .api-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .api-modal.hidden { display: none; }
+    .api-modal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, .42);
+      backdrop-filter: blur(2px);
+    }
+    .api-modal-card {
+      position: relative;
+      width: min(520px, 100%);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: 0 26px 60px rgba(0,0,0,.18);
+      padding: 20px;
+      z-index: 1;
+    }
+    .api-modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .api-modal-body input {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--input-bg);
+      color: var(--input-text);
+      padding: 12px 14px;
+      font-size: 13px;
+    }
+    .api-modal-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-top: 18px;
+      flex-wrap: wrap;
+    }
+    .api-modal-actions > div {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .api-modal-header .close-btn {
+      border: none;
+      background: var(--surface2);
+      color: var(--text2);
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    .api-modal-header .close-btn:hover {
+      background: var(--surface3);
+    }
+    .api-config-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      font-size: 12px;
+      line-height: 1.3;
+      color: var(--text2);
+      background: var(--surface2);
+      white-space: nowrap;
+    }
+    .api-config-pill::before {
+      content: '';
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .api-config-pill.configured {
+      border-color: var(--green);
+      color: var(--green);
+      background: rgba(34,197,94,.12);
+    }
+    .api-config-pill.configured::before {
+      background: var(--green);
+      box-shadow: 0 0 0 1px rgba(34,197,94,.2);
+    }
+    .api-config-help {
+      font-size: 12px;
+      color: var(--yellow);
+      text-decoration: none;
+      white-space: nowrap;
+      border-bottom: 1px dashed transparent;
+    }
+    .api-config-help:hover {
+      border-bottom-color: var(--yellow);
+    }
+
     /* Track controls */
     #track-controls {
       width: 100%; /* AGGIUNTO: forza il contenitore a prendere tutto lo spazio */

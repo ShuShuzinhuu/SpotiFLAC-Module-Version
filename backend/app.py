@@ -422,8 +422,43 @@ class SpotiFLAC_API:
             from SpotiFLAC.core.profiles import save_profile
             save_profile(name, cfg)
             self.log(f"Profile '{name}' saved successfully.", "ok")
+            return True
         except Exception as e:
             self.log(f"Failed to save profile: {e}", "error")
+            return False
+
+    def delete_profile_data(self, name):
+        try:
+            from SpotiFLAC.core.profiles import delete_profile
+            deleted = delete_profile(name)
+            self.log(f"Profile '{name}' deleted: {deleted}.", "ok" if deleted else "warn")
+            return deleted
+        except Exception as e:
+            self.log(f"Failed to delete profile: {e}", "error")
+            return False
+
+    def check_qobuz_api(self, url):
+        return self._check_api_endpoint(url)
+
+    def check_tidal_api(self, url):
+        return self._check_api_endpoint(url)
+
+    def _check_api_endpoint(self, url):
+        try:
+            if not url or not isinstance(url, str) or not url.strip():
+                raise ValueError('URL must be a non-empty string')
+            normalized = url.strip()
+            if not normalized.lower().startswith('http'):
+                raise ValueError('URL must start with http or https')
+            client = NetworkManager.get_sync_client()
+            resp = client.get(normalized, follow_redirects=True, timeout=10.0)
+            return {
+                'ok': 200 <= resp.status_code < 400,
+                'status_code': resp.status_code,
+                'url': str(resp.url),
+            }
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
 
     # ── Window controls ───────────────────────────────────────────────────────
 
@@ -441,12 +476,21 @@ class SpotiFLAC_API:
             if sys.platform == 'win32':
                 try:
                     import ctypes
+                    # Get monitor work area (excluding taskbar)
                     work_area = ctypes.wintypes.RECT()
-                    ctypes.windll.user32.SystemParametersInfoW(48, 0, ctypes.byref(work_area), 0)
                     # SPI_GETWORKAREA = 48
-                    self._window.resize(work_area.right - work_area.left,
-                                        work_area.bottom - work_area.top)
-                    self._window.move(work_area.left, work_area.top)
+                    result = ctypes.windll.user32.SystemParametersInfoW(
+                        48, 0, ctypes.byref(work_area), 0
+                    )
+                    if result:
+                        width = work_area.right - work_area.left
+                        height = work_area.bottom - work_area.top
+                        # First move to top-left, then resize to ensure proper positioning
+                        self._window.move(work_area.left, work_area.top)
+                        self._window.resize(width, height)
+                    else:
+                        # Fallback if SystemParametersInfoW fails
+                        self._window.maximize()
                 except Exception:
                     self._window.maximize()
             else:
@@ -1104,7 +1148,7 @@ class SpotiFLAC_API:
             track_max_retries     = int(config.get("track_max_retries", 0))
             post_download_action  = config.get("post_download_action", "none")
             post_download_command = config.get("post_download_command", "")
-            qobuz_token           = config.get("qobuz_token") or None
+            qobuz_local_api_url   = config.get("qobuz_local_api_url") or None
             tidal_custom_api      = config.get("tidal_custom_api") or None
             loop_val              = config.get("loop", None)
             loop_minutes          = int(loop_val) if loop_val else None
@@ -1165,7 +1209,7 @@ class SpotiFLAC_API:
                     lyrics_providers        = lyrics_providers,
                     enrich_metadata         = enrich_metadata,
                     enrich_providers        = enrich_providers,
-                    qobuz_token             = qobuz_token,
+                    qobuz_local_api_url     = qobuz_local_api_url,
                     tidal_custom_api        = tidal_custom_api,
                     track_max_retries       = track_max_retries,
                     post_download_action    = post_download_action,

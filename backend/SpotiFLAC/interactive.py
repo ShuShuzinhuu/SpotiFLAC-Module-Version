@@ -377,8 +377,8 @@ def _summary(cfg: dict) -> None:
     if action and action != "none":
         row("Post-download", action)
 
-    if cfg.get("qobuz_token"):
-        row("Qobuz token", "✓ set")
+    if cfg.get("qobuz_local_api_url"):
+        row("Qobuz local API", cfg["qobuz_local_api_url"])
     if cfg.get("tidal_custom_api"):
         row("Custom Tidal API", cfg["tidal_custom_api"])
     if cfg.get("loop"):
@@ -736,12 +736,14 @@ def run_interactive() -> dict:
     else:
         cfg["post_download_command"] = cfg.get("post_download_command", "")
 
-    # ── 11. Optional Tokens ──────────────────────────────────────────────────
-    _section("12 · Optional Tokens")
-    cfg["qobuz_token"] = _ask("Qobuz auth token (leave blank to skip)", "") or None
+    # ── 11. Optional Qobuz Local API ───────────────────────────────────────────────
+    _section("12 · Optional Qobuz Local API")
+    cfg["qobuz_local_api_url"] = _ask(
+        "Qobuz local API URL (leave blank to skip)",
+        cfg.get("qobuz_local_api_url", "") or "",
+    ) or None
 
     # ── 12.5. Custom Tidal API ───────────────────────────────────────────────
-    _section("12.5 · Custom Tidal API Instance")
     print(f"  {DIM('Self-host your own hifi-api instance for guaranteed availability.')}")
     print(f"  {DIM('Create one at: https://github.com/binimum/hifi-api')}")
     cfg["tidal_custom_api"] = _ask("Custom Tidal API URL (leave blank to skip)", cfg.get("tidal_custom_api", "") or "") or None
@@ -794,8 +796,8 @@ def _print_cli_command(cfg: dict) -> None:
         parts.append(f'--post-action {cfg["post_download_action"]}')
         if cfg["post_download_action"] == "command" and cfg.get("post_download_command"):
             parts.append(f'--post-command "{cfg["post_download_command"]}"')
-    if cfg.get("qobuz_token"):
-        parts.append(f'--qobuz-token "{cfg["qobuz_token"]}"')
+    if cfg.get("qobuz_local_api_url"):
+        parts.append(f'--qobuz-local-api "{cfg["qobuz_local_api_url"]}"')
     if cfg.get("tidal_custom_api"):
         parts.append(f'--tidal-api "{cfg["tidal_custom_api"]}"')
     if cfg.get("loop"):

@@ -56,6 +56,7 @@ class DownloadOptions:
         default_factory=lambda: ["deezer", "apple", "qobuz", "tidal", "soundcloud"]
     )
     qobuz_token:             str | None      = None
+    qobuz_local_api_url:     str | None      = None
 
     # ── New fields ───────────────────────────────────────────────────────
     track_max_retries:       int             = 0
@@ -73,7 +74,12 @@ def _build_provider(name: str, opts: DownloadOptions) -> BaseProvider | None:
     if cls is None:
         logger.warning("Unknown provider: %s", name)
         return None
-    kwargs = {"qobuz_token": opts.qobuz_token} if name in ("tidal", "qobuz") else {}
+    kwargs = {}
+    if name == "qobuz":
+        kwargs["qobuz_token"] = opts.qobuz_token
+        kwargs["local_api_url"] = opts.qobuz_local_api_url
+    elif name == "tidal":
+        kwargs["qobuz_token"] = opts.qobuz_token
     if name == "tidal" and opts.tidal_custom_api:
         kwargs["custom_api_url"] = opts.tidal_custom_api
     return cls(**kwargs)

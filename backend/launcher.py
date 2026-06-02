@@ -90,7 +90,7 @@ def parse_args(profile_defaults: dict | None = None) -> argparse.Namespace:
     parser.add_argument("--use-artist-subfolders",   action="store_true", dest="use_artist_subfolders",   default=pd.get("use_artist_subfolders", False))
     parser.add_argument("--use-album-subfolders",    action="store_true", dest="use_album_subfolders",    default=pd.get("use_album_subfolders", False))
     parser.add_argument("--first-artist-only",       action="store_true", dest="first_artist_only",       default=pd.get("first_artist_only", False))
-    parser.add_argument("--qobuz-token", default=None, dest="qobuz_token")
+    parser.add_argument("--qobuz-local-api", default=None, dest="qobuz_local_api_url", metavar="URL")
     # In parse_args(), nel gruppo esistente o uno nuovo:
     parser.add_argument(
         "--tidal-api",
@@ -220,7 +220,7 @@ def main() -> None:
             lyrics_providers         = cfg["lyrics_providers"],
             enrich_metadata          = cfg["enrich_metadata"],
             enrich_providers         = cfg["enrich_providers"],
-            qobuz_token              = cfg.get("qobuz_token"),
+            qobuz_local_api_url      = cfg.get("qobuz_local_api_url"),
             tidal_custom_api         = cfg.get("tidal_custom_api") or None,
             track_max_retries        = cfg.get("track_max_retries", 0),
             post_download_action     = cfg.get("post_download_action", "none"),
@@ -256,8 +256,8 @@ def main() -> None:
 
     args = parse_args(profile_defaults=merged_defaults)
 
-    quality     = args.quality     or merged_defaults.get("quality", "LOSSLESS")
-    qobuz_token = args.qobuz_token or merged_defaults.get("qobuz_token")
+    quality             = args.quality     or merged_defaults.get("quality", "LOSSLESS")
+    qobuz_local_api_url = args.qobuz_local_api_url or merged_defaults.get("qobuz_local_api_url")
 
     log_level = logging.DEBUG if args.verbose else logging.WARNING
     logging.basicConfig(level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -280,7 +280,7 @@ def main() -> None:
         lyrics_providers         = args.lyrics_providers,
         enrich_metadata          = args.enrich,
         enrich_providers         = args.enrich_providers,
-        qobuz_token              = qobuz_token,
+        qobuz_local_api_url      = qobuz_local_api_url,
         tidal_custom_api         = args.tidal_custom_api or None,
         track_max_retries        = args.retries,
         post_download_action     = args.post_action,
@@ -307,6 +307,7 @@ def main() -> None:
                 "track_max_retries":     args.retries,
                 "post_download_action":  args.post_action,
                 "post_download_command": args.post_command,
+                "qobuz_local_api_url":   args.qobuz_local_api_url,
                 "tidal_custom_api":      args.tidal_custom_api,
             }
             save_profile(args.save_profile, profile_cfg)

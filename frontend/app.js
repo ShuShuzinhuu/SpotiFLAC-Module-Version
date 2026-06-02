@@ -170,13 +170,14 @@ function applySettings(settings = {}) {
   if ($('config-retries')) $('config-retries').value = cfg.track_max_retries;
   if ($('config-post-action')) { $('config-post-action').value = cfg.post_download_action; onPostChange(); }
   if ($('config-post-cmd')) $('config-post-cmd').value = cfg.post_download_command;
-  if ($('config-qobuz-token')) $('config-qobuz-token').value = cfg.qobuz_token;
-  if ($('config-tidal-api')) $('config-tidal-api').value = cfg.tidal_custom_api;
+  if ($('config-qobuz-local-api')) $('config-qobuz-local-api').value = cfg.qobuz_local_api_url || '';
+  if ($('config-tidal-api')) $('config-tidal-api').value = cfg.tidal_custom_api || '';
   if ($('config-loop')) $('config-loop').value = cfg.loop;
   if ($('config-loglevel')) $('config-loglevel').value = cfg.log_level;
   applyListState('services-list', cfg.services);
   applyListState('lyrics-list', cfg.lyrics_providers);
   applyListState('enrich-list', cfg.enrich_providers);
+  updateAllApiConfigDisplays();
 }
 
 function applyListState(id, values = []) {
@@ -368,7 +369,7 @@ const DEFAULT_SETTINGS = {
   track_max_retries: 0,
   post_download_action: 'none',
   post_download_command: '',
-  qobuz_token: '',
+  qobuz_local_api_url: '',
   tidal_custom_api: '',
   loop: 0,
   log_level: 'INFO',
@@ -2743,11 +2744,150 @@ function buildConfig() {
     track_max_retries:      parseInt($('config-retries').value) || 0,
     post_download_action:   $('config-post-action').value,
     post_download_command:  $('config-post-cmd')?.value?.trim() || '',
-    qobuz_token:            $('config-qobuz-token').value.trim() || null,
+    qobuz_local_api_url:    $('config-qobuz-local-api').value.trim() || null,
     tidal_custom_api:       $('config-tidal-api').value.trim()  || null,
     loop:                   parseInt($('config-loop').value) || null,
     log_level:              $('config-loglevel').value,
   };
+}
+
+let apiConfigTarget = null;
+
+function openApiConfigPopup(target) {
+  apiConfigTarget = target;
+  const title = target === 'qobuz' ? 'Qobuz local API' : 'Custom Tidal API';
+  const description = target === 'qobuz'
+    ? 'Enter your local Qobuz stream API URL and verify reachability.'
+    : 'Enter your self-hosted hifi-api instance URL and verify reachability.';
+  const existingValue = target === 'qobuz'
+    ? $('config-qobuz-local-api').value.trim()
+    : $('config-tidal-api').value.trim();
+
+  const status = $('api-config-status');
+  $('api-config-title').textContent = title;
+  $('api-config-desc').textContent = description;
+  $('api-config-value').value = existingValue || '';
+  status.textContent = 'Enter a URL and press Check.';
+  status.style.color = '';
+  const helpLink = $('api-config-help');
+  if (helpLink) {
+    if (target === 'qobuz') {
+      helpLink.href = 'https://github.com/BartolomeoRusso9/qobuz-api';
+      helpLink.textContent = 'How to create your own instance';
+    } else {
+      helpLink.href = 'https://github.com/binimum/hifi-api';
+      helpLink.textContent = 'How to create your own instance';
+    }
+  }
+  $('api-config-modal').classList.remove('hidden');
+  setTimeout(() => $('api-config-value').focus(), 0);
+}
+
+function closeApiConfigPopup() {
+  apiConfigTarget = null;
+  $('api-config-modal').classList.add('hidden');
+}
+
+function normalizeApiInput(raw) {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  const first = trimmed.split(/\s+/)[0];
+  return first;
+}
+
+async function checkApiConfig() {
+  const rawValue = $('api-config-value').value;
+  const url = normalizeApiInput(rawValue);
+  const status = $('api-config-status');
+  const button = $('api-config-check-btn');
+  if (!url) {
+    status.textContent = 'Enter a URL first.';
+    status.style.color = 'var(--red)';
+    return;
+  }
+  if (rawValue.trim() !== url) {
+    status.textContent = 'Multiple URLs detected; only the first will be tested.';
+    status.style.color = 'var(--yellow)';
+    $('api-config-value').value = url;
+  } else {
+    status.textContent = 'Checking…';
+    status.style.color = '';
+  }
+  button.disabled = true;
+  try {
+    if (!window.pywebview?.api) {
+      status.textContent = 'API check unavailable in this environment.';
+      status.style.color = 'var(--red)';
+      return;
+    }
+    let result = null;
+    if (apiConfigTarget === 'qobuz') {
+      result = await window.pywebview.api.check_qobuz_api(url);
+    } else if (apiConfigTarget === 'tidal') {
+      result = await window.pywebview.api.check_tidal_api(url);
+    }
+    if (result?.ok) {
+      status.textContent = 'Reachable ✓';
+      status.style.color = 'var(--green)';
+    } else {
+      status.textContent = `Check failed: ${result?.error || 'invalid response'}`;
+      status.style.color = 'var(--red)';
+    }
+  } catch (e) {
+    status.textContent = `Check failed: ${e?.message || e}`;
+    status.style.color = 'var(--red)';
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function clearApiConfigValue() {
+  const input = $('api-config-value');
+  const status = $('api-config-status');
+  const current = normalizeApiInput(input.value);
+  if (!current) {
+    status.textContent = 'No API configured to clear.';
+    status.style.color = 'var(--red)';
+    return;
+  }
+  input.value = '';
+  status.textContent = 'API cleared from the field. Save to remove it from settings.';
+  status.style.color = 'var(--green)';
+}
+
+function saveApiConfig() {
+  if (!apiConfigTarget) return;
+  const rawValue = $('api-config-value').value;
+  const value = normalizeApiInput(rawValue);
+  if (apiConfigTarget === 'qobuz') {
+    $('config-qobuz-local-api').value = value;
+  } else if (apiConfigTarget === 'tidal') {
+    $('config-tidal-api').value = value;
+  }
+  if (rawValue.trim() !== value) {
+    const status = $('api-config-status');
+    status.textContent = 'Only the first URL was saved.';
+    status.style.color = 'var(--yellow)';
+  }
+  updateAllApiConfigDisplays();
+  closeApiConfigPopup();
+  isDirty = true;
+  updateSaveButtonVisual();
+}
+
+function updateApiConfigDisplay(target) {
+  const value = target === 'qobuz'
+    ? $('config-qobuz-local-api').value.trim()
+    : $('config-tidal-api').value.trim();
+  const display = $(target === 'qobuz' ? 'config-qobuz-local-api-display' : 'config-tidal-api-display');
+  if (!display) return;
+  display.textContent = value ? 'Configured' : 'Not set';
+  display.classList.toggle('configured', !!value);
+}
+
+function updateAllApiConfigDisplays() {
+  updateApiConfigDisplay('qobuz');
+  updateApiConfigDisplay('tidal');
 }
 
 // ── Profiles ──────────────────────────────────────────────────────────────────
@@ -2760,18 +2900,38 @@ async function saveProfile() {
     loadHistoryAndProfiles();
   }
 }
+async function deleteProfile() {
+  const name = $('profile-select').value;
+  if (!name) {
+    logMessage('Select a profile to delete.', 'error');
+    return;
+  }
+  if (!confirm(`Delete profile '${name}'? This cannot be undone.`)) return;
+  if (window.pywebview?.api) {
+    const result = await window.pywebview.api.delete_profile_data(name);
+    if (result) {
+      logMessage(`Profile '${name}' deleted.`, 'ok');
+      loadHistoryAndProfiles();
+    } else {
+      logMessage(`Unable to delete profile '${name}'.`, 'error');
+    }
+  }
+}
 async function loadProfile() {
   const name = $('profile-select').value;
   if (!name || !window.pywebview?.api) return;
   const data = await window.pywebview.api.load_profile_data(name);
   if (!data) return;
-  if (data.quality)          $('config-quality').value   = data.quality;
-  if (data.filename_format)  $('config-filename').value  = data.filename_format;
-  if (data.qobuz_token)      $('config-qobuz-token').value = data.qobuz_token;
-  if (data.tidal_custom_api) $('config-tidal-api').value   = data.tidal_custom_api;
+  if (data.quality)                $('config-quality').value            = data.quality;
+  if (data.filename_format)         $('config-filename').value           = data.filename_format;
+  $('config-qobuz-local-api').value = data.qobuz_local_api_url || '';
+  $('config-tidal-api').value       = data.tidal_custom_api || '';
   $('config-track-numbers').checked = !!data.use_track_numbers; onTNChange();
   $('config-lyrics').checked = data.lyrics !== false;
   $('config-enrich').checked        = data.enrich_metadata !== false; onEnrichChange();
+  updateAllApiConfigDisplays();
+  isDirty = true;
+  updateSaveButtonVisual();
   logMessage(`Profile '${name}' loaded.`, 'ok');
 }
 

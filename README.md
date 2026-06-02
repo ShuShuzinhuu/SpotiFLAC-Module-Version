@@ -420,28 +420,20 @@ SpotiFLAC(
 
 ---
 
-## Qobuz Token (Optional)
+## Qobuz Local API URL (Optional)
 
-Setting a personal Qobuz token improves metadata resolution reliability. The token is used as a **last resort fallback** — requests are first attempted anonymously, and only if they fail (HTTP 400/401) the token is injected. A **free Qobuz account** is sufficient.
+SpotiFLAC can use an optional self-hosted Qobuz stream API for improved reliability and reduced rate limits. If you do not provide a local API URL, Qobuz requests are attempted anonymously.
 
-### How to Extract Your Token
+**How to deploy your own instance:** [github.com/BartolomeoRusso9/qobuz-api](https://github.com/BartolomeoRusso9/qobuz-api)
 
-1. Log in to [play.qobuz.com](https://play.qobuz.com)
-2. Open DevTools with **F12** → go to the **Network** tab
-3. Play any track or perform any search to trigger API calls
-4. Filter requests by typing `api.json` in the search bar
-5. Click on any request to `www.qobuz.com/api.json/...`
-6. In the **Request Headers** panel, look for: **x-user-auth-token: your_token_here**
-7. Copy the value — that is your token
+### How to Apply Qobuz Local API URL in SpotiFLAC
 
-### How to Apply Qobuz Token in SpotiFLAC
-
-**Interactive Wizard:** The wizard prompts you to paste your Qobuz token during configuration.
+**Interactive Wizard:** The wizard prompts you to enter your local Qobuz API URL during configuration.
 
 **Environment Variable:**
 
 ```bash
-export QOBUZ_AUTH_TOKEN="YOUR_TOKEN_HERE"
+export QOBUZ_LOCAL_API_URL="https://localhost:8000"
 ```
 
 **Python:**
@@ -451,14 +443,14 @@ from SpotiFLAC import SpotiFLAC
 SpotiFLAC(
     url="URL",
     output_dir="./downloads",
-    qobuz_token="YOUR_QOBUZ_TOKEN",
+    qobuz_local_api_url="https://localhost:8000",
 )
 ```
 
 **config.json:**
 ```json
 {
-    "qobuz_token": "YOUR_QOBUZ_TOKEN"
+    "qobuz_local_api_url": "https://localhost:8000"
 }
 ```
 
@@ -471,6 +463,8 @@ If you want guaranteed availability and full control, you can self-host your own
 and point SpotiFLAC to it — it will always be tried first, before any public mirror.
 
 > **How to deploy your own instance:** [github.com/binimum/hifi-api](https://github.com/binimum/hifi-api)
+
+
 
 ### Python
 
@@ -527,7 +521,7 @@ Program can also be ran by downloading the python files and calling <code>python
                         [--use-artist-subfolders]
                         [--use-album-subfolders]
                         [--first-artist-only]
-                        [--qobuz-token TOKEN]
+                        [--qobuz-local-api URL]
                         [--tidal-api URL]
                         [--loop minutes]
                         [--verbose]
@@ -557,7 +551,7 @@ chmod +x SpotiFLAC-Linux-arm64
                         [--use-artist-subfolders]
                         [--use-album-subfolders]
                         [--first-artist-only]
-                        [--qobuz-token TOKEN]
+                        [--qobuz-local-api URL]
                         [--tidal-api URL]
                         [--loop minutes]
                         [--verbose]
@@ -603,7 +597,7 @@ chmod +x SpotiFLAC-Linux-arm64
 | **`lyrics_providers`**         | `list`  | `["spotify", "apple", "musixmatch", "lrclib", "amazon"]`  | Priority order of lyrics providers to attempt.                                                                                                                                                                                                                               |
 | **`enrich_metadata`**          | `bool`  | `True`                                                    | Enables multi-provider metadata enrichment (HD covers, BPM, Labels, etc.).                                                                                                                                                                                                   |
 | **`enrich_providers`**         | `list`  | `["deezer", "apple", "qobuz", "tidal", "soundcloud"]`     | Priority order of metadata providers to attempt.                                                                                                                                                                                                                             |
-| **`qobuz_token`**              | `str`   | `None`                                                    | Optional Qobuz user auth token used as fallback for metadata resolution. Fallback: env `QOBUZ_AUTH_TOKEN`.                                                                                                                                                                   |
+| **`qobuz_local_api_url`**      | `str`   | `None`                                                    | Optional local Qobuz stream API URL. When set, the provider uses this endpoint for Qobuz stream requests.                                                                                                                                                                    |
 | **`post_download_action`**     | `str`   | `"none"`                                                  | Action after all downloads finish: `"none"`, `"open_folder"`, `"notify"`, `"command"`.                                                                                                                                                                                       |
 | **`post_download_command`**    | `str`   | `""`                                                      | Shell command to run when `post_download_action="command"`. Supports `{folder}`, `{succeeded}`, `{failed}` placeholders.                                                                                                                                                     |
 
@@ -638,7 +632,7 @@ When customizing the `filename_format` string, you can use the following dynamic
 | `--use-album-subfolders`    |       | `False`                                       | Organize files into per-album subfolders.                                                                                                                                                                   |
 | `--first-artist-only`       |       | `False`                                       | Use only the first artist in tags and filename.                                                                                                                                                             |
 | `--include-featuring`       |       | `False`                                       | Include tracks where the artist appears as a featured artist. Only applies to artist/discography URLs.                                                                                                      |
-| `--qobuz-token`             |       | `None`                                        | Qobuz user auth token (`x-user-auth-token`).                                                                                                                                                                |
+| `--qobuz-local-api`         |       | `None`                                        | Optional local Qobuz stream API URL.                                                                                                                                                                         |
 | `--tidal-api`               |       | `None`                                        | URL of a self-hosted [hifi-api](https://github.com/binimum/hifi-api) instance. Takes priority over the built-in public mirror pool.                                                                         |
 | `--loop`                    | `-l`  | `None`                                        | Keep retrying permanently failed tracks every N minutes.                                                                                                                                                    |
 | `--retries`                 |       | `0`                                           | Extra per-track download attempts on failure. Cycles through all providers with exponential backoff.                                                                                                        |
@@ -700,7 +694,7 @@ Your support helps keep development going._
 
 ## API Credits
 
-[Song.link](https://song.link) · [hifi-api](https://github.com/binimum/hifi-api) · [dabmusic.xyz](https://dabmusic.xyz) · [afkarxyz](https://github.com/afkarxyz) · [MusicBrainz](https://musicbrainz.org) · [SoundCloud](https://soundcloud.com) · [Apple Music](https://music.apple.com) · [YouTube Music](https://music.youtube.com) · [Pandora](https://www.pandora.com)
+[Song.link](https://song.link) · [hifi-api](https://github.com/binimum/hifi-api) · [qobuz-api](https://github.com/BartolomeoRusso9/qobuz-api) ·[dabmusic.xyz](https://dabmusic.xyz) · [afkarxyz](https://github.com/afkarxyz) · [MusicBrainz](https://musicbrainz.org) · [SoundCloud](https://soundcloud.com) · [Apple Music](https://music.apple.com) · [YouTube Music](https://music.youtube.com) · [Pandora](https://www.pandora.com)
 
 > [!TIP]
 >

@@ -386,12 +386,20 @@
           <div class="s-section">
             <div class="s-title">Auth & Custom APIs</div>
             <div class="s-row">
-              <span class="s-label">Qobuz token<small>x-user-auth-token from DevTools</small></span>
-              <input type="password" id="config-qobuz-token" placeholder="leave empty" style="width:180px;">
+              <span class="s-label">Custom Qobuz API<small>Optional self-hosted Qobuz stream API</small></span>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <button class="act-btn secondary" type="button" onclick="openApiConfigPopup('qobuz')" style="padding:5px 12px;font-size:11.5px;">Configure</button>
+                <span id="config-qobuz-local-api-display" class="api-config-pill">Not set</span>
+              </div>
+              <input type="hidden" id="config-qobuz-local-api">
             </div>
             <div class="s-row">
               <span class="s-label">Custom Tidal API<small>Self-hosted hifi-api instance</small></span>
-              <input type="text" id="config-tidal-api" placeholder="https://…" style="width:180px;">
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <button class="act-btn secondary" type="button" onclick="openApiConfigPopup('tidal')" style="padding:5px 12px;font-size:11.5px;">Configure</button>
+                <span id="config-tidal-api-display" class="api-config-pill">Not set</span>
+              </div>
+              <input type="hidden" id="config-tidal-api">
             </div>
           </div>
           <div class="s-section">
@@ -405,6 +413,10 @@
               <span class="s-label">Load</span>
               <select id="profile-select" style="flex:1;"><option value="">Select…</option></select>
               <button onclick="loadProfile()" class="act-btn secondary" style="padding:5px 10px;font-size:11.5px;">Load</button>
+            </div>
+            <div class="s-row">
+              <span class="s-label">Delete</span>
+              <button onclick="deleteProfile()" class="act-btn secondary" style="padding:5px 10px;font-size:11.5px;color:var(--red);border-color:rgba(239,68,68,.35);">Delete</button>
             </div>
           </div>
         </div>
@@ -520,6 +532,33 @@
         </div>
       </div>
     </div></div><div id="save-toast" class="save-toast hidden">Impostazioni salvate.</div>
+  <div id="api-config-modal" class="api-modal hidden">
+    <div class="api-modal-backdrop" onclick="closeApiConfigPopup()"></div>
+    <div class="api-modal-card">
+      <div class="api-modal-header">
+        <div>
+          <div id="api-config-title" class="s-title">Configure API</div>
+          <div id="api-config-desc" style="font-size:12px;color:var(--muted);margin-top:4px;">Enter the URL and verify the endpoint.</div>
+        </div>
+        <button class="close-btn" type="button" onclick="closeApiConfigPopup()">✕</button>
+      </div>
+      <div class="api-modal-body">
+        <input type="text" id="api-config-value" placeholder="https://...">
+        <div style="display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap;">
+          <button class="act-btn secondary" type="button" onclick="checkApiConfig()" id="api-config-check-btn">Check API</button>
+          <button class="act-btn secondary" type="button" onclick="clearApiConfigValue()" id="api-config-clear-btn">Clear</button>
+          <span id="api-config-status" style="font-size:12px;color:var(--muted);">Enter a URL and press Check.</span>
+        </div>
+      </div>
+      <div class="api-modal-actions">
+        <a id="api-config-help" class="api-config-help" href="#" target="_blank" rel="noreferrer">How to create your own instance</a>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="act-btn secondary" type="button" onclick="closeApiConfigPopup()">Cancel</button>
+          <button class="act-btn primary" type="button" onclick="saveApiConfig()" id="api-config-save-btn">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <div id="fetching-toast" role="status" aria-live="polite">
   <div class="ft-icon">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
