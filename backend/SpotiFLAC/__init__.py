@@ -38,7 +38,7 @@ from .providers import (
 )
 from .core import TrackMetadata, DownloadResult
 
-__version__ = "0.8.3"
+__version__ = "0.8.4"
 
 __all__ = [
     "SpotiFLAC",
@@ -89,6 +89,7 @@ def SpotiFLAC(
         post_download_action:  str              = "none",
         post_download_command: str              = "",
         tidal_custom_api:      str | None       = None,
+        timeout_s:             int | None       = None
 ) -> None:
     """
     Scarica tracce/album/playlist da Spotify, Tidal, Apple Music, SoundCloud o YouTube.
@@ -125,6 +126,7 @@ def SpotiFLAC(
         post_download_action    = post_download_action,
         post_download_command   = post_download_command,
         tidal_custom_api        = tidal_custom_api,
+        timeout_s               = timeout_s,
     )
 
     try:

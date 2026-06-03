@@ -66,6 +66,7 @@ class DownloadOptions:
     # Supported placeholders: {folder} {succeeded} {failed}
     post_download_command:   str             = ""
     tidal_custom_api:        str | None      = None
+    timeout_s:               int | None       = None
 
 
 def _build_provider(name: str, opts: DownloadOptions) -> BaseProvider | None:
@@ -96,72 +97,100 @@ def download_one(
     """
     Attempts to download a single track across all providers in order,
     with per-track retry if track_max_retries > 0.
-
+ 
+    If opts.timeout_s is set the entire attempt (all providers + all retries)
+    must complete within that many seconds; otherwise the download is
+    cancelled and DownloadResult.fail() is returned.
+ 
     Retry strategy: exponential backoff (2^attempt seconds, max 30s).
     Each retry starts over from the first provider in the list.
     """
-    max_retries = opts.track_max_retries
-    manager = DownloadManager()
-    errors: dict[str, str] = {}
-
-    for attempt in range(max_retries + 1):
-        if attempt > 0:
-            wait = min(2 ** attempt, 30)
-            from tqdm import tqdm
-            safe_tqdm_write(f"\n  ↺  Retry {attempt}/{max_retries} in {wait}s…")
-            time.sleep(wait)
-            errors.clear()
-
-        for provider in providers:
-            logger.info("[%s] Trying: %s — %s", provider.name, metadata.artists, metadata.title)
-
-            cb = ProgressCallback(item_id=metadata.id, track_name=metadata.title)
-            provider.set_progress_callback(cb)
-
-            result = provider.download_track(
-                metadata,
-                output_dir,
-                filename_format         = opts.filename_format,
-                position                = position,
-                include_track_num       = opts.use_track_numbers,
-                use_album_track_num     = opts.use_album_track_numbers,
-                first_artist_only       = opts.first_artist_only,
-                allow_fallback          = opts.allow_fallback,
-                quality                 = opts.quality,
-                embed_lyrics            = opts.embed_lyrics,
-                lyrics_providers        = opts.lyrics_providers,
-                enrich_metadata         = opts.enrich_metadata,
-                enrich_providers        = opts.enrich_providers,
-                qobuz_token             = opts.qobuz_token,
-                is_album                = is_album,
-            )
-
-            if result.success:
-                if result.skipped:
-                    logger.info("[%s] ⏭ %s — %s", provider.name, metadata.artists, metadata.title)
+    import concurrent.futures as _cf
+ 
+    def _run() -> DownloadResult:
+        max_retries = opts.track_max_retries
+        manager = DownloadManager()
+        errors: dict[str, str] = {}
+ 
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                wait = min(2 ** attempt, 30)
+                from tqdm import tqdm
+                safe_tqdm_write(f"\n  ↺  Retry {attempt}/{max_retries} in {wait}s…")
+                time.sleep(wait)
+                errors.clear()
+ 
+            for provider in providers:
+                logger.info("[%s] Trying: %s — %s", provider.name, metadata.artists, metadata.title)
+ 
+                cb = ProgressCallback(item_id=metadata.id, track_name=metadata.title)
+                provider.set_progress_callback(cb)
+ 
+                result = provider.download_track(
+                    metadata,
+                    output_dir,
+                    filename_format         = opts.filename_format,
+                    position                = position,
+                    include_track_num       = opts.use_track_numbers,
+                    use_album_track_num     = opts.use_album_track_numbers,
+                    first_artist_only       = opts.first_artist_only,
+                    allow_fallback          = opts.allow_fallback,
+                    quality                 = opts.quality,
+                    embed_lyrics            = opts.embed_lyrics,
+                    lyrics_providers        = opts.lyrics_providers,
+                    enrich_metadata         = opts.enrich_metadata,
+                    enrich_providers        = opts.enrich_providers,
+                    qobuz_token             = opts.qobuz_token,
+                    is_album                = is_album,
+                )
+ 
+                if result.success:
+                    if result.skipped:
+                        logger.info("[%s] ⏭ %s — %s", provider.name, metadata.artists, metadata.title)
+                        return result
+                    if opts.output_path and result.file_path:
+                        import shutil
+                        _, ext = os.path.splitext(result.file_path)
+                        base_target, _ = os.path.splitext(opts.output_path)
+                        target = base_target + ext
+                        os.makedirs(os.path.dirname(os.path.abspath(target)) or ".", exist_ok=True)
+                        if os.path.abspath(result.file_path) != os.path.abspath(target):
+                            if os.path.exists(target):
+                                os.remove(target)
+                            shutil.move(result.file_path, target)
+                        result = DownloadResult.ok(result.provider, target, result.format or "flac")
+ 
+                    logger.info("[%s] ✓ %s — %s", provider.name, metadata.artists, metadata.title)
                     return result
-                if opts.output_path and result.file_path:
-                    import shutil
-                    _, ext = os.path.splitext(result.file_path)
-                    base_target, _ = os.path.splitext(opts.output_path)
-                    target = base_target + ext
-                    os.makedirs(os.path.dirname(os.path.abspath(target)) or ".", exist_ok=True)
-                    if os.path.abspath(result.file_path) != os.path.abspath(target):
-                        if os.path.exists(target):
-                            os.remove(target)
-                        shutil.move(result.file_path, target)
-                    result = DownloadResult.ok(result.provider, target, result.format or "flac")
-
-                logger.info("[%s] ✓ %s — %s", provider.name, metadata.artists, metadata.title)
-                return result
-
-            errors[provider.name] = result.error or "unknown error"
-            logger.warning("[%s] ✗ %s", provider.name, result.error)
-
-    attempts_str = f"{max_retries + 1} attempt(s)"
-    summary = "; ".join(f"{k}: {v}" for k, v in errors.items())
-    return DownloadResult.fail("none", f"All providers failed after {attempts_str} — {summary}")
-
+ 
+                errors[provider.name] = result.error or "unknown error"
+                logger.warning("[%s] ✗ %s", provider.name, result.error)
+ 
+        attempts_str = f"{max_retries + 1} attempt(s)"
+        summary = "; ".join(f"{k}: {v}" for k, v in errors.items())
+        return DownloadResult.fail("none", f"All providers failed after {attempts_str} — {summary}")
+ 
+    # ── Timeout wrapper ────────────────────────────────────────────────────────
+    if opts.timeout_s and opts.timeout_s > 0:
+        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+            _future = _pool.submit(_run)
+            try:
+                return _future.result(timeout=opts.timeout_s)
+            except _cf.TimeoutError:
+                safe_tqdm_write(
+                    f"\n  ⏱  Timeout ({opts.timeout_s}s) reached for "
+                    f"'{metadata.title}' — skipping track."
+                )
+                logger.warning(
+                    "[downloader] timeout_s=%d exceeded for track '%s' by '%s'",
+                    opts.timeout_s, metadata.title, metadata.artists,
+                )
+                return DownloadResult.fail(
+                    "none",
+                    f"Download timed out after {opts.timeout_s}s",
+                )
+    else:
+        return _run()
 
 # ---------------------------------------------------------------------------
 # Post-download actions helpers

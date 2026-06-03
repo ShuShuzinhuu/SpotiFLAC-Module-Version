@@ -373,6 +373,10 @@ def _summary(cfg: dict) -> None:
     if retries:
         row("Retries per track", str(retries))
 
+    timeout = cfg.get("timeout_s", 0)
+    if timeout:
+        row("Timeout", f"{timeout} seconds")
+
     action = cfg.get("post_download_action", "none")
     if action and action != "none":
         row("Post-download", action)
@@ -675,7 +679,7 @@ def run_interactive() -> dict:
         cfg["first_artist_only"]       = _ask_bool("Use only the first artist in tags and filename?", cfg["first_artist_only"])
 
     # ── 7. Lyrics ────────────────────────────────────────────────────────────
-    _section("8 · Lyrics")
+    _section("7 · Lyrics")
     cfg["embed_lyrics"] = _ask_bool("Embed synchronized lyrics?", cfg.get("embed_lyrics", True))
 
     if cfg["embed_lyrics"]:
@@ -689,7 +693,7 @@ def run_interactive() -> dict:
         cfg["lyrics_providers"] = cfg.get("lyrics_providers") or ["lrclib", "apple", "amazon"]
 
     # ── 8. Metadata enrichment ──────────────────────────────────────────────
-    _section("9 · Metadata Enrichment")
+    _section("8 · Metadata Enrichment")
     print(f"  {DIM('Adds genre, BPM, label, HD cover, MusicBrainz IDs, and more.')}")
     cfg["enrich_metadata"] = _ask_bool("Enable metadata enrichment?", cfg.get("enrich_metadata", True))
 
@@ -713,6 +717,17 @@ def run_interactive() -> dict:
         cfg["track_max_retries"] = max(0, int(retry_str))
     except ValueError:
         cfg["track_max_retries"] = 0
+
+    # ── 9.5. Timeout ───────────────────────────────────────────────────
+    _section("9.5 · Download Timeout")
+    print(f"  {DIM('Maximum time allowed for a single track download attempt.')}")
+    print(f"  {DIM('Useful to prevent hanging if a provider gets stuck.')}")
+    default_timeout = cfg.get("timeout_s", 0)
+    timeout_str = _ask("Timeout per track in seconds (0 = disabled)", str(default_timeout))
+    try:
+        cfg["timeout_s"] = max(0, int(timeout_str))
+    except ValueError:
+        cfg["timeout_s"] = 0
 
     # ── 10. Post-download Action ─────────────────────────────────────────────
     _section("10 · Post-Download Action")
@@ -792,6 +807,8 @@ def _print_cli_command(cfg: dict) -> None:
         parts.append(f'--enrich-providers {" ".join(cfg["enrich_providers"])}')
     if cfg.get("track_max_retries"):
         parts.append(f'--retries {cfg["track_max_retries"]}')
+    if cfg.get("timeout_s"):
+        parts.append(f'--timeout {cfg["timeout_s"]}')
     if cfg.get("post_download_action") and cfg["post_download_action"] != "none":
         parts.append(f'--post-action {cfg["post_download_action"]}')
         if cfg["post_download_action"] == "command" and cfg.get("post_download_command"):
