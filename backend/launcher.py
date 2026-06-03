@@ -7,6 +7,7 @@ New flags vs previous version:
   --post-command CMD        Shell command to run when --post-action=command
   --profile NAME            Load a saved profile before parsing remaining args
   --save-profile NAME       Save current args as a named profile after run
+  --timeout SECONDS         Max seconds per track download; track skipped if exceeded
 """
 import argparse
 import logging
@@ -91,15 +92,14 @@ def parse_args(profile_defaults: dict | None = None) -> argparse.Namespace:
     parser.add_argument("--use-album-subfolders",    action="store_true", dest="use_album_subfolders",    default=pd.get("use_album_subfolders", False))
     parser.add_argument("--first-artist-only",       action="store_true", dest="first_artist_only",       default=pd.get("first_artist_only", False))
     parser.add_argument("--qobuz-local-api", default=None, dest="qobuz_local_api_url", metavar="URL")
-    # In parse_args(), nel gruppo esistente o uno nuovo:
     parser.add_argument(
         "--tidal-api",
         default = pd.get("tidal_custom_api", None),
         dest    = "tidal_custom_api",
         metavar = "URL",
         help    = "URL of a self-hosted hifi-api instance (https://github.com/binimum/hifi-api). "
-                "Takes priority over built-in API pool.",
-)
+                  "Takes priority over built-in API pool.",
+    )
     parser.add_argument("--loop", "-l", type=int, default=None)
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument(
@@ -170,6 +170,18 @@ def parse_args(profile_defaults: dict | None = None) -> argparse.Namespace:
                   "Retries cycle through all providers with exponential backoff (2s, 4s, 8s…).",
     )
 
+    # ── Timeout ──────────────────────────────────────────────────────────────
+    timeout_grp = parser.add_argument_group("Timeout")
+    timeout_grp.add_argument(
+        "--timeout",
+        type    = int,
+        default = pd.get("timeout_s", None),
+        dest    = "timeout_s",
+        metavar = "SECONDS",
+        help    = "Maximum seconds allowed per track download (default: no limit). "
+                  "The track is skipped and counted as failed when the timeout expires.",
+    )
+
     # ── Post-download ─────────────────────────────────────────────────────────
     post_grp = parser.add_argument_group("Post-Download")
     post_grp.add_argument(
@@ -205,14 +217,14 @@ def main() -> None:
             url                      = cfg["url"],
             output_dir               = cfg["output_dir"],
             services                 = cfg["services"],
-            filename_format           = cfg["filename_format"],
+            filename_format          = cfg["filename_format"],
             use_track_numbers        = cfg["use_track_numbers"],
             use_album_track_numbers  = cfg["use_album_track_numbers"],
             use_artist_subfolders    = cfg["use_artist_subfolders"],
             use_album_subfolders     = cfg["use_album_subfolders"],
             loop                     = cfg.get("loop"),
             quality                  = cfg["quality"],
-            first_artist_only         = cfg["first_artist_only"],
+            first_artist_only        = cfg["first_artist_only"],
             log_level                = log_level,
             output_path              = cfg.get("output_path"),
             allow_fallback           = cfg.get("allow_fallback", True),
@@ -225,15 +237,15 @@ def main() -> None:
             track_max_retries        = cfg.get("track_max_retries", 0),
             post_download_action     = cfg.get("post_download_action", "none"),
             post_download_command    = cfg.get("post_download_command", ""),
+            timeout_s                = cfg.get("timeout_s"),
         )
         return
-    
+
     if len(sys.argv) == 1:
         search_dirs = [
             os.path.dirname(os.path.abspath(__file__)),
             os.getcwd(),
         ]
-        # Also check where the package data landed
         try:
             import app as _app_module
             search_dirs.insert(0, os.path.dirname(_app_module.__file__))
@@ -266,14 +278,14 @@ def main() -> None:
         url                      = args.url,
         output_dir               = args.output_dir,
         services                 = args.service,
-        filename_format           = args.filename_format,
+        filename_format          = args.filename_format,
         use_track_numbers        = args.use_track_numbers,
         use_album_track_numbers  = args.use_album_track_numbers,
         use_artist_subfolders    = args.use_artist_subfolders,
         use_album_subfolders     = args.use_album_subfolders,
         loop                     = args.loop,
         quality                  = quality,
-        first_artist_only         = args.first_artist_only,
+        first_artist_only        = args.first_artist_only,
         log_level                = log_level,
         output_path              = args.output_path,
         embed_lyrics             = args.embed_lyrics,
@@ -285,6 +297,7 @@ def main() -> None:
         track_max_retries        = args.retries,
         post_download_action     = args.post_action,
         post_download_command    = args.post_command,
+        timeout_s                = args.timeout_s,
     )
 
     if args.save_profile:
@@ -293,12 +306,12 @@ def main() -> None:
             profile_cfg = {
                 "services":              args.service,
                 "quality":               quality,
-                "filename_format":        args.filename_format,
+                "filename_format":       args.filename_format,
                 "use_track_numbers":     args.use_track_numbers,
                 "use_album_track_numbers": args.use_album_track_numbers,
                 "use_artist_subfolders": args.use_artist_subfolders,
                 "use_album_subfolders":  args.use_album_subfolders,
-                "first_artist_only":      args.first_artist_only,
+                "first_artist_only":     args.first_artist_only,
                 "allow_fallback":        True,
                 "embed_lyrics":          args.embed_lyrics,
                 "lyrics_providers":      args.lyrics_providers,
@@ -309,12 +322,12 @@ def main() -> None:
                 "post_download_command": args.post_command,
                 "qobuz_local_api_url":   args.qobuz_local_api_url,
                 "tidal_custom_api":      args.tidal_custom_api,
+                "timeout_s":             args.timeout_s,
             }
             save_profile(args.save_profile, profile_cfg)
             print(f"[profile] Saved as: {args.save_profile}")
         except Exception as exc:
             print(f"[profile] Save error: {exc}")
-
 
 
 if __name__ == "__main__":

@@ -252,6 +252,24 @@ spotiflac https://open.spotify.com/album/... ./out \
 > **Tip:** Combine `--retries` with `--loop` for maximum resilience — `--retries` handles transient errors on individual tracks, while `--loop` re-queues permanently failed tracks after N minutes.
 
 ---
+ 
+## Quick usage examples
+ 
+```bash
+# CLI — skip any track that takes more than 3 minutes
+spotiflac https://open.spotify.com/album/... ./out --service tidal --timeout 180
+ 
+# Python API
+from SpotiFLAC import SpotiFLAC
+SpotiFLAC(
+    url="https://open.spotify.com/album/...",
+    output_dir="./downloads",
+    services=["tidal", "qobuz"],
+    timeout_s=120,
+)
+```
+
+---
 
 ## Post-Download Actions
 

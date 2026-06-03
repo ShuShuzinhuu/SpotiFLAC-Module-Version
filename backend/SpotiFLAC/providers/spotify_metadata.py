@@ -723,23 +723,23 @@ class SpotifyMetadataClient:
             if not artist_data:
                 return {}
 
-            profile = artist_data.get("profile", {})
-            stats = artist_data.get("stats", {})
+            profile = artist_data.get("profile") or {}
+            stats = artist_data.get("stats") or {}
 
             avatar_node = artist_data.get("visuals", {}).get("avatarImage", {})
-            sources = avatar_node.get("sources", []) or avatar_node.get("data", {}).get("sources", [])
+            sources = avatar_node.get("sources", []) or (avatar_node.get("data") or {}).get("sources", [])
             avatar_url = sources[0].get("url") if sources else None
 
             h_node = artist_data.get("headerImage", {})
-            h_sources = h_node.get("sources", []) or h_node.get("data", {}).get("sources", [])
+            h_sources = h_node.get("sources", []) or (h_node.get("data") or {}).get("sources", [])
             header_url = h_sources[0].get("url") if h_sources else None
 
             return {
                 "id": artist_id,
                 "profile": {
-                    "name": profile.get("name", ""),
-                    "biography": re.sub(r"<[^>]+>", "", profile.get("biography", {}).get("text", "")),
-                    "verified": bool(profile.get("verified", False)),
+                    "name": (profile or {}).get("name", ""),
+                    "biography": re.sub(r"<[^>]+>", "", ((profile.get("biography") or {}).get("text") or "") if isinstance(profile.get("biography"), dict) else (profile.get("biography") or "")),
+                    "verified": bool((profile or {}).get("verified", False)),
                 },
                 "stats": {
                     "followers": int(stats.get("followers") or 0),
