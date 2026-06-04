@@ -21,17 +21,17 @@ e saltare la fase di risoluzione Spotify→Tidal.
 from __future__ import annotations
 
 import logging
+import re
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from ..core.http import NetworkManager
-import unicodedata
-import re
-from urllib.parse import urlparse
 
-from ..core.errors import AuthError, NetworkError, InvalidUrlError, SpotiflacError, ErrorKind
+from ..core.errors import AuthError, ErrorKind, InvalidUrlError, NetworkError, SpotiflacError
+from ..core.http import NetworkManager
 from ..core.models import TrackMetadata
 
 logger = logging.getLogger(__name__)
@@ -49,8 +49,21 @@ _TIDAL_UA        = (
 
 _TIDAL_DOMAINS = {"listen.tidal.com", "tidal.com", "www.tidal.com"}
 
+# Dimensione pagina per le richieste paginate (max consentito dall'API Tidal)
+_PAGE_SIZE = 100
+
+# Valori validi per il parametro filter dell'endpoint /artists/{id}/albums
+_TIDAL_FILTER_ALBUMS       = "ALBUMS"
+_TIDAL_FILTER_EPSANDSINGLES = "EPSANDSINGLES"
+_TIDAL_FILTER_COMPILATIONS  = "COMPILATIONS"
+
+
+# ---------------------------------------------------------------------------
+# URL parsing
+# ---------------------------------------------------------------------------
+
 def is_tidal_url(url: str) -> bool:
-    """Return True if the URL belongs to Tidal, including deep links."""
+    """Restituisce True se l'URL appartiene a Tidal, inclusi i deep link."""
     url_lower = url.lower().strip()
     if url_lower.startswith("tidal:"):
         return True
@@ -59,22 +72,24 @@ def is_tidal_url(url: str) -> bool:
     except Exception:
         return False
 
+
 def parse_tidal_url(url: str) -> dict[str, str]:
     """
-    Parse a Tidal URL or deep link and return {"type": ..., "id": ...}.
-    Supports: "track", "album", "playlist", "artist", "artist_discography".
+    Analizza un URL Tidal o deep link e restituisce {"type": ..., "id": ...}.
+    Supporta: "track", "album", "playlist", "artist", "artist_discography".
+    Raises InvalidUrlError se il formato non è riconoscuto.
     """
-    # Handle deep links like tidal://track/12345
+    # Gestione deep link come tidal://track/12345
     deep_link_match = re.match(r"^tidal:\/\/\/?(track|album|artist|playlist)\/([^?#/]+)", url, re.IGNORECASE)
     if deep_link_match:
         return {"type": deep_link_match.group(1).lower(), "id": deep_link_match.group(2)}
 
-    # Handle prefixes like tidal:track:12345
+    # Gestione prefissi come tidal:track:12345
     prefix_match = re.match(r"^tidal:(track|album|artist|playlist):([^?#/]+)", url, re.IGNORECASE)
     if prefix_match:
         return {"type": prefix_match.group(1).lower(), "id": prefix_match.group(2)}
 
-    # Standard HTTPS parsing
+    # Parsing HTTPS standard
     u = urlparse(url)
     path = u.path.strip("/")
 
@@ -87,56 +102,6 @@ def parse_tidal_url(url: str) -> dict[str, str]:
         entity_type = parts[0]
         entity_id   = parts[1].split("?")[0]
 
-        if entity_type == "artist" and len(parts) >= 3 and parts[2] == "discography":
-            group = parts[3] if len(parts) >= 4 else "all"
-            return {"type": "artist_discography", "id": entity_id, "group": group}
-
-        return {"type": entity_type, "id": entity_id}
-
-    raise InvalidUrlError(url) 
-
-# Dimensione pagina per le richieste paginate (max consentito dall'API Tidal)
-_PAGE_SIZE = 100
-
-# Valori validi per il parametro filter dell'endpoint /artists/{id}/albums
-# FIX: "ALBUMS" senza filter restituisce tutti i tipi — va sempre passato esplicitamente.
-_TIDAL_FILTER_ALBUMS       = "ALBUMS"
-_TIDAL_FILTER_EPSANDSINGLES = "EPSANDSINGLES"
-_TIDAL_FILTER_COMPILATIONS  = "COMPILATIONS"
-
-
-# ---------------------------------------------------------------------------
-# URL parsing
-# ---------------------------------------------------------------------------
-
-def is_tidal_url(url: str) -> bool:
-    """Restituisce True se l'URL appartiene a Tidal."""
-    try:
-        return urlparse(url).netloc in _TIDAL_DOMAINS
-    except Exception:
-        return False
-
-
-def parse_tidal_url(url: str) -> dict[str, str]:
-    """
-    Analizza un URL Tidal e restituisce {"type": ..., "id": ...}.
-
-    Tipi supportati: "track", "album", "playlist", "artist", "artist_discography".
-    Raises InvalidUrlError se il formato non è riconoscuto.
-    """
-    u    = urlparse(url)
-    path = u.path.strip("/")
-
-    if path.startswith("browse/"):
-        path = path[len("browse/"):]
-
-    parts = [p for p in path.split("/") if p]
-
-    if len(parts) >= 2 and parts[0] in ("track", "album", "playlist", "artist"):
-        entity_type = parts[0]
-        entity_id   = parts[1].split("?")[0]
-
-        # https://listen.tidal.com/artist/123/discography/albums
         if entity_type == "artist" and len(parts) >= 3 and parts[2] == "discography":
             group = parts[3] if len(parts) >= 4 else "all"
             return {"type": "artist_discography", "id": entity_id, "group": group}
@@ -156,6 +121,7 @@ def _normalize_artist(s: str) -> str:
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
     s = re.sub(r"[^a-z0-9 ]", "", s)
     return re.sub(r"\s+", " ", s).strip()
+
 
 def _artist_in_track(artist_name: str, track_artists: str) -> bool:
     name_norm = _normalize_artist(artist_name)
@@ -188,20 +154,18 @@ class TidalMetadataClient:
     # HTTP helper
     # ------------------------------------------------------------------
 
-    def _get(self, path: str, extra_params: dict | None = None) -> dict:
+    def _get(self, path: str, extra_params: dict[str, Any] | None = None) -> dict[str, Any]:
         params = {
-        "countryCode": _TIDAL_COUNTRY,
-        "locale": _TIDAL_LOCALE,
-        "deviceType": _TIDAL_DEVICE_TYPE
-    }
+            "countryCode": _TIDAL_COUNTRY,
+            "locale": _TIDAL_LOCALE,
+            "deviceType": _TIDAL_DEVICE_TYPE
+        }
         if extra_params:
             params.update(extra_params)
 
         url = f"{_TIDAL_API_BASE}/{path.lstrip('/')}"
-
-        # Loop iterativo invece di ricorsione: evita RecursionError in caso di
-        # più 429 consecutivi e permette al massimo _MAX_RATE_LIMIT_RETRIES tentativi.
         _MAX_RATE_LIMIT_RETRIES = 3
+
         for _attempt in range(_MAX_RATE_LIMIT_RETRIES + 1):
             try:
                 resp = self._session.get(url, params=params, timeout=self._timeout)
@@ -237,20 +201,19 @@ class TidalMetadataClient:
 
             return resp.json()
 
-        # Irraggiungibile, ma soddisfa il type-checker
-        raise NetworkError("tidal_metadata", f"impossibile completare la richiesta a {path}")
+        raise NetworkError("tidal_metadata", f"Impossibile completare la richiesta a {path}")
 
     # ------------------------------------------------------------------
     # Paginazione generica
     # ------------------------------------------------------------------
 
-    def _paginate(self, path: str, extra_params: dict | None = None) -> list[dict]:
+    def _paginate(self, path: str, extra_params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """
         Recupera tutti gli elementi di un endpoint paginato Tidal.
         Gestisce automaticamente offset e totalNumberOfItems.
         """
-        items:  list[dict] = []
-        offset: int        = 0
+        items:  list[dict[str, Any]] = []
+        offset: int = 0
 
         while True:
             params = {"limit": _PAGE_SIZE, "offset": offset}
@@ -264,9 +227,7 @@ class TidalMetadataClient:
             items.extend(page)
             offset += len(page)
 
-            logger.debug(
-                "[tidal_metadata] paginazione %s: %d/%d", path, offset, total
-            )
+            logger.debug("[tidal_metadata] paginazione %s: %d/%d", path, offset, total)
 
             if offset >= total or not page:
                 break
@@ -290,17 +251,16 @@ class TidalMetadataClient:
     def get_album_tracks(
             self,
             album_id: str,
-            preloaded_album: dict | None = None,
-    ) -> tuple[dict, list[TrackMetadata]]:
+            preloaded_album: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], list[TrackMetadata]]:
         """
         Recupera tutte le tracce di un album.
-        Se preloaded_album è fornito (dati già disponibili), evita una chiamata HTTP aggiuntiva.
+        Se preloaded_album è fornito, evita una chiamata HTTP aggiuntiva.
         """
         album = preloaded_album if preloaded_album else self._get(f"/albums/{album_id}")
         items = self._paginate(f"/albums/{album_id}/tracks")
         tracks = [self._track_from_album_item(item, album) for item in items]
         
-        # Formatta il dizionario album con i campi necessari
         formatted_album = {
             "title": album.get("title", "Unknown"),
             "cover_url": self._cover_url(album),
@@ -312,10 +272,9 @@ class TidalMetadataClient:
     # Fetch playlist completa (con paginazione)
     # ------------------------------------------------------------------
 
-    def get_playlist_tracks(self, playlist_uuid: str) -> tuple[dict, list[TrackMetadata]]:
+    def get_playlist_tracks(self, playlist_uuid: str) -> tuple[dict[str, Any], list[TrackMetadata]]:
         """
-        Recupera tutti i metadati di una playlist Tidal.
-        Le playlist usano UUID come identificatori.
+        Recupera tutti i metadati di una playlist Tidal usando l'UUID.
         """
         playlist  = self._get(f"/playlists/{playlist_uuid}")
         raw_items = self._paginate(f"/playlists/{playlist_uuid}/tracks")
@@ -344,25 +303,11 @@ class TidalMetadataClient:
     def get_artist_albums(
             self,
             artist_id: str,
-            # FIX: default copre album + EP/singoli, NO compilazioni.
-            # Le compilazioni contengono tracce di molti artisti e vanno abilitate
-            # esplicitamente — analogia con "appears_on" di Spotify.
             include_groups: str = f"{_TIDAL_FILTER_ALBUMS},{_TIDAL_FILTER_EPSANDSINGLES}",
             include_featuring: bool = False,
-    ) -> tuple[dict, list[TrackMetadata]]:
+    ) -> tuple[dict[str, Any], list[TrackMetadata]]:
         """
         Recupera la discografia completa di un artista Tidal.
-
-        include_groups: ALBUMS, EPSANDSINGLES, COMPILATIONS (separati da virgola).
-
-        Logica featuring:
-        - ALBUMS / EPSANDSINGLES → tutti i brani inclusi (release proprie)
-        - COMPILATIONS           → solo le tracce dove l'artista compare effettivamente
-                                   (evita di scaricare brani di altri presenti nella stessa compilation)
-
-        FIX principale: il parametro `filter` viene SEMPRE passato esplicitamente.
-        Senza filter, l'API Tidal restituisce tutti i tipi per default,
-        ignorando il raggruppamento richiesto.
         """
         artist = self._get(f"/artists/{artist_id}")
         artist_name = artist.get("name", "")
@@ -370,9 +315,7 @@ class TidalMetadataClient:
         seen_isrc: set[str] = set()
         seen_album_ids: set[str] = set()
 
-        # Raccogliamo tutti gli album da tutti i gruppi richiesti
-        # Struttura: (album_id, preloaded_album_data, is_compilation)
-        albums_to_fetch: list[tuple[str, dict, bool]] = []
+        albums_to_fetch: list[tuple[str, dict[str, Any], bool]] = []
 
         if include_featuring:
             existing = include_groups.split(",")
@@ -386,7 +329,6 @@ class TidalMetadataClient:
                 continue
 
             try:
-                # FIX: passiamo SEMPRE filter, anche per ALBUMS.
                 albums = self._paginate(
                     f"/artists/{artist_id}/albums",
                     extra_params={"filter": group},
@@ -402,8 +344,6 @@ class TidalMetadataClient:
                 if not album_id or album_id in seen_album_ids:
                     continue
                 seen_album_ids.add(album_id)
-                # Passiamo i dati dell'album già scaricati per evitare una chiamata
-                # HTTP extra in get_album_tracks
                 albums_to_fetch.append((album_id, album_data, is_compilation))
 
         # Fetch parallelo delle tracce di ogni album (max 5 richieste simultanee)
@@ -413,8 +353,7 @@ class TidalMetadataClient:
                 for aid, preloaded, is_comp in albums_to_fetch
             }
 
-            # Raccogliamo i risultati indicizzati per album_id
-            results: dict[str, tuple[list, bool]] = {}
+            results: dict[str, tuple[list[TrackMetadata], bool]] = {}
             for future in as_completed(future_to_album):
                 album_id, is_compilation = future_to_album[future]
                 try:
@@ -423,33 +362,26 @@ class TidalMetadataClient:
                 except Exception as exc:
                     logger.warning("[tidal_metadata] album %s saltato: %s", album_id, exc)
 
-        # Ricostruiamo in ordine originale (albums_to_fetch è ordinato)
         for album_id, _, is_compilation in albums_to_fetch:
             if album_id not in results:
                 continue
             album_tracks, _ = results[album_id]
             for track in album_tracks:
                 if track.isrc and track.isrc in seen_isrc:
-                    logger.debug(
-                        "[tidal_metadata] duplicato saltato: %s (ISRC %s)",
-                        track.title, track.isrc,
-                    )
                     continue
                 if is_compilation and not _artist_in_track(artist_name, track.artists):
-                    logger.debug(
-                        "[tidal_metadata] traccia saltata (artista assente): %s — %s",
-                        track.title, track.artists,
-                    )
                     continue
                 if track.isrc:
                     seen_isrc.add(track.isrc)
                 tracks.append(track)
+                
         return artist, tracks
+
     # ------------------------------------------------------------------
     # Entry point pubblico
     # ------------------------------------------------------------------
 
-    def get_url(self, tidal_url: str, include_featuring: bool = False) -> tuple[str, list[TrackMetadata], str, dict]:
+    def get_url(self, tidal_url: str, include_featuring: bool = False) -> tuple[str, list[TrackMetadata], str, dict[str, Any]]:
         """
         Riceve un URL Tidal e restituisce (nome_collezione, [TrackMetadata], cover, metadati).
         """
@@ -473,7 +405,6 @@ class TidalMetadataClient:
             return playlist.get("title", "Unknown Playlist"), tracks, playlist.get("cover_url", ""), {}
 
         if t in ("artist", "artist_discography"):
-            # Mappatura path URL → filtri API Tidal
             group_map = {
                 "albums":       _TIDAL_FILTER_ALBUMS,
                 "eps":          _TIDAL_FILTER_EPSANDSINGLES,
@@ -503,43 +434,30 @@ class TidalMetadataClient:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _format_artists(artists: list[dict] | None) -> str:
+    def _format_artists(artists: list[dict[str, Any]] | None) -> str:
         if not artists:
             return "Unknown"
         return ", ".join(a.get("name", "Unknown") for a in artists if a.get("name"))
 
     @staticmethod
-    def _cover_url(album: dict) -> str:
-        """
-        Converte il campo cover di Tidal (UUID con trattini) nell'URL immagine HD.
-        """
+    def _cover_url(album: dict[str, Any]) -> str:
         cover = album.get("cover", "")
         if not cover:
             return ""
         return f"https://resources.tidal.com/images/{cover.replace('-', '/')}/1280x1280.jpg"
 
-    def _fetch_album_details(self, album_id: int | str) -> dict:
+    def _fetch_album_details(self, album_id: int | str) -> dict[str, Any]:
         try:
             return self._get(f"/albums/{album_id}")
         except Exception as exc:
-            logger.debug(
-                "[tidal_metadata] impossibile recuperare album %s: %s", album_id, exc
-            )
+            logger.debug("[tidal_metadata] Impossibile recuperare album %s: %s", album_id, exc)
             return {}
 
     def _track_from_raw(
             self,
-            data:                dict,
+            data: dict[str, Any],
             fetch_album_details: bool = True,
     ) -> TrackMetadata:
-        """
-        Costruisce TrackMetadata da un oggetto traccia dell'API Tidal.
-
-        fetch_album_details=True  → tracce singole: GET separata sull'album
-                                    per cover HD, data e numero tracce preciso.
-        fetch_album_details=False → playlist: usa solo i dati presenti,
-                                    evita N richieste HTTP aggiuntive.
-        """
         album   = data.get("album", {})
         artists = data.get("artists") or ([data["artist"]] if data.get("artist") else [])
 
@@ -572,8 +490,7 @@ class TidalMetadataClient:
             external_url = data.get("url", ""),
         )
 
-    def _track_from_album_item(self, data: dict, album: dict) -> TrackMetadata:
-        """Costruisce TrackMetadata da un item in /albums/{id}/tracks."""
+    def _track_from_album_item(self, data: dict[str, Any], album: dict[str, Any]) -> TrackMetadata:
         artists = data.get("artists") or ([data["artist"]] if data.get("artist") else [])
 
         return TrackMetadata(

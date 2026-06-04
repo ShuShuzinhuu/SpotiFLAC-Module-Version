@@ -10,6 +10,7 @@ import time as _time
 import unicodedata
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -54,21 +55,24 @@ def parse_apple_music_url(url: str) -> dict[str, str]:
     if song_id_match:
         return {"type": "track", "id": song_id_match.group(1), "storefront": storefront}
 
-    if "song" in parts:
-        idx = parts.index("song")
-        return {"type": "track", "id": parts[idx + 2] if len(parts) > idx + 2 else parts[idx + 1], "storefront": storefront}
+    try:
+        if "song" in parts:
+            idx = parts.index("song")
+            return {"type": "track", "id": parts[idx + 2] if len(parts) > idx + 2 else parts[idx + 1], "storefront": storefront}
 
-    if "album" in parts:
-        idx = parts.index("album")
-        return {"type": "album", "id": parts[idx + 2] if len(parts) > idx + 2 else parts[idx + 1], "storefront": storefront}
+        if "album" in parts:
+            idx = parts.index("album")
+            return {"type": "album", "id": parts[idx + 2] if len(parts) > idx + 2 else parts[idx + 1], "storefront": storefront}
 
-    if "playlist" in parts:
-        idx = parts.index("playlist")
-        return {"type": "playlist", "id": parts[idx + 2] if len(parts) > idx + 2 else parts[idx + 1], "storefront": storefront}
+        if "playlist" in parts:
+            idx = parts.index("playlist")
+            return {"type": "playlist", "id": parts[idx + 2] if len(parts) > idx + 2 else parts[idx + 1], "storefront": storefront}
 
-    if "artist" in parts:
-        idx = parts.index("artist")
-        return {"type": "artist", "id": parts[idx + 2] if len(parts) > idx + 2 else parts[idx + 1], "storefront": storefront}
+        if "artist" in parts:
+            idx = parts.index("artist")
+            return {"type": "artist", "id": parts[idx + 2] if len(parts) > idx + 2 else parts[idx + 1], "storefront": storefront}
+    except IndexError:
+        raise InvalidUrlError(f"Formato URL Apple Music incompleto: {url}")
 
     raise InvalidUrlError(url)
 
@@ -97,7 +101,6 @@ def _artist_in_track(artist_name: str, track_artists: str) -> bool:
 class AppleMusicMetadataClient:
     def __init__(self, timeout_s: int = 15) -> None:
         self._timeout = timeout_s
-        # Usiamo httpx per massimizzare la velocità dei thread paralleli
         self._session = httpx.Client(
             timeout=timeout_s,
             headers={
@@ -107,13 +110,26 @@ class AppleMusicMetadataClient:
                 "Referer": "https://music.apple.com/"
             }
         )
-        self._auth_token = None
+        self._auth_token: str | None = None
+
+    def close(self) -> None:
+        """Chiude la sessione HTTP."""
+        self._session.close()
+
+    def __enter__(self) -> AppleMusicMetadataClient:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
 
     def _get_token(self) -> str:
         """Estrae il token JWT anonimo dal frontend web."""
-        if self._auth_token: return self._auth_token
+        if self._auth_token: 
+            return self._auth_token
+            
         try:
             res = self._session.get("https://music.apple.com/us/browse", timeout=self._timeout)
+            res.raise_for_status()
 
             # 1. Ricerca globale nell'HTML utilizzando la regex pre-compilata
             unquoted_html = urllib.parse.unquote(res.text)
@@ -136,16 +152,16 @@ class AppleMusicMetadataClient:
                         if len(token) > 150:
                             self._auth_token = token
                             return token
-                except Exception:
-                    continue
+                except httpx.RequestError:
+                    continue # Ignora JS irraggiungibili ed esamina i successivi
 
-            raise Exception("Token non trovato nell'HTML o nei JS")
+            raise SpotiflacError(ErrorKind.NETWORK_ERROR, "Token JWT non trovato né nell'HTML né nei file JS.")
 
         except Exception as e:
             logger.error("[apple_metadata] Impossibile recuperare JWT token: %s", e)
-            raise SpotiflacError(ErrorKind.NETWORK_ERROR, "Impossibile recuperare il token di Apple Music. Accesso negato (401).")
+            raise SpotiflacError(ErrorKind.NETWORK_ERROR, f"Impossibile recuperare il token di Apple Music: {str(e)}")
 
-    def _get(self, path: str, params: dict | None = None) -> dict:
+    def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         token = self._get_token()
         headers = {"Authorization": f"Bearer {token}"}
 
@@ -184,7 +200,7 @@ class AppleMusicMetadataClient:
             raise SpotiflacError(ErrorKind.TRACK_NOT_FOUND, f"Traccia {track_id} non trovata.")
         return self._parse_item(results[0])
 
-    def get_album_tracks(self, album_id: str, storefront: str = "us") -> tuple[dict, list[TrackMetadata]]:
+    def get_album_tracks(self, album_id: str, storefront: str = "us") -> tuple[dict[str, Any], list[TrackMetadata]]:
         data = self._get(f"/{storefront}/albums/{album_id}", {"include": "tracks"})
         results = data.get("data", [])
         if not results:
@@ -204,46 +220,42 @@ class AppleMusicMetadataClient:
                 "name": album_attr.get("name", "Unknown"),
                 "releaseDate": release_date,
                 "artwork": {"url": artwork_url},
+                "trackCount": len(tracks)
             }
         }
-        formatted_album["attributes"]["trackCount"] = len(tracks)
         
         return formatted_album, tracks
 
-    def get_playlist_tracks(self, playlist_id: str, storefront: str = "us") -> tuple[dict, list[TrackMetadata]]:
+    def get_playlist_tracks(self, playlist_id: str, storefront: str = "us") -> tuple[dict[str, Any], list[TrackMetadata]]:
         data = self._get(f"/{storefront}/playlists/{playlist_id}", {"include": "tracks"})
         results = data.get("data", [])
         if not results:
             raise SpotiflacError(ErrorKind.TRACK_NOT_FOUND, f"Playlist {playlist_id} non trovata.")
 
         playlist_data = results[0]
-        # Potresti implementare la paginazione chiamando 'next' in playlist_data.relationships.tracks in futuro
         tracks_data = playlist_data.get("relationships", {}).get("tracks", {}).get("data", [])
         tracks = [self._parse_item(item) for item in tracks_data if item.get("type") == "songs"]
         return playlist_data, tracks
 
-    def _paginate_relationship(self, initial_path: str) -> list[dict]:
-        results: list[dict] = []
-        next_url: str | None = initial_path  # prima iterazione usa il path relativo
+    def _paginate_relationship(self, initial_path: str) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        next_url: str | None = initial_path
 
         while next_url:
             try:
                 data = self._get(next_url)
             except Exception as exc:
-                logger.warning("[apple_metadata] paginazione interrotta: %s", exc)
+                logger.warning("[apple_metadata] Paginazione interrotta: %s", exc)
                 break
 
             page = data.get("data", [])
             results.extend(page)
 
-            raw_next = data.get("next")  # es. "/v1/catalog/us/artists/123/albums?offset=25"
+            raw_next = data.get("next")
             if not raw_next or not page:
                 break
 
-            # Apple Music restituisce 'next' come path assoluto senza host —
-            # lo convertiamo in URL completo per il prossimo giro
-            next_url = "https://amp-api.music.apple.com" + raw_next
-
+            next_url = f"https://amp-api.music.apple.com{raw_next}"
             _time.sleep(0.3)
 
         return results
@@ -253,12 +265,8 @@ class AppleMusicMetadataClient:
             artist_id: str,
             include_featuring: bool = False,
             storefront: str = "us",
-    ) -> tuple[dict, list[TrackMetadata]]:
-        """
-        Recupera la discografia completa di un artista Apple Music via AMP API,
-        con paginazione corretta e supporto per le featuring (appears-on-albums).
-        """
-        # 1. Dati artista (senza include=albums per non sprecare la quota della prima pagina)
+    ) -> tuple[dict[str, Any], list[TrackMetadata]]:
+        
         artist_data = self._get(f"/{storefront}/artists/{artist_id}")
         artist_results = artist_data.get("data", [])
         if not artist_results:
@@ -267,25 +275,21 @@ class AppleMusicMetadataClient:
         artist_obj  = artist_results[0]
         artist_name = artist_obj.get("attributes", {}).get("name", "Unknown")
 
-        # 2. Raccoglie gli ID album paginando l'endpoint dedicato
-        #    (più affidabile di ?include=albums che è limitato a 25)
         album_ids: list[str] = []
         seen_ids:  set[str]  = set()
 
         # Album propri
-        for album_data in self._paginate_relationship(
-                f"/{storefront}/artists/{artist_id}/albums"
-        ):
+        for album_data in self._paginate_relationship(f"/{storefront}/artists/{artist_id}/albums"):
             aid = str(album_data.get("id", ""))
             if aid and aid not in seen_ids:
                 seen_ids.add(aid)
                 album_ids.append(aid)
+                
         own_album_ids: set[str] = set(album_ids)
-        # Featuring (appears-on): album di altri artisti dove compare
+        
+        # Featuring
         if include_featuring:
-            for album_data in self._paginate_relationship(
-                    f"/{storefront}/artists/{artist_id}/appears-on-albums"
-            ):
+            for album_data in self._paginate_relationship(f"/{storefront}/artists/{artist_id}/appears-on-albums"):
                 aid = str(album_data.get("id", ""))
                 if aid and aid not in seen_ids:
                     seen_ids.add(aid)
@@ -293,7 +297,7 @@ class AppleMusicMetadataClient:
 
         logger.info("[apple_metadata] %s: %d album totali da scaricare", artist_name, len(album_ids))
 
-        # 3. Fetch parallelo delle tracce di ogni album
+        # Fetch parallelo
         tracks: list[TrackMetadata] = []
         seen_isrc: set[str] = set()
 
@@ -309,19 +313,16 @@ class AppleMusicMetadataClient:
                     _, album_tracks = future.result()
                     results_dict[aid] = album_tracks
                 except Exception as exc:
-                    logger.warning("[apple_metadata] album %s saltato: %s", aid, exc)
+                    logger.warning("[apple_metadata] Album %s saltato: %s", aid, exc)
 
-        # 4. Merge in ordine originale, deduplicazione per ISRC
+        # Merge deduplicato
         for aid in album_ids:
             if aid not in results_dict:
                 continue
             for track in results_dict[aid]:
                 if track.isrc and track.isrc in seen_isrc:
-                    logger.debug("[apple_metadata] duplicato saltato: %s (ISRC %s)",
-                                 track.title, track.isrc)
                     continue
 
-                # Se è un featuring, includi solo tracce dove compare effettivamente
                 if include_featuring and aid not in own_album_ids:
                     if not _artist_in_track(artist_name, track.artists):
                         continue
@@ -336,10 +337,10 @@ class AppleMusicMetadataClient:
     # Entry point pubblico
     # ------------------------------------------------------------------
 
-    def get_url(self, url: str, include_featuring: bool = False) -> tuple[str, list[TrackMetadata], str, dict]:
+    def get_url(self, url: str, include_featuring: bool = False) -> tuple[str, list[TrackMetadata], str, dict[str, Any]]:
         info = parse_apple_music_url(url)
         t = info["type"]
-        storefront = info.get("storefront", "us") # Estrae lo storefront per propagarlo
+        storefront = info.get("storefront", "us")
 
         if t == "track":
             meta = self.get_track(info["id"], storefront=storefront)
@@ -381,14 +382,13 @@ class AppleMusicMetadataClient:
     # Conversione dati API → TrackMetadata
     # ------------------------------------------------------------------
 
-    def _parse_item(self, item: dict, parent_album: dict | None = None) -> TrackMetadata:
+    def _parse_item(self, item: dict[str, Any], parent_album: dict[str, Any] | None = None) -> TrackMetadata:
         attr = item.get("attributes", {})
         album_attr = parent_album.get("attributes", {}) if parent_album else {}
 
-        # Artwork template replacement (es. {w}x{h}bb.jpg -> 3000x3000bb.jpg)
         artwork_dict = attr.get("artwork", {})
         cover_url = artwork_dict.get("url", "").replace("{w}x{h}", "3000x3000")
-        if not cover_url and parent_album: # Fallback su copertina album
+        if not cover_url and parent_album:
             cover_url = album_attr.get("artwork", {}).get("url", "").replace("{w}x{h}", "3000x3000")
 
         release_date = attr.get("releaseDate", "").split("T")[0]

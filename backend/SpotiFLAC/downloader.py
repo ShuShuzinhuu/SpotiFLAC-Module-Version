@@ -621,17 +621,15 @@ class SpotiflacDownloader:
             return []
 
         is_album       = info.get("type") == "album"
-        is_playlist    = info.get("type") in ("playlist", "artist", "artist_discography")
+        is_playlist    = info.get("type") == "playlist"
         is_discography = info.get("type") in ("artist", "artist_discography")
-        if is_discography:
-            is_playlist = True
 
         effective_opts = self._opts
         if self._opts.is_album != is_album:
             from dataclasses import replace
             effective_opts = replace(self._opts, is_album=is_album)
 
-        if (is_album or is_playlist) and self._opts.output_path:
+        if (is_album or is_playlist or is_discography) and self._opts.output_path:
             logger.warning(
                 "[downloader] --output-path ignored for %s: "
                 "files will be saved with standard renaming.",
