@@ -135,7 +135,7 @@ _ALL_SERVICES = [
 ]
 def _run_health_check():
     try:
-        from SpotiFLAC.core.health_check import run_health_check
+        from .core.health_check import run_health_check
         return run_health_check(_ALL_SERVICES, include_all_endpoints=True)
     except Exception as e:
         print(f"  {RED(f'Health check error: {e}')}")
@@ -187,7 +187,7 @@ def _display_health_check() -> dict[str, bool]:
 
 def _pick_from_history() -> str | None:
     try:
-        from SpotiFLAC.core.session_memory import get_url_history, remove_url_from_history, clear_url_history
+        from .core.session_memory import get_url_history, remove_url_from_history, clear_url_history
     except Exception:
         return None
 
@@ -262,7 +262,7 @@ def _pick_from_history() -> str | None:
 
 def _profile_load_section(cfg: dict) -> dict:
     try:
-        from SpotiFLAC.core.profiles import list_profiles, get_profile, delete_profile
+        from .core.profiles import list_profiles, get_profile, delete_profile
     except Exception:
         return cfg
 
@@ -321,7 +321,7 @@ def _profile_save_section(cfg: dict) -> None:
     if not _ask_bool("Save this configuration as a profile?", False):
         return
     try:
-        from SpotiFLAC.core.profiles import save_profile, list_profiles
+        from .core.profiles import save_profile, list_profiles
     except Exception:
         print(f"  {RED('✗  Profile save unavailable.')}")
         return
@@ -461,7 +461,7 @@ def run_interactive() -> dict:
     # ── 2. Output directory ─────────────────────────────────────────────────
     _section("2 · Output Directory")
     try:
-        from SpotiFLAC.core.session_memory import get_last_folder
+        from .core.session_memory import get_last_folder
         last_folder = get_last_folder() or "./Downloads"
     except Exception:
         last_folder = "./Downloads"
@@ -469,7 +469,7 @@ def run_interactive() -> dict:
     cfg["output_dir"] = _ask("Destination folder", last_folder)
 
     try:
-        from SpotiFLAC.core.session_memory import set_last_folder
+        from .core.session_memory import set_last_folder
         set_last_folder(cfg["output_dir"])
     except Exception:
         pass

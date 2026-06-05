@@ -16,7 +16,7 @@ import json
 import os
 
 from .check_update import check_for_updates
-from backend import SpotiFLAC
+from . import SpotiFLAC
 from .interactive import run_interactive
 
 

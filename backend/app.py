@@ -6,6 +6,8 @@ import os
 import sys
 import subprocess
 import logging
+import httpx
+import aiofiles
 import re
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -145,8 +147,6 @@ class SpotiFLAC_API:
 
     def save_settings(self, cfg: dict):
         try:
-            import json
-            from pathlib import Path
             settings_file = Path.home() / ".cache" / "spotiflac" / "gui-settings.json"
             settings_file.parent.mkdir(parents=True, exist_ok=True)
             settings_file.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
@@ -155,8 +155,6 @@ class SpotiFLAC_API:
 
     def load_settings(self) -> dict:
         try:
-            import json
-            from pathlib import Path
             settings_file = Path.home() / ".cache" / "spotiflac" / "gui-settings.json"
             if settings_file.exists():
                 return json.loads(settings_file.read_text(encoding="utf-8"))
@@ -789,8 +787,6 @@ class SpotiFLAC_API:
         asyncio.run(self._async_download_all_covers(tracks_data))
 
     async def _async_download_all_covers(self, tracks_data):
-        import httpx
-        import aiofiles
         total = len(tracks_data)
         success, skipped = 0, 0
 
@@ -1099,7 +1095,7 @@ class SpotiFLAC_API:
             self.set_progress("Ready for download.")
 
             try:
-                from core.session_memory import add_url_to_history
+                from .core.session_memory import add_url_to_history
                 _lower = url.lower()
                 if '/track/' in _lower or 'watch?v=' in _lower or 'youtu.be' in _lower:
                     _url_type = 'track'
@@ -1210,7 +1206,7 @@ class SpotiFLAC_API:
             )
             monitor_thread.start()
 
-            from backend import SpotiFLAC
+            from . import SpotiFLAC
 
             for u in urls_to_download:
                 SpotiFLAC(
@@ -1277,7 +1273,7 @@ class SpotiFLAC_API:
 
     def _download_stats_monitor(self, stop_event):
         try:
-            from core.progress import DownloadManager
+            from .core.progress import DownloadManager
             manager = DownloadManager()
             while not stop_event.wait(0.25):
                 self._push_download_stats(manager.get_stats())
@@ -1289,7 +1285,7 @@ class SpotiFLAC_API:
     def _push_download_stats(self, stats=None):
         try:
             if stats is None:
-                from core.progress import DownloadManager
+                from .core.progress import DownloadManager
                 stats = DownloadManager().get_stats()
             safe = json.dumps(stats)
             if self._window:
