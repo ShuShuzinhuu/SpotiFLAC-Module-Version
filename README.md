@@ -102,6 +102,8 @@ SpotiFLAC supports the following URL formats for **Spotify**, **Tidal**, **Apple
 
 > **Note:** SoundCloud and YouTube tracks are downloaded as **MP3** (neither platform distributes lossless audio). Apple Music downloads as **M4A/ALAC** (lossless) or **AAC** depending on the selected quality. Pandora downloads as **MP3** (mp3_192 by default) or **M4A** (aac_64 / aac_32). All other services deliver **FLAC**.
 >
+> Joox, NetEase, Migu and Kuwo are **download-only services** — they cannot be used as input URL sources. Use a Spotify or Tidal link and set one of these as the service. These providers are primarily available in select Asian markets and may require a VPN outside those regions.
+>
 > SoundCloud short links (`on.soundcloud.com/...`) and mobile links (`m.soundcloud.com/...`) are automatically resolved. Tracking parameters (e.g. `?utm_source=...`) are stripped before processing.
 >
 > Apple Music track links with an `?i=` song parameter (e.g. `music.apple.com/us/album/album-name/id?i=trackid`) are also supported.
@@ -253,8 +255,10 @@ spotiflac https://open.spotify.com/album/... ./out \
 
 ---
  
-## Quick usage examples
- 
+## Per-Track Timeout
+
+Set `timeout_s` (Python) or `--timeout` (CLI) to cap the time SpotiFLAC will spend downloading a single track. If the download does not complete within the specified number of seconds, the process is terminated and the track is marked as failed — allowing the next provider or retry to take over.
+
 ```bash
 # CLI — skip any track that takes more than 3 minutes
 spotiflac https://open.spotify.com/album/... ./out --service tidal --timeout 180
@@ -268,6 +272,8 @@ SpotiFLAC(
     timeout_s=120,
 )
 ```
+
+> **Tip:** Pair `--timeout` with `--retries` so that a stalled track is automatically re-attempted against the next provider instead of blocking the entire queue indefinitely.
 
 ---
 
@@ -420,6 +426,78 @@ spotiflac https://www.pandora.com/artist/.../TR:12345678 ./downloads --service p
 
 ---
 
+## Joox Download
+
+SpotiFLAC can use Joox as a **download service** when sourcing tracks identified by other input platforms (Spotify, Tidal, etc.). Joox is resolved by ISRC, with an automatic text-search fallback. The output format is **FLAC**.
+
+> **Note:** Joox URLs cannot be used as input — use a Spotify or Tidal link and set `joox` as the service. Joox is primarily available in select Asian markets.
+
+```python
+from SpotiFLAC import SpotiFLAC
+
+SpotiFLAC(
+    url="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT",
+    output_dir="./downloads",
+    services=["joox", "tidal"],   # Joox first, Tidal as fallback
+)
+```
+
+---
+
+## NetEase Download
+
+SpotiFLAC can use NetEase Cloud Music as a **download service** when sourcing tracks identified by other input platforms (Spotify, Tidal, etc.). NetEase is resolved by ISRC, with an automatic text-search fallback. The output format is **FLAC**.
+
+> **Note:** NetEase URLs cannot be used as input — use a Spotify or Tidal link and set `netease` as the service. NetEase is primarily available in China and may require a VPN in other regions.
+
+```python
+from SpotiFLAC import SpotiFLAC
+
+SpotiFLAC(
+    url="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT",
+    output_dir="./downloads",
+    services=["netease", "tidal"],   # NetEase first, Tidal as fallback
+)
+```
+
+---
+
+## Migu Download
+
+SpotiFLAC can use Migu Music as a **download service** when sourcing tracks identified by other input platforms (Spotify, Tidal, etc.). Migu is resolved by ISRC, with an automatic text-search fallback. The output format is **FLAC**.
+
+> **Note:** Migu URLs cannot be used as input — use a Spotify or Tidal link and set `migu` as the service. Migu is primarily available in China and may require a VPN in other regions.
+
+```python
+from SpotiFLAC import SpotiFLAC
+
+SpotiFLAC(
+    url="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT",
+    output_dir="./downloads",
+    services=["migu", "tidal"],   # Migu first, Tidal as fallback
+)
+```
+
+---
+
+## Kuwo Download
+
+SpotiFLAC can use Kuwo Music as a **download service** when sourcing tracks identified by other input platforms (Spotify, Tidal, etc.). Kuwo is resolved by ISRC, with an automatic text-search fallback. The output format is **FLAC**.
+
+> **Note:** Kuwo URLs cannot be used as input — use a Spotify or Tidal link and set `kuwo` as the service. Kuwo is primarily available in China and may require a VPN in other regions.
+
+```python
+from SpotiFLAC import SpotiFLAC
+
+SpotiFLAC(
+    url="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT",
+    output_dir="./downloads",
+    services=["kuwo", "tidal"],   # Kuwo first, Tidal as fallback
+)
+```
+
+---
+
 ## Custom Output Path (single tracks)
 
 For single track downloads you can specify the **exact file path** instead of relying on `output_dir` + `filename_format`.
@@ -530,7 +608,7 @@ Program can also be ran by downloading the python files and calling <code>python
 ```bash
 ./SpotiFLAC-Windows.exe url
                         output_dir
-                        [--service tidal qobuz deezer amazon spoti soundcloud youtube apple pandora]
+                        [--service tidal qobuz deezer amazon spoti soundcloud youtube apple pandora joox netease migu kuwo]
                         [--filename-format "{title} - {artist}"]
                         [--output-path "files/song.flac"]
                         [--quality LOSSLESS]
@@ -541,6 +619,7 @@ Program can also be ran by downloading the python files and calling <code>python
                         [--first-artist-only]
                         [--qobuz-local-api URL]
                         [--tidal-api URL]
+                        [--timeout seconds]
                         [--loop minutes]
                         [--verbose]
                         [--no-lyrics]
@@ -560,7 +639,7 @@ Program can also be ran by downloading the python files and calling <code>python
 chmod +x SpotiFLAC-Linux-arm64
 ./SpotiFLAC-Linux-arm64 url
                         output_dir
-                        [--service tidal qobuz deezer amazon spoti soundcloud youtube apple pandora]
+                        [--service tidal qobuz deezer amazon spoti soundcloud youtube apple pandora joox netease migu kuwo]
                         [--filename-format "{title} - {artist}"]
                         [--output-path "files/song.flac"]
                         [--quality LOSSLESS]
@@ -571,6 +650,7 @@ chmod +x SpotiFLAC-Linux-arm64
                         [--first-artist-only]
                         [--qobuz-local-api URL]
                         [--tidal-api URL]
+                        [--timeout seconds]
                         [--loop minutes]
                         [--verbose]
                         [--no-lyrics]
@@ -597,7 +677,7 @@ chmod +x SpotiFLAC-Linux-arm64
 | **`url`**                      | `str` / `list[str]` | *Required*                                   | A single URL or a **list of URLs** (batch mode) for Spotify, Tidal, Apple Music, SoundCloud, YouTube or Pandora.                                                                                                                                                             |
 | **`output_dir`**               | `str`   | *Required*                                                | The destination directory path where the audio files will be saved.                                                                                                                                                                                                          |
 | **`output_path`**              | `str`   | `None`                                                    | Exact destination file path for **single track** downloads. Overrides `output_dir` + `filename_format`. Automatically ignored for albums, playlists and artist discographies.                                                                                                |
-| **`services`**                 | `list`  | `["tidal"]`                                               | Specifies which services to use and their priority order. Choices: `tidal`, `qobuz`, `deezer`, `amazon`, `spoti`, `soundcloud`, `youtube`, `apple`, `pandora`.                                                                                                               |
+| **`services`**                 | `list`  | `["tidal"]`                                               | Specifies which services to use and their priority order. Choices: `tidal`, `qobuz`, `deezer`, `amazon`, `spoti`, `soundcloud`, `youtube`, `apple`, `pandora`, `joox`, `netease`, `migu`, `kuwo`.                                                                            |
 | **`filename_format`**          | `str`   | `"{title} - {artist}"`                                    | Format for naming downloaded files. See placeholders below.                                                                                                                                                                                                                  |
 | **`use_track_numbers`**        | `bool`  | `False`                                                   | Prefixes the filename with the track number.                                                                                                                                                                                                                                 |
 | **`use_album_track_numbers`**  | `bool`  | `False`                                                   | Uses the track's original album number instead of the download queue position.                                                                                                                                                                                               |
@@ -606,6 +686,7 @@ chmod +x SpotiFLAC-Linux-arm64
 | **`first_artist_only`**        | `bool`  | `False`                                                   | Uses only the first artist in tags and filename.                                                                                                                                                                                                                             |
 | **`include_featuring`**        | `bool`  | `False`                                                   | When downloading an artist discography, also includes tracks where the artist appears as a featured artist.                                                                                                                                                                  |
 | **`tidal_custom_api`**         | `str`   | `None`                                                    | URL of a self-hosted [hifi-api](https://github.com/binimum/hifi-api) instance. Takes priority over all public mirrors.                                                                                                                                                       |
+| **`timeout_s`**                | `int`   | `None`                                                    | Per-track download timeout in **seconds**. If a single track download does not complete within this time, the process is terminated and the track is marked as failed. SpotiFLAC then moves on to the next provider or retry. Set to `None` (default) to disable the timeout. |
 | **`loop`**                     | `int`   | `None`                                                    | Duration in minutes to keep retrying **permanently failed** tracks after a full session completes.                                                                                                                                                                           |
 | **`track_max_retries`**        | `int`   | `0`                                                       | Extra download attempts **per track** when all providers fail on the first try. Each retry cycles through all providers again with exponential backoff (2 s → 4 s → 8 s …, capped at 30 s).                                                                                  |
 | **`quality`**                  | `str`   | `"LOSSLESS"`                                              | Download quality. Tidal: `"DOLBY_ATMOS"`, `"HI_RES_LOSSLESS"`, `"LOSSLESS"`, `"HIGH"`, `"LOW"`. Qobuz: `"6"` (CD), `"7"` (Hi-Res), `"27"` (Hi-Res Max). Apple Music: `"alac"`, `"atmos"`, `"ac3"`, `"aac"`, `"aac-legacy"`. Pandora: `"mp3_192"`, `"aac_64"`, `"aac_32"`.    |
@@ -640,7 +721,7 @@ When customizing the `filename_format` string, you can use the following dynamic
 
 | Flag                        | Short | Default                                       | Description                                                                                                                                                                                                 |
 |-----------------------------|-------|-----------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `--service`                 | `-s`  | `tidal`                                       | One or more providers in priority order. Choices: `tidal`, `qobuz`, `deezer`, `amazon`, `spoti`, `soundcloud`, `youtube`, `apple`, `pandora`.                                                               |
+| `--service`                 | `-s`  | `tidal`                                       | One or more providers in priority order. Choices: `tidal`, `qobuz`, `deezer`, `amazon`, `spoti`, `soundcloud`, `youtube`, `apple`, `pandora`, `joox`, `netease`, `migu`, `kuwo`.                                                                            |
 | `--filename-format`         | `-f`  | `{title} - {artist}`                          | Filename template with placeholders.                                                                                                                                                                        |
 | `--output-path`             | `-o`  | `None`                                        | Exact output file path for single track downloads. Ignored for albums, playlists and discographies.                                                                                                         |
 | `--quality`                 | `-q`  | `LOSSLESS`                                    | Audio quality. Tidal: `DOLBY_ATMOS`, `HI_RES_LOSSLESS`, `LOSSLESS`, `HIGH`, `LOW`. Qobuz: `6`, `7`, `27`. Apple Music: `alac`, `atmos`, `ac3`, `aac`, `aac-legacy`. Pandora: `mp3_192`, `aac_64`, `aac_32`. |
@@ -652,6 +733,7 @@ When customizing the `filename_format` string, you can use the following dynamic
 | `--include-featuring`       |       | `False`                                       | Include tracks where the artist appears as a featured artist. Only applies to artist/discography URLs.                                                                                                      |
 | `--qobuz-local-api`         |       | `None`                                        | Optional local Qobuz stream API URL.                                                                                                                                                                         |
 | `--tidal-api`               |       | `None`                                        | URL of a self-hosted [hifi-api](https://github.com/binimum/hifi-api) instance. Takes priority over the built-in public mirror pool.                                                                         |
+| `--timeout`                 |       | `None`                                        | Per-track download timeout in **seconds**. If a track download stalls or takes longer than this limit, it is forcibly terminated and marked as failed, then SpotiFLAC moves to the next provider or retry. |
 | `--loop`                    | `-l`  | `None`                                        | Keep retrying permanently failed tracks every N minutes.                                                                                                                                                    |
 | `--retries`                 |       | `0`                                           | Extra per-track download attempts on failure. Cycles through all providers with exponential backoff.                                                                                                        |
 | `--verbose`                 | `-v`  | `False`                                       | Enable debug logging.                                                                                                                                                                                       |
@@ -712,7 +794,7 @@ Your support helps keep development going._
 
 ## API Credits
 
-[Song.link](https://song.link) · [hifi-api](https://github.com/binimum/hifi-api) · [qobuz-api](https://github.com/BartolomeoRusso9/qobuz-api) ·[dabmusic.xyz](https://dabmusic.xyz) · [GD Studio Music API](https://music.gdstudio.xyz) · [afkarxyz](https://github.com/afkarxyz) · [MusicBrainz](https://musicbrainz.org) · [SoundCloud](https://soundcloud.com) · [Apple Music](https://music.apple.com) · [YouTube Music](https://music.youtube.com) · [Pandora](https://www.pandora.com)
+[Song.link](https://song.link) · [hifi-api](https://github.com/binimum/hifi-api) · [qobuz-api](https://github.com/BartolomeoRusso9/qobuz-api) ·[dabmusic.xyz](https://dabmusic.xyz) · [GD Studio Music API](https://music.gdstudio.xyz) · [Music Wjhe API](https://music.wjhe.top/) · [afkarxyz](https://github.com/afkarxyz) · [MusicBrainz](https://musicbrainz.org) · [SoundCloud](https://soundcloud.com) · [Apple Music](https://music.apple.com) · [YouTube Music](https://music.youtube.com) · [Pandora](https://www.pandora.com)
 
 > [!TIP]
 >
