@@ -6,10 +6,12 @@ import os
 import sys
 import subprocess
 import logging
+import httpx
+import aiofiles
 import re
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from SpotiFLAC.core.http import NetworkManager
+from .core.http import NetworkManager
 
 DEFAULT_DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Music", "SpotiFLAC")
 
@@ -145,8 +147,6 @@ class SpotiFLAC_API:
 
     def save_settings(self, cfg: dict):
         try:
-            import json
-            from pathlib import Path
             settings_file = Path.home() / ".cache" / "spotiflac" / "gui-settings.json"
             settings_file.parent.mkdir(parents=True, exist_ok=True)
             settings_file.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
@@ -155,8 +155,6 @@ class SpotiFLAC_API:
 
     def load_settings(self) -> dict:
         try:
-            import json
-            from pathlib import Path
             settings_file = Path.home() / ".cache" / "spotiflac" / "gui-settings.json"
             if settings_file.exists():
                 return json.loads(settings_file.read_text(encoding="utf-8"))
@@ -166,21 +164,21 @@ class SpotiFLAC_API:
 
     def get_history(self):
         try:
-            from SpotiFLAC.core.session_memory import get_url_history
+            from .core.session_memory import get_url_history
             return get_url_history()
         except Exception:
             return []
 
     def get_profiles(self):
         try:
-            from SpotiFLAC.core.profiles import list_profiles
+            from .core.profiles import list_profiles
             return list_profiles()
         except Exception:
             return []
 
     def load_profile_data(self, name):
         try:
-            from SpotiFLAC.core.profiles import get_profile
+            from .core.profiles import get_profile
             return get_profile(name) or {}
         except Exception:
             return {}
@@ -194,7 +192,7 @@ class SpotiFLAC_API:
         Returns a dictionary with 4 sections: tracks, albums, artists, playlists (max 50 results each).
         """
         try:
-            from SpotiFLAC.providers.spotify_metadata import SpotifyMetadataClient
+            from .providers.spotify_metadata import SpotifyMetadataClient
             client = SpotifyMetadataClient()
             # client.search() restituisce già un dizionario con i 4 array
             results = client.search(query, limit=limit)
@@ -283,7 +281,7 @@ class SpotiFLAC_API:
 
     def _search_provider_thread(self, query, limit):
         try:
-            from SpotiFLAC.providers.spotify_metadata import SpotifyMetadataClient
+            from .providers.spotify_metadata import SpotifyMetadataClient
             client = SpotifyMetadataClient()
             results = client.search(query, limit=limit)
             
@@ -385,7 +383,7 @@ class SpotiFLAC_API:
         Returns list of {path, line, snippet}.
         """
         try:
-            from SpotiFLAC.core.code_search import search_code
+            from .core.code_search import search_code
             results = search_code(query, path=path or '.', limit=limit or 200)
             return results
         except Exception as e:
@@ -394,14 +392,14 @@ class SpotiFLAC_API:
 
     def remove_history_item(self, url):
         try:
-            from SpotiFLAC.core.session_memory import remove_url_from_history
+            from .core.session_memory import remove_url_from_history
             remove_url_from_history(url)
         except Exception:
             pass
 
     def get_network_status(self):
         try:
-            from SpotiFLAC.core.http import NetworkManager
+            from .core.http import NetworkManager
             client = NetworkManager.get_sync_client()
             resp = client.get("https://ipapi.co/json/", timeout=10)
             data = resp.json() if resp.status_code == 200 else {}
@@ -419,7 +417,7 @@ class SpotiFLAC_API:
 
     def save_profile_data(self, name, cfg):
         try:
-            from SpotiFLAC.core.profiles import save_profile
+            from .core.profiles import save_profile
             save_profile(name, cfg)
             self.log(f"Profile '{name}' saved successfully.", "ok")
             return True
@@ -429,7 +427,7 @@ class SpotiFLAC_API:
 
     def delete_profile_data(self, name):
         try:
-            from SpotiFLAC.core.profiles import delete_profile
+            from .core.profiles import delete_profile
             deleted = delete_profile(name)
             self.log(f"Profile '{name}' deleted: {deleted}.", "ok" if deleted else "warn")
             return deleted
@@ -572,7 +570,7 @@ class SpotiFLAC_API:
             dur_ms  = track_data.get("duration_ms", 0)
             track_id = track_data.get("id", "")
 
-            from SpotiFLAC.core.lyrics import fetch_lyrics
+            from .core.lyrics import fetch_lyrics
             lyrics_text, provider = fetch_lyrics(
                 track_name  = title,
                 artist_name = artist,
@@ -622,7 +620,7 @@ class SpotiFLAC_API:
 
             self.log(f"Downloading cover for: {title}…", "info")
 
-            from SpotiFLAC.core.http import NetworkManager
+            from .core.http import NetworkManager
             client = NetworkManager.get_sync_client()
             resp = client.get(cover_url, timeout=15)
             resp.raise_for_status()
@@ -789,8 +787,6 @@ class SpotiFLAC_API:
         asyncio.run(self._async_download_all_covers(tracks_data))
 
     async def _async_download_all_covers(self, tracks_data):
-        import httpx
-        import aiofiles
         total = len(tracks_data)
         success, skipped = 0, 0
 
@@ -841,7 +837,7 @@ class SpotiFLAC_API:
 
     async def _async_download_all_lyrics(self, tracks_data):
         import aiofiles
-        from SpotiFLAC.core.lyrics import fetch_lyrics
+        from .core.lyrics import fetch_lyrics
         
         total = len(tracks_data)
         success, skipped = 0, 0
@@ -904,7 +900,7 @@ class SpotiFLAC_API:
             URL dell'anteprima MP3 (stringa vuota se non disponibile)
         """
         try:
-            from SpotiFLAC.providers.spotify_metadata import SpotifyMetadataClient
+            from .providers.spotify_metadata import SpotifyMetadataClient
             client = SpotifyMetadataClient()
             preview_url = client.get_track_preview(track_id)
             return preview_url or ""
@@ -937,17 +933,17 @@ class SpotiFLAC_API:
             if is_url:
                 # ── Scelta client in base al dominio ───────────────────────────
                 if "tidal.com" in url:
-                    from SpotiFLAC.providers.tidal_metadata import TidalMetadataClient
+                    from .providers.tidal_metadata import TidalMetadataClient
                     client = TidalMetadataClient()
                 elif "music.apple.com" in url:
-                    from SpotiFLAC.providers.apple_music_metadata import AppleMusicMetadataClient
+                    from .providers.apple_music_metadata import AppleMusicMetadataClient
                     client = AppleMusicMetadataClient()
                 else:
-                    from SpotiFLAC.providers.spotify_metadata import SpotifyMetadataClient
+                    from .providers.spotify_metadata import SpotifyMetadataClient
                     client = SpotifyMetadataClient()
             else:
                 # ── Ricerca testuale — sempre SpotifyMetadataClient ─────────────
-                from SpotiFLAC.providers.spotify_metadata import SpotifyMetadataClient
+                from .providers.spotify_metadata import SpotifyMetadataClient
                 client = SpotifyMetadataClient()
             # Dopo aver scelto il client, prima di client.get_url()
             if not is_url:
@@ -983,7 +979,7 @@ class SpotiFLAC_API:
             playcount_map = {}
             if "spotify.com" in url:
                 try:
-                    from SpotiFLAC.core.spotfetch import SpotifyWebClient
+                    from .core.spotfetch import SpotifyWebClient
                     sp_client = SpotifyWebClient()
                     
                     try:
@@ -1099,7 +1095,7 @@ class SpotiFLAC_API:
             self.set_progress("Ready for download.")
 
             try:
-                from SpotiFLAC.core.session_memory import add_url_to_history
+                from .core.session_memory import add_url_to_history
                 _lower = url.lower()
                 if '/track/' in _lower or 'watch?v=' in _lower or 'youtu.be' in _lower:
                     _url_type = 'track'
@@ -1210,7 +1206,7 @@ class SpotiFLAC_API:
             )
             monitor_thread.start()
 
-            from SpotiFLAC import SpotiFLAC
+            from . import SpotiFLAC
 
             for u in urls_to_download:
                 SpotiFLAC(
@@ -1277,7 +1273,7 @@ class SpotiFLAC_API:
 
     def _download_stats_monitor(self, stop_event):
         try:
-            from SpotiFLAC.core.progress import DownloadManager
+            from .core.progress import DownloadManager
             manager = DownloadManager()
             while not stop_event.wait(0.25):
                 self._push_download_stats(manager.get_stats())
@@ -1289,7 +1285,7 @@ class SpotiFLAC_API:
     def _push_download_stats(self, stats=None):
         try:
             if stats is None:
-                from SpotiFLAC.core.progress import DownloadManager
+                from .core.progress import DownloadManager
                 stats = DownloadManager().get_stats()
             safe = json.dumps(stats)
             if self._window:
@@ -1300,7 +1296,7 @@ class SpotiFLAC_API:
     def _health_check_task(self, services):
         try:
             import importlib
-            hc_module = importlib.import_module("SpotiFLAC.core.health_check")
+            hc_module = importlib.import_module(".core.health_check")
             hc_run    = getattr(hc_module, "run_health_check")
             self.log(f"Health check started for: {', '.join(services)}", "info")
             results = hc_run(services)
@@ -1345,7 +1341,7 @@ def run_gui():
 
     # 2) frontend inside the SpotiFLAC package (if present)
     try:
-        import SpotiFLAC as _sp_pkg
+        import backend as _sp_pkg
         pkg_frontend = os.path.join(os.path.dirname(_sp_pkg.__file__), 'frontend', 'index.html')
         candidates.append(pkg_frontend)
     except Exception:

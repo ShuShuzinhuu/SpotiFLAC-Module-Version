@@ -15,9 +15,9 @@ import sys
 import json
 import os
 
-from SpotiFLAC.check_update import check_for_updates
-from SpotiFLAC import SpotiFLAC
-from SpotiFLAC.interactive import run_interactive
+from .check_update import check_for_updates
+from . import SpotiFLAC
+from .interactive import run_interactive
 
 
 def load_config() -> dict:
@@ -34,7 +34,7 @@ def load_config() -> dict:
 def _load_profile_into_defaults(profile_name: str) -> dict:
     """Return profile data dict, or empty dict on failure."""
     try:
-        from SpotiFLAC.core.profiles import get_profile
+        from .core.profiles import get_profile
         data = get_profile(profile_name)
         if data:
             print(f"[profile] Loaded: {profile_name}")
@@ -305,7 +305,7 @@ def main() -> None:
 
     if args.save_profile:
         try:
-            from SpotiFLAC.core.profiles import save_profile
+            from .core.profiles import save_profile
             profile_cfg = {
                 "services":              args.service,
                 "quality":               quality,
