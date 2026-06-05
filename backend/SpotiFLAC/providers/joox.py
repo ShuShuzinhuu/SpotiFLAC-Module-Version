@@ -23,50 +23,24 @@ _DEFAULT_UA = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Two independent backends for JOOX.
-#
-# GD Studio  — music-api.gdstudio.xyz/api.php
-#   Parameterised GET: types, source, id/name, br, count, pages, size.
-#   Returns JSON objects; `url` field holds the signed CDN link.
-#   Licence: GD音乐台 (music.gdstudio.xyz) — CC BY-NC 4.0, study use only.
-#
-# HEMusic    — music.wjhe.top/api/music/joox/*
-#   REST-style paths: /search, /url.
-#   Search returns data.data[]; each item carries `fileLinks` sorted by
-#   quality.  The /url endpoint resolves to a CDN redirect.
-# ──────────────────────────────────────────────────────────────────────────────
+_API_BASE = "https://music-api.gdstudio.xyz/api.php"
+_API_BASE_WJHE = "https://music.wjhe.top/api/music/joox"
+_SOURCE   = "joox"
 
-_GDSTUDIO_BASE = "https://music-api.gdstudio.xyz/api.php"
-_HEMUSIC_BASE  = "https://music.wjhe.top/api/music/joox"
-_SOURCE        = "joox"
-
-# Bitrate thresholds (kbps) used by the GD Studio backend.
-# We request 999 (maximum) and only accept the file when the API reports
-# at least CD-lossless quality (≥ 740 kbps for 16-bit FLAC).
-_BR_REQUEST    = 999   # sent as the `br` parameter
-_BR_MIN_FLAC   = 740   # minimum acceptable — below this we raise, not fall back
-
-# HEMusic quality floor: the API returns a numeric `quality` field per
-# fileLink; we skip any link whose reported quality is below this value.
-_HE_MIN_QUALITY = 740
-
+# ---------------------------------------------------------------------------
+# GD Studio Bitrate (br) mappings
+# ---------------------------------------------------------------------------
+_BR_HIRES       = 999  # 24-bit FLAC
+_BR_LOSSLESS_CD = 740  # 16-bit FLAC
+_BR_320         = 320  # 320kbps MP3
+_BR_128         = 128  # 128kbps MP3
 
 class JooxProvider(BaseProvider):
     """
-    Provider for JOOX lossless audio.
+    Provider for JOOX using WJHE and GD Studio API endpoints.
 
-    Tries two independent backends in order:
-
-    1. GD Studio  (music-api.gdstudio.xyz) — primary, fast, well-structured.
-    2. HEMusic    (music.wjhe.top)         — fallback, richer fileLink catalogue.
-
-    Both backends are queried only for FLAC.  If neither can serve a lossless
-    file the track is marked as unavailable rather than falling back to lossy.
-
-    API credits:
-      · GD音乐台 (music.gdstudio.xyz) — CC BY-NC 4.0, study use only.
-      · HEMusic  (music.wjhe.top)    — personal / educational use only.
+    WJHE uses quality (1000, 3000) & format (flac, m4a).
+    GD Studio uses the legacy br parameter (999, 740, 320, 128).
     """
 
     name = "joox"
@@ -74,20 +48,17 @@ class JooxProvider(BaseProvider):
     def __init__(self, timeout_s: int = 30) -> None:
         super().__init__(timeout_s=timeout_s)
         self._session = NetworkManager.get_sync_client()
-        self._session.headers.update({
-            "User-Agent": _DEFAULT_UA,
-            "Referer":    "https://music.wjhe.top/",   # required by HEMusic
-        })
+        self._session.headers.update({"User-Agent": _DEFAULT_UA})
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # GD Studio backend
-    # ══════════════════════════════════════════════════════════════════════════
+    # ------------------------------------------------------------------
+    # Internal API helpers
+    # ------------------------------------------------------------------
 
-    def _gd_search(self, query: str, count: int = 10) -> list[dict]:
-        """Search JOOX via GD Studio.  Returns raw result items."""
+    def _search(self, query: str, count: int = 10) -> list[dict]:
+        """Search for tracks on JOOX via GD Studio."""
         try:
             resp = self._session.get(
-                _GDSTUDIO_BASE,
+                _API_BASE,
                 params={
                     "types":  "search",
                     "source": _SOURCE,
@@ -104,24 +75,21 @@ class JooxProvider(BaseProvider):
             if isinstance(data, dict):
                 return data.get("data", data.get("result", []))
         except Exception as exc:
-            logger.debug("[joox/gd] Search failed for %r: %s", query, exc)
+            logger.debug("[joox] Search failed for '%s': %s", query, exc)
         return []
 
-    def _gd_get_stream(self, track_id: str) -> tuple[str, int]:
+    def _get_stream_gdstudio(self, track_id: str, br: int = _BR_LOSSLESS_CD) -> tuple[str, int]:
         """
-        Request a lossless stream URL from GD Studio.
-
-        Returns (url, actual_br).  url is empty string when the backend
-        cannot serve a file that meets the FLAC quality floor.
+        Request a stream URL from GD Studio using the legacy `br` parameter.
         """
         try:
             resp = self._session.get(
-                _GDSTUDIO_BASE,
+                _API_BASE,
                 params={
                     "types":  "url",
                     "source": _SOURCE,
                     "id":     track_id,
-                    "br":     _BR_REQUEST,
+                    "br":     br,
                 },
                 timeout=10,
             )
@@ -130,30 +98,129 @@ class JooxProvider(BaseProvider):
             url       = data.get("url", "")
             actual_br = int(data.get("br", 0))
 
-            if not url:
-                logger.debug("[joox/gd] Empty URL for id=%s", track_id)
-                return "", 0
-
-            if actual_br < _BR_MIN_FLAC:
+            if not url or actual_br < 64:
                 logger.debug(
-                    "[joox/gd] id=%s returned br=%d — below FLAC floor (%d), skipping",
-                    track_id, actual_br, _BR_MIN_FLAC,
+                    "[joox-gd] Empty or invalid stream for id=%s br=%d (actual=%d)",
+                    track_id, br, actual_br
                 )
                 return "", actual_br
 
             return url, actual_br
-
         except Exception as exc:
-            logger.debug("[joox/gd] Stream fetch failed for id=%s: %s", track_id, exc)
+            logger.debug("[joox-gd] Stream fetch failed for id=%s: %s", track_id, exc)
         return "", 0
 
-    def _gd_get_pic_url(self, pic_id: str, size: int = 500) -> str:
-        """Fetch album-art URL from GD Studio."""
+    def _get_stream_wjhe(self, track_id: str, quality: int = 1000, fmt: str = "flac") -> str:
+        url = f"{_API_BASE_WJHE}/url"
+        params = {
+            "ID":      track_id,
+            "quality": quality,
+            "format":  fmt,
+        }
+        
+        try:
+            resp = self._session.get(url, params=params, stream=True, timeout=10)
+            
+            if resp.status_code == 200:
+                content_type = resp.headers.get("Content-Type", "")
+                if "application/json" not in content_type.lower():
+                    final_url = str(resp.url)
+                    resp.close()
+                    return final_url
+            
+            resp.close()
+        except Exception as exc:
+            logger.debug(
+                "[joox-wjhe] Stream fetch failed for id=%s (quality=%d fmt=%s): %s",
+                track_id, quality, fmt, exc
+            )
+        return ""
+
+    def _get_stream_with_fallback(
+        self,
+        track_id: str,
+        requested_quality: str,
+    ) -> tuple[str, str, int, str]:
+        """
+        Try to obtain a stream URL, combining WJHE and GD Studio.
+        """
+        q = (requested_quality or "LOSSLESS").upper()
+
+        # Define fallback chains. Tuples represent:
+        # (InternalType, WJHE_Quality, WJHE_Format, GD_br, UI_Label)
+        if q in ("HIRES", "HIGHEST", "BEST", "MAX", "LOSSLESS_HIRES", "HIRES_LOSSLESS"):
+            attempts = [
+                ("FLAC24",  3000, "flac", _BR_HIRES,       "FLAC 24bit"),
+                ("FLAC16",  1000, "flac", _BR_LOSSLESS_CD, "FLAC 16bit"),
+                ("M4A24",   3000, "m4a",  None,            "M4A 24bit"),
+                ("M4A16",   1000, "m4a",  None,            "M4A 16bit"),
+                ("MP3_320", None, None,   _BR_320,         "MP3 320kbps"),
+                ("MP3_128", None, None,   _BR_128,         "MP3 128kbps"),
+            ]
+        elif q in ("LOSSLESS", "FLAC", "CD", "HQ"):
+            attempts = [
+                ("FLAC16",  1000, "flac", _BR_LOSSLESS_CD, "FLAC 16bit"),
+                ("M4A16",   1000, "m4a",  None,            "M4A 16bit"),
+                ("MP3_320", None, None,   _BR_320,         "MP3 320kbps"),
+                ("MP3_128", None, None,   _BR_128,         "MP3 128kbps"),
+            ]
+        elif q in ("MEDIUM", "HIGH", "320", "320KBPS", "MP3_320"):
+            attempts = [
+                ("MP3_320", None, None,   _BR_320,         "MP3 320kbps"),
+                ("MP3_128", None, None,   _BR_128,         "MP3 128kbps"),
+            ]
+        else:
+            attempts = [
+                ("MP3_128", None, None,   _BR_128,         "MP3 128kbps"),
+            ]
+
+        for fmt_type, wjhe_q, wjhe_f, gd_br, label in attempts:
+            ext = ".flac" if "FLAC" in fmt_type else ".m4a" if "M4A" in fmt_type else ".mp3"
+
+            # 1. Try WJHE
+            if wjhe_q and wjhe_f:
+                url_wjhe = self._get_stream_wjhe(track_id, quality=wjhe_q, fmt=wjhe_f)
+                if url_wjhe:
+                    quality_label = f"{label} (WJHE)"
+                    logger.info(
+                        "[joox] Stream obtained (WJHE): quality=%d fmt=%s ext=%s",
+                        wjhe_q, wjhe_f, ext,
+                    )
+                    return url_wjhe, ext, 0, quality_label
+
+            # 2. Try GD Studio
+            if gd_br:
+                url_gd, actual_br = self._get_stream_gdstudio(track_id, br=gd_br)
+                if url_gd:
+                    # Prevent GD Studio from silently returning lossy when we asked for lossless
+                    if "FLAC" in fmt_type and actual_br < _BR_LOSSLESS_CD:
+                        continue
+                    if fmt_type == "MP3_320" and actual_br < _BR_320:
+                        continue
+
+                    final_ext = ".flac" if actual_br >= _BR_LOSSLESS_CD else ".mp3"
+                    quality_label = f"{label} (GD {actual_br}kbps)"
+                    logger.info(
+                        "[joox] Stream obtained (GD): requested_br=%d actual_br=%d ext=%s",
+                        gd_br, actual_br, final_ext,
+                    )
+                    return url_gd, final_ext, actual_br, quality_label
+
+        # Last-resort MP3 fallback via GD Studio
+        url_fb, actual_br_fb = self._get_stream_gdstudio(track_id, _BR_128)
+        if url_fb:
+            final_ext = ".flac" if actual_br_fb >= _BR_LOSSLESS_CD else ".mp3"
+            return url_fb, final_ext, actual_br_fb, f"MP3 {actual_br_fb}kbps (GD Fallback)"
+
+        return "", "", 0, ""
+
+    def _get_pic_url(self, pic_id: str, size: int = 500) -> str:
+        """Fetch album art URL from pic_id via GD Studio."""
         if not pic_id:
             return ""
         try:
             resp = self._session.get(
-                _GDSTUDIO_BASE,
+                _API_BASE,
                 params={
                     "types":  "pic",
                     "source": _SOURCE,
@@ -165,16 +232,16 @@ class JooxProvider(BaseProvider):
             resp.raise_for_status()
             return resp.json().get("url", "")
         except Exception as exc:
-            logger.debug("[joox/gd] Pic fetch failed for pic_id=%s: %s", pic_id, exc)
+            logger.debug("[joox] Pic fetch failed for pic_id=%s: %s", pic_id, exc)
         return ""
 
-    def _gd_get_lyric(self, lyric_id: str) -> str:
-        """Fetch LRC lyrics via GD Studio (original lang, falls back to translation)."""
+    def _get_lyric(self, lyric_id: str) -> str:
+        """Fetch LRC lyrics via GD Studio."""
         if not lyric_id:
             return ""
         try:
             resp = self._session.get(
-                _GDSTUDIO_BASE,
+                _API_BASE,
                 params={
                     "types":  "lyric",
                     "source": _SOURCE,
@@ -186,14 +253,16 @@ class JooxProvider(BaseProvider):
             data = resp.json()
             return data.get("lyric", "") or data.get("tlyric", "")
         except Exception as exc:
-            logger.debug("[joox/gd] Lyric fetch failed for id=%s: %s", lyric_id, exc)
+            logger.debug("[joox] Lyric fetch failed for id=%s: %s", lyric_id, exc)
         return ""
 
-    def _gd_get_album_tracks(self, album_id: str) -> list[dict]:
-        """Fetch track list for a JOOX album via GD Studio."""
+    def _get_album_tracks(self, album_id: str) -> list[dict]:
+        """
+        Fetch the track list of a JOOX album via GD Studio.
+        """
         try:
             resp = self._session.get(
-                _GDSTUDIO_BASE,
+                _API_BASE,
                 params={
                     "types":  "search",
                     "source": f"{_SOURCE}_album",
@@ -208,122 +277,15 @@ class JooxProvider(BaseProvider):
             if isinstance(data, list):
                 return data
         except Exception as exc:
-            logger.debug("[joox/gd] Album fetch failed for id=%s: %s", album_id, exc)
+            logger.debug("[joox] Album tracks fetch failed for id=%s: %s", album_id, exc)
         return []
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # HEMusic backend
-    # ══════════════════════════════════════════════════════════════════════════
+    # ------------------------------------------------------------------
+    # Conversion helper
+    # ------------------------------------------------------------------
 
-    def _he_search(self, query: str, page_size: int = 20, page: int = 1) -> list[dict]:
-        """
-        Search JOOX via HEMusic.
-
-        The API returns::
-
-            { "data": { "data": [ <item>, … ] } }
-
-        Each item carries a ``fileLinks`` list — entries with ``quality`` ≥
-        _HE_MIN_QUALITY are FLAC-capable.
-        """
-        import time
-        try:
-            resp = self._session.get(
-                f"{_HEMUSIC_BASE}/search",
-                params={
-                    "key":       query,
-                    "pageIndex": page,
-                    "pageSize":  page_size,
-                    "_":         str(int(time.time() * 1000)),
-                },
-                timeout=10,
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-            items = (
-                payload.get("data", {}).get("data", [])
-                if isinstance(payload, dict)
-                else []
-            )
-            return items if isinstance(items, list) else []
-        except Exception as exc:
-            logger.debug("[joox/he] Search failed for %r: %s", query, exc)
-        return []
-
-    def _he_get_stream(self, track_id: str, quality: int, fmt: str = "flac") -> str:
-        """
-        Resolve a CDN URL via HEMusic's /url endpoint.
-
-        Follows the redirect (HEAD) to obtain the final signed URL.
-        Returns empty string on any failure.
-        """
-        endpoint = f"{_HEMUSIC_BASE}/url"
-        params   = {"ID": track_id, "quality": quality, "format": fmt}
-        try:
-            resp = self._session.head(
-                endpoint,
-                params=params,
-                timeout=10,
-                allow_redirects=True,
-            )
-            resp.raise_for_status()
-            final_url = str(resp.url)
-            # A redirect to an error page or empty body means unavailable
-            if not final_url or "error" in final_url.lower():
-                return ""
-            return final_url
-        except Exception as exc:
-            logger.debug(
-                "[joox/he] Stream resolve failed for id=%s q=%s: %s",
-                track_id, quality, exc,
-            )
-        return ""
-
-    def _he_best_flac_link(self, item: dict) -> tuple[str, int, str]:
-        """
-        Pick the highest-quality FLAC fileLink from a HEMusic search result.
-
-        Returns (track_id, quality, format) or ("", 0, "") when none qualify.
-        """
-        track_id   = str(item.get("ID", ""))
-        file_links = item.get("fileLinks", [])
-        if not track_id or not file_links:
-            return "", 0, ""
-
-        flac_links = [
-            fl for fl in file_links
-            if isinstance(fl, dict)
-            and float(fl.get("quality", 0)) >= _HE_MIN_QUALITY
-            and str(fl.get("format", "")).lower() in {"flac", ""}
-        ]
-        if not flac_links:
-            return "", 0, ""
-
-        best = max(flac_links, key=lambda fl: float(fl.get("quality", 0)))
-        return track_id, int(float(best["quality"])), str(best.get("format", "flac"))
-
-    def _he_get_cover(self, track_id: str, size: int = 500) -> str:
-        """Resolve cover-art URL via HEMusic, following redirect."""
-        endpoint = f"{_HEMUSIC_BASE}/url"
-        try:
-            resp = self._session.head(
-                endpoint,
-                params={"ID": track_id, "quality": size, "format": "jpg"},
-                timeout=8,
-                allow_redirects=True,
-            )
-            resp.raise_for_status()
-            return str(resp.url)
-        except Exception as exc:
-            logger.debug("[joox/he] Cover fetch failed for id=%s: %s", track_id, exc)
-        return ""
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # Shared helpers
-    # ══════════════════════════════════════════════════════════════════════════
-
-    def _gd_item_to_metadata(self, item: dict) -> TrackMetadata:
-        """Convert a GD Studio search result into TrackMetadata."""
+    def _item_to_metadata(self, item: dict, position: int = 1) -> TrackMetadata:
+        """Convert a GD Studio search result item into a TrackMetadata."""
         track_id = str(item.get("id", ""))
         title    = item.get("name", "Unknown")
 
@@ -336,10 +298,10 @@ class JooxProvider(BaseProvider):
         else:
             artist_str = str(raw_artists) or "Unknown"
 
-        album        = item.get("album", "Unknown")
-        pic_id       = str(item.get("pic_id", ""))
-        duration_ms  = int(item.get("duration_ms", item.get("duration", 0)) or 0)
-        cover_url    = self._gd_get_pic_url(pic_id) if pic_id else ""
+        album  = item.get("album", "Unknown")
+        pic_id = str(item.get("pic_id", ""))
+
+        cover_url = self._get_pic_url(pic_id) if pic_id else ""
 
         return TrackMetadata(
             id           = f"joox_{track_id}",
@@ -347,134 +309,57 @@ class JooxProvider(BaseProvider):
             artists      = artist_str,
             album        = album,
             album_artist = artist_str,
-            duration_ms  = duration_ms,
+            duration_ms  = 0,
             cover_url    = cover_url,
             external_url = "",
             extra_info   = {
                 "provider":     "joox",
-                "backend":      "gdstudio",
                 "raw_track_id": track_id,
                 "pic_id":       pic_id,
                 "lyric_id":     str(item.get("lyric_id", track_id)),
             },
         )
 
-    def _he_item_to_metadata(self, item: dict) -> TrackMetadata:
-        """Convert a HEMusic search result into TrackMetadata."""
-        track_id = str(item.get("ID", ""))
-        title    = item.get("name") or item.get("title") or "Unknown"
-
-        singers = item.get("singers", [])
-        if isinstance(singers, list):
-            artist_str = ", ".join(
-                s.get("name", "") if isinstance(s, dict) else str(s)
-                for s in singers
-            ).strip(", ") or "Unknown"
-        else:
-            artist_str = str(singers) or "Unknown"
-
-        album       = (item.get("album") or {}).get("name", "Unknown")
-        duration_ms = int((item.get("duration") or 0)) * 1000   # HEMusic gives seconds
-        cover_url   = self._he_get_cover(track_id) if track_id else ""
-
-        return TrackMetadata(
-            id           = f"joox_he_{track_id}",
-            title        = title,
-            artists      = artist_str,
-            album        = album,
-            album_artist = artist_str,
-            duration_ms  = duration_ms,
-            cover_url    = cover_url,
-            external_url = "",
-            extra_info   = {
-                "provider":     "joox",
-                "backend":      "hemusic",
-                "raw_track_id": track_id,
-                "lyric_id":     track_id,
-                "pic_id":       "",
-            },
-        )
-
-    def _embed_lyrics(self, dest: Path, lyrics: str, extension: str) -> None:
-        """Inject lyrics into an already-tagged file."""
-        if not lyrics or not lyrics.strip():
-            return
-        try:
-            if extension == ".flac":
-                from mutagen.flac import FLAC as _FLAC
-                audio = _FLAC(str(dest))
-                if "LYRICS" not in audio:
-                    audio["LYRICS"] = lyrics
-                    audio.save()
-            else:
-                from mutagen.id3 import ID3, USLT
-                try:
-                    audio = ID3(str(dest))
-                except Exception:
-                    audio = ID3()
-                if not audio.get("USLT::eng"):
-                    audio.add(USLT(encoding=3, lang="eng", desc="", text=lyrics))
-                    audio.save(str(dest), v2_version=3)
-            logger.debug("[joox] Lyrics embedded (%d chars)", len(lyrics))
-        except Exception as exc:
-            logger.warning("[joox] Lyrics embed failed: %s", exc)
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # Public interface — get_url
-    # ══════════════════════════════════════════════════════════════════════════
+    # ------------------------------------------------------------------
+    # get_url  (collection fetching)
+    # ------------------------------------------------------------------
 
     def get_url(self, url: str) -> tuple[str, list[TrackMetadata]]:
         """
-        Resolve a JOOX track/album URL or free-text query to a list of
-        TrackMetadata objects.
-
-        Accepted inputs
-        ---------------
-        * A numeric JOOX track ID (5+ digits).
-        * A URL or path segment containing ``_album`` + a numeric album ID.
-        * A free-text search query (falls back to both backends).
+        Accepts a numeric JOOX track/album ID or a plain search query.
+        Returns (collection_name, [TrackMetadata]).
         """
         match = re.search(r"(\d{5,})", url)
 
-        # ── album ──────────────────────────────────────────────────────────
         if match and "_album" in url.lower():
             album_id = match.group(1)
-            items = self._gd_get_album_tracks(album_id)
+            items = self._get_album_tracks(album_id)
             if items:
-                tracks     = [self._gd_item_to_metadata(it) for it in items]
+                tracks = [self._item_to_metadata(it, i + 1) for i, it in enumerate(items)]
                 album_name = tracks[0].album if tracks else "Unknown Album"
                 return album_name, tracks
 
-        # ── single track by ID ─────────────────────────────────────────────
         if match:
             track_id = match.group(1)
-            items = self._gd_search(track_id, count=1)
+            items = self._search(track_id, count=1)
             if items:
-                meta = self._gd_item_to_metadata(items[0])
+                meta = self._item_to_metadata(items[0])
                 return meta.title, [meta]
 
-        # ── free-text search — try GD Studio first, then HEMusic ───────────
         query = url.strip()
+        items = self._search(query, count=20)
+        if not items:
+            raise SpotiflacError(
+                ErrorKind.TRACK_NOT_FOUND,
+                f"No results for: {query}",
+                self.name,
+            )
+        tracks = [self._item_to_metadata(it, i + 1) for i, it in enumerate(items)]
+        return f"Search: {query}", tracks
 
-        items = self._gd_search(query, count=20)
-        if items:
-            tracks = [self._gd_item_to_metadata(it) for it in items]
-            return f"Search: {query}", tracks
-
-        items = self._he_search(query, page_size=20)
-        if items:
-            tracks = [self._he_item_to_metadata(it) for it in items]
-            return f"Search: {query}", tracks
-
-        raise SpotiflacError(
-            ErrorKind.TRACK_NOT_FOUND,
-            f"No results for: {query}",
-            self.name,
-        )
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # Public interface — download_track
-    # ══════════════════════════════════════════════════════════════════════════
+    # ------------------------------------------------------------------
+    # download_track  (BaseProvider interface)
+    # ------------------------------------------------------------------
 
     def download_track(
             self,
@@ -496,31 +381,47 @@ class JooxProvider(BaseProvider):
             is_album:            bool             = False,
             **kwargs:            Any,
     ) -> DownloadResult:
-        """
-        Download a JOOX track as FLAC.
 
-        Resolution order
-        ----------------
-        1. GD Studio backend  (preferred — fast, structured).
-        2. HEMusic backend    (fallback — richer FLAC catalogue).
-
-        The track is rejected if neither backend can serve a file at or above
-        the FLAC quality floor (_BR_MIN_FLAC / _HE_MIN_QUALITY).  No lossy
-        fallback is attempted.
-        """
         try:
-            extra   = metadata.extra_info or {}
-            backend = extra.get("backend", "gdstudio")
+            # ── 1. Resolve raw JOOX track ID ──────────────────────────────
+            extra        = metadata.extra_info or {}
+            raw_track_id = extra.get("raw_track_id", "")
 
-            # ── resolve the track on the appropriate backend ──────────────
-            if backend == "hemusic":
-                dl_url, quality_label, extension, raw_track_id = \
-                    self._resolve_via_hemusic(metadata, extra)
-            else:
-                dl_url, quality_label, extension, raw_track_id = \
-                    self._resolve_via_gdstudio(metadata, extra)
+            if not raw_track_id:
+                query = f"{metadata.title} {metadata.first_artist}".strip()
+                logger.info("[joox] Searching for: %s", query)
+                items = self._search(query, count=5)
+                if not items:
+                    raise TrackNotFoundError(self.name, f"Track not found on JOOX: {query}")
+                raw_track_id = str(items[0].get("id", ""))
+                if not raw_track_id:
+                    raise TrackNotFoundError(self.name, "Empty track ID from JOOX search")
+                extra = {
+                    "raw_track_id": raw_track_id,
+                    "pic_id":       str(items[0].get("pic_id", "")),
+                    "lyric_id":     str(items[0].get("lyric_id", raw_track_id)),
+                }
 
-            # ── build destination path ────────────────────────────────────
+            # ── 2. Fetch stream URL with quality-aware fallback chain ──────
+            dl_url, extension, actual_br, quality_label = self._get_stream_with_fallback(
+                raw_track_id, quality
+            )
+
+            if not dl_url:
+                raise SpotiflacError(
+                    ErrorKind.UNAVAILABLE,
+                    f"No stream available on JOOX for id={raw_track_id} (quality={quality})",
+                    self.name,
+                )
+
+            # ── 3. Cover art ──────────────────────────────────────────────
+            cover_url = metadata.cover_url
+            if not cover_url:
+                pic_id = extra.get("pic_id", "")
+                if pic_id:
+                    cover_url = self._get_pic_url(pic_id)
+
+            # ── 4. Build destination path ─────────────────────────────────
             dest = self._build_output_path(
                 metadata, output_dir, filename_format,
                 position, include_track_num, use_album_track_num, first_artist_only,
@@ -531,58 +432,43 @@ class JooxProvider(BaseProvider):
                 fmt = extension.lstrip(".")
                 return DownloadResult.skipped_result(self.name, str(dest), fmt=fmt)
 
-            # ── MusicBrainz async prefetch ────────────────────────────────
-            mb_fetcher = AsyncMBFetch(metadata.isrc) if getattr(metadata, "isrc", None) else None
+            # ── 5. MusicBrainz async fetch ────────────────────────────────
+            mb_fetcher = AsyncMBFetch(metadata.isrc) if metadata.isrc else None
 
-            # ── source banner ─────────────────────────────────────────────
-            api_base = _HEMUSIC_BASE if backend == "hemusic" else _GDSTUDIO_BASE
-            print_source_banner("joox", api_base, quality_label)
+            # ── 6. Source banner ──────────────────────────────────────────
+            print_source_banner("joox", _API_BASE, quality_label)
 
-            # ── download ──────────────────────────────────────────────────
+            # ── 7. Download ───────────────────────────────────────────────
             logger.info(
-                "[joox/%s] Downloading %r (id=%s, %s)",
-                backend, metadata.title, raw_track_id, quality_label,
+                "[joox] Downloading '%s' (id=%s, ext=%s)",
+                metadata.title, raw_track_id, extension
             )
             self._http.stream_to_file(dl_url, str(dest), self._progress_cb)
 
-            # ── validate ──────────────────────────────────────────────────
-            expected_s = (metadata.duration_ms or 0) // 1000
+            # ── 8. Validate (preview / duration mismatch) ─────────────────
+            expected_s = metadata.duration_ms // 1000
             valid, err_msg = validate_downloaded_track(str(dest), expected_s)
             if not valid:
                 if dest.exists():
                     os.remove(str(dest))
                 return DownloadResult.fail(self.name, f"Validation failed: {err_msg}")
 
-            # ── lyrics ────────────────────────────────────────────────────
-            fetched_lyrics: str | None = None
-            if embed_lyrics:
-                lyric_id = extra.get("lyric_id", raw_track_id)
-                if backend == "hemusic":
-                    # HEMusic does not expose a lyrics endpoint; delegate to
-                    # embed_metadata's own lyrics_providers pipeline.
-                    pass
-                else:
-                    fetched_lyrics = self._gd_get_lyric(lyric_id) or None
+            # ── 9. Lyrics from JOOX ───────────────────────────────────────
+            lyric_id  = extra.get("lyric_id", raw_track_id)
+            gd_lyrics: str | None = None
+            if embed_lyrics and lyric_id:
+                gd_lyrics = self._get_lyric(lyric_id) or None
 
-            # ── MusicBrainz tags ──────────────────────────────────────────
+            # ── 10. MusicBrainz tags ──────────────────────────────────────
             mb_tags: dict[str, str] = {}
             if mb_fetcher:
-                mb_tags = mb_result_to_tags(mb_fetcher.future.result())
+                res     = mb_fetcher.future.result()
+                mb_tags = mb_result_to_tags(res)
 
-            # ── cover art resolution ──────────────────────────────────────
-            cover_url = metadata.cover_url
-            if not cover_url:
-                if backend == "hemusic":
-                    cover_url = self._he_get_cover(raw_track_id)
-                else:
-                    pic_id = extra.get("pic_id", "")
-                    if pic_id:
-                        cover_url = self._gd_get_pic_url(pic_id)
-
+            # ── 11. Embed metadata ────────────────────────────────────────
             if cover_url and cover_url != metadata.cover_url:
                 metadata = metadata.model_copy(update={"cover_url": cover_url})
 
-            # ── embed metadata ────────────────────────────────────────────
             opts = EmbedOptions(
                 first_artist_only  = first_artist_only,
                 cover_url          = cover_url or metadata.cover_url,
@@ -596,9 +482,33 @@ class JooxProvider(BaseProvider):
             )
             embed_metadata(str(dest), metadata, opts, session=self._session)
 
-            # ── inject GD Studio lyrics when embed_metadata found nothing ─
-            if fetched_lyrics:
-                self._embed_lyrics(dest, fetched_lyrics, extension)
+            # Inject JOOX lyrics if the normal providers found nothing
+            if gd_lyrics and gd_lyrics.strip():
+                try:
+                    if extension == ".flac":
+                        from mutagen.flac import FLAC as _FLAC
+                        audio = _FLAC(str(dest))
+                        if "LYRICS" not in audio:
+                            audio["LYRICS"] = gd_lyrics
+                            audio.save()
+                    elif extension == ".m4a":
+                        from mutagen.mp4 import MP4
+                        audio = MP4(str(dest))
+                        if "\xa9lyr" not in audio:
+                            audio["\xa9lyr"] = [gd_lyrics]
+                            audio.save()
+                    else:
+                        from mutagen.id3 import ID3, USLT
+                        try:
+                            audio = ID3(str(dest))
+                        except Exception:
+                            audio = ID3()
+                        if not audio.get("USLT::eng"):
+                            audio.add(USLT(encoding=3, lang="eng", desc="", text=gd_lyrics))
+                            audio.save(str(dest), v2_version=3)
+                    logger.debug("[joox] JOOX lyrics embedded (%d chars)", len(gd_lyrics))
+                except Exception as exc:
+                    logger.warning("[joox] Lyrics embed failed: %s", exc)
 
             fmt = extension.lstrip(".")
             return DownloadResult.ok(self.name, str(dest), fmt=fmt)
@@ -609,122 +519,3 @@ class JooxProvider(BaseProvider):
         except Exception as exc:
             logger.exception("[%s] Unexpected error", self.name)
             return DownloadResult.fail(self.name, f"Unexpected: {exc}")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # Private resolution helpers (one per backend)
-    # ══════════════════════════════════════════════════════════════════════════
-
-    def _resolve_via_gdstudio(
-        self,
-        metadata: TrackMetadata,
-        extra: dict,
-    ) -> tuple[str, str, str, str]:
-        """
-        Resolve the download URL using the GD Studio backend.
-
-        Returns (dl_url, quality_label, extension, raw_track_id).
-        Raises SpotiflacError / TrackNotFoundError on failure.
-        Falls through to HEMusic if no lossless URL is available.
-        """
-        raw_track_id = extra.get("raw_track_id", "")
-
-        if not raw_track_id:
-            query = f"{metadata.title} {metadata.first_artist}".strip()
-            logger.info("[joox/gd] Searching for: %s", query)
-            items = self._gd_search(query, count=5)
-            if not items:
-                raise TrackNotFoundError(self.name, f"Not found on GD Studio: {query}")
-            raw_track_id = str(items[0].get("id", ""))
-            if not raw_track_id:
-                raise TrackNotFoundError(self.name, "Empty track ID from GD Studio")
-            extra = extra | {
-                "raw_track_id": raw_track_id,
-                "pic_id":       str(items[0].get("pic_id", "")),
-                "lyric_id":     str(items[0].get("lyric_id", raw_track_id)),
-            }
-
-        dl_url, actual_br = self._gd_get_stream(raw_track_id)
-
-        if dl_url:
-            quality_label = f"FLAC {actual_br} kbps"
-            return dl_url, quality_label, ".flac", raw_track_id
-
-        # GD Studio could not serve FLAC — try HEMusic
-        logger.info(
-            "[joox/gd] No FLAC for id=%s (br=%d) — trying HEMusic",
-            raw_track_id, actual_br,
-        )
-        return self._resolve_via_hemusic(metadata, extra)
-
-    def _resolve_via_hemusic(
-        self,
-        metadata: TrackMetadata,
-        extra: dict,
-    ) -> tuple[str, str, str, str]:
-        """
-        Resolve the download URL using the HEMusic backend.
-
-        Returns (dl_url, quality_label, extension, raw_track_id).
-        Raises SpotiflacError when no qualifying FLAC link is found.
-        """
-        raw_track_id = extra.get("raw_track_id", "")
-
-        # ── search if we have no ID or came from GD Studio metadata ───────
-        if not raw_track_id or extra.get("backend") != "hemusic":
-            query = f"{metadata.title} {metadata.first_artist}".strip()
-            logger.info("[joox/he] Searching for: %s", query)
-            items = self._he_search(query, page_size=10)
-            if not items:
-                raise SpotiflacError(
-                    ErrorKind.UNAVAILABLE,
-                    f"No FLAC available on either backend for: {query}",
-                    self.name,
-                )
-            # Pick the first item that has a qualifying FLAC fileLink
-            chosen_id = chosen_quality = chosen_fmt = None
-            for item in items:
-                tid, q, fmt = self._he_best_flac_link(item)
-                if tid:
-                    chosen_id, chosen_quality, chosen_fmt = tid, q, fmt
-                    break
-
-            if not chosen_id:
-                raise SpotiflacError(
-                    ErrorKind.UNAVAILABLE,
-                    f"HEMusic returned results but none have FLAC ≥ {_HE_MIN_QUALITY} kbps",
-                    self.name,
-                )
-            raw_track_id  = chosen_id
-            best_quality  = chosen_quality
-            best_fmt      = chosen_fmt
-        else:
-            # ID already known from a previous HEMusic search result
-            items = self._he_search(
-                f"{metadata.title} {metadata.first_artist}".strip(),
-                page_size=5,
-            )
-            chosen_id = chosen_quality = chosen_fmt = None
-            for item in items:
-                tid, q, fmt = self._he_best_flac_link(item)
-                if tid == raw_track_id:
-                    chosen_id, chosen_quality, chosen_fmt = tid, q, fmt
-                    break
-            if not chosen_id:
-                raise SpotiflacError(
-                    ErrorKind.UNAVAILABLE,
-                    f"HEMusic: no FLAC link for id={raw_track_id}",
-                    self.name,
-                )
-            best_quality = chosen_quality
-            best_fmt     = chosen_fmt
-
-        dl_url = self._he_get_stream(raw_track_id, best_quality, best_fmt)
-        if not dl_url:
-            raise SpotiflacError(
-                ErrorKind.UNAVAILABLE,
-                f"HEMusic: stream resolve failed for id={raw_track_id}",
-                self.name,
-            )
-
-        quality_label = f"FLAC {best_quality} kbps (HEMusic)"
-        return dl_url, quality_label, ".flac", raw_track_id
