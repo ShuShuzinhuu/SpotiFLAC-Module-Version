@@ -58,9 +58,24 @@ class IsrcFinder:
                 timeout=8,
             )
             if resp.status_code == 200:
-                data = resp.json()
-                ids = data.get("external_id") or [{}]
-                return ids[0].get("value")
+                        data = resp.json()
+                        
+                        # 1. Formato standard (API Web): {"external_ids": {"isrc": "..."}}
+                        ext_ids = data.get("external_ids")
+                        if isinstance(ext_ids, dict) and ext_ids.get("isrc"):
+                            return ext_ids["isrc"]
+
+                        # 2. Formato interno (Metadata): {"external_id": [{"type": "isrc", "id": "..."}]}
+                        ids_list = data.get("external_id")
+                        if isinstance(ids_list, list):
+                            for ext in ids_list:
+                                if isinstance(ext, dict):
+                                    if ext.get("type", "").lower() == "isrc":
+                                        return ext.get("id") or ext.get("value")
+                            
+                            # Fallback di sicurezza se manca il type
+                            if ids_list and isinstance(ids_list[0], dict):
+                                return ids_list[0].get("id") or ids_list[0].get("value")
             elif resp.status_code == 401:
                 self._spotify_client = None
         except Exception as e:

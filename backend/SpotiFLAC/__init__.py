@@ -34,11 +34,15 @@ from .providers import (
     TidalProvider,
     AmazonProvider,
     AppleMusicProvider,
+    JooxProvider,
+    NeteaseProvider,
+    MiguProvider,
+    KuwoProvider,
     SpotifyMetadataClient,
 )
 from .core import TrackMetadata, DownloadResult
 
-__version__ = "0.8.4"
+__version__ = "0.8.5"
 
 __all__ = [
     "SpotiFLAC",
@@ -49,6 +53,10 @@ __all__ = [
     "TidalProvider",
     "AmazonProvider",
     "AppleMusicProvider",
+    "JooxProvider",
+    "NeteaseProvider",
+    "MiguProvider",
+    "KuwoProvider",
     "SpotifyMetadataClient",
     "TrackMetadata",
     "DownloadResult",
@@ -68,7 +76,7 @@ def SpotiFLAC(
         url:                   str | list[str],
         output_dir:            str,
         services:              list[str] | None = None,
-        filename_format:       str              = "{title} - {artist}",
+        filename_format:        str              = "{title} - {artist}",
         use_track_numbers:     bool             = False,
         use_album_track_numbers: bool           = False,
         use_artist_subfolders: bool             = False,
@@ -76,7 +84,7 @@ def SpotiFLAC(
         loop:                  int | None       = None,
         allow_fallback:        bool             = True,
         quality:               str              = "LOSSLESS",
-        first_artist_only:     bool             = False,
+        first_artist_only:      bool             = False,
         log_level:             int              = logging.WARNING,
         output_path:           str | None       = None,
         embed_lyrics:          bool             = True,
@@ -92,10 +100,10 @@ def SpotiFLAC(
         timeout_s:             int | None       = None
 ) -> None:
     """
-    Scarica tracce/album/playlist da Spotify, Tidal, Apple Music, SoundCloud o YouTube.
+    Download tracks/album/playlist from Spotify, Tidal, Apple Music, Deezer, SoundCloud, Pandora and YouTube.
 
     Args:
-        url: URL singolo (str) o lista di URL (list[str]) per il batch.
+        url: single URL (str) o lista di URL (list[str]) per il batch.
         output_dir: Cartella di destinazione.
         services: Provider in ordine di priorità (default: ["tidal"]).
         track_max_retries: Tentativi extra per traccia in caso di fallimento (default: 0).

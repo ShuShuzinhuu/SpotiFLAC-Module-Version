@@ -1263,6 +1263,8 @@ class SpotiFLAC_API:
                 monitor_thread.join(timeout=1)
             self._push_download_stats()
             sf_logger.removeHandler(handler)
+            if 'console_handler' in locals():
+                sf_logger.removeHandler(console_handler)
 
     # ── Health Check ──────────────────────────────────────────────────────────
 
@@ -1330,6 +1332,8 @@ class SpotiFLAC_API:
 
 
 def run_gui():
+    logging.basicConfig(level=logging.WARNING, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    logging.getLogger('pywebview').setLevel(logging.WARNING)
     api = SpotiFLAC_API()
 
     # Try several candidate locations for the frontend files to be robust

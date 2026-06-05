@@ -12,6 +12,10 @@ class SongstatsProvider:
     def __init__(self, http_client: HttpClient):
         self.http = http_client
 
+    def get_isrc(self, track_id: str) -> Optional[str]:
+        data = self.get_data(track_id)
+        return data.get("isrc")
+
     def get_data(self, track_id: str) -> Dict[str, Optional[str]]:
         url = f"https://songstats.com/track/{track_id}"
         results = {"isrc": None, "tidal": None, "amazon": None, "deezer": None}

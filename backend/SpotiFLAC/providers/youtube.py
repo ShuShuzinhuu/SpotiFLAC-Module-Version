@@ -4,24 +4,21 @@ from __future__ import annotations
 import logging
 import os
 import re
-import yt_dlp
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple, Dict, Any, Iterator
+from typing import Any, Callable, Iterator
 from urllib.parse import quote, urlparse, parse_qs
 
 import httpx
-from ..core.http import NetworkManager
-from mutagen.id3 import (
-    ID3, ID3NoHeaderError,
-    TIT2, TPE1, TALB, TPE2, TDRC, TRCK, TPOS, APIC, TPUB, WXXX, COMM,
-    USLT, TCON, TBPM,
-)
+import yt_dlp
 
+from ..core.http import NetworkManager
 from ..core.models import TrackMetadata, DownloadResult
 from ..core.errors import SpotiflacError
 from .base import BaseProvider
 from ..core.tagger import embed_metadata, EmbedOptions
 from ..core.musicbrainz import mb_result_to_tags
+from ..core.download_validation import validate_downloaded_track
+from ..core.musicbrainz import AsyncMBFetch
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +35,7 @@ INNERTUBE_CLIENT_VERSION = "1.20240801.01.00"
 def _sanitize(value: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", value).strip()
 
-def _safe_int(value) -> int:
+def _safe_int(value: Any) -> int:
     try:
         return int(value)
     except (ValueError, TypeError):
@@ -52,8 +49,7 @@ class YouTubeProvider(BaseProvider):
         super().__init__(timeout_s=timeout_s)
         self._session = NetworkManager.get_sync_client()
         self._session.headers.update({"User-Agent": _DEFAULT_UA})
-        # Cache per evitare richieste multiple a Odesli/Deezer per la stessa traccia
-        self._enrichment_cache: Dict[str, Dict] = {}
+        self._enrichment_cache: dict[str, dict] = {}
 
     def set_progress_callback(self, cb: Callable[[int, int], None]) -> None:
         super().set_progress_callback(cb)
@@ -62,7 +58,7 @@ class YouTubeProvider(BaseProvider):
     # URL Detection & Resolution (Playlist, Album, Artist, Track)
     # ------------------------------------------------------------------
 
-    def get_url(self, url: str) -> Tuple[str, List[TrackMetadata]]:
+    def get_url(self, url: str) -> tuple[str, list[TrackMetadata]]:
         parsed = urlparse(url)
         qs = parse_qs(parsed.query)
 
@@ -75,7 +71,7 @@ class YouTubeProvider(BaseProvider):
             return self._fetch_container(browse_id)
 
         if playlist_id:
-            browse_id = playlist_id if playlist_id.startswith("VL") or playlist_id.startswith("PL") else f"VL{playlist_id}"
+            browse_id = playlist_id if playlist_id.startswith(("VL", "PL")) else f"VL{playlist_id}"
             return self._fetch_container(browse_id)
 
         video_id = self._extract_video_id(url)
@@ -91,6 +87,7 @@ class YouTubeProvider(BaseProvider):
             "context": {"client": {"clientName": "WEB_REMIX", "clientVersion": INNERTUBE_CLIENT_VERSION}},
             "videoId": video_id
         }
+        
         resp = self._session.post(url, json=payload, timeout=10)
         resp.raise_for_status()
         data = resp.json()
@@ -119,7 +116,7 @@ class YouTubeProvider(BaseProvider):
     # InnerTube API Fetchers per Container (Playlist/Album)
     # ------------------------------------------------------------------
 
-    def _fetch_container(self, browse_id: str) -> Tuple[str, List[TrackMetadata]]:
+    def _fetch_container(self, browse_id: str) -> tuple[str, list[TrackMetadata]]:
         logger.info("[youtube] Fetching container: %s", browse_id)
 
         url = "https://music.youtube.com/youtubei/v1/browse?alt=json"
@@ -133,23 +130,25 @@ class YouTubeProvider(BaseProvider):
         data = resp.json()
 
         title = "Unknown YouTube Container"
-        try:
-            header = data.get("header", {}).get("musicDetailHeaderRenderer", {})
-            title = header.get("title", {}).get("runs", [{}])[0].get("text", title)
-        except (KeyError, IndexError, TypeError, AttributeError): 
-            pass
+        header_renderer = data.get("header", {}).get("musicDetailHeaderRenderer", {})
+        runs = header_renderer.get("title", {}).get("runs", [])
+        if runs and isinstance(runs, list):
+            title = runs[0].get("text", title)
 
-        tracks = []
+        tracks: list[TrackMetadata] = []
         self._parse_tracks_from_data(data, tracks)
 
         continuation = self._get_continuation_token(data)
         while continuation:
             logger.debug("[youtube] Fetching continuation...")
             cont_data = self._fetch_continuation(continuation)
-            if not cont_data: break
+            if not cont_data: 
+                break
 
             added = self._parse_tracks_from_data(cont_data, tracks)
-            if added == 0: break
+            if added == 0: 
+                break
+            
             continuation = self._get_continuation_token(cont_data)
 
         for i, track in enumerate(tracks):
@@ -157,58 +156,75 @@ class YouTubeProvider(BaseProvider):
 
         return title, tracks
 
-    def _parse_tracks_from_data(self, data: Dict, track_list: List[TrackMetadata]) -> int:
+    def _parse_tracks_from_data(self, data: dict, track_list: list[TrackMetadata]) -> int:
         count_before = len(track_list)
         items = self._find_key_recursive(data, "musicResponsiveListItemRenderer")
 
         for item in items:
-            try:
-                v_id = item.get("playlistItemData", {}).get("videoId")
-                if not v_id: continue
-
-                columns = item.get("flexColumns", [])
-                title = columns[0].get("musicResponsiveListItemFlexColumnRenderer", {}).get("text", {}).get("runs", [{}])[0].get("text", "Unknown")
-
-                artist = "Unknown Artist"
-                if len(columns) > 1:
-                    artist_runs = columns[1].get("musicResponsiveListItemFlexColumnRenderer", {}).get("text", {}).get("runs", [])
-                    artist = ", ".join([r["text"] for r in artist_runs if "browseId" in r.get("navigationEndpoint", {}).get("browseEndpoint", {})])
-
-                thumbnails = item.get("thumbnail", {}).get("musicThumbnailRenderer", {}).get("thumbnail", {}).get("thumbnails", [])
-                cover = thumbnails[-1].get("url") if thumbnails else ""
-
-                track_list.append(TrackMetadata(
-                    id=v_id,
-                    title=title,
-                    artists=artist,
-                    album_artist=artist,
-                    album="YouTube Music",
-                    duration_ms=0,
-                    cover_url=cover,
-                    external_url=f"https://music.youtube.com/watch?v={v_id}",
-                    extra_info={"provider": "youtube"}
-                ))
-            except (KeyError, IndexError, TypeError, AttributeError) as e:
-                logger.debug(f"[youtube] Errore nel parsing della traccia: {e}")
+            if not isinstance(item, dict):
                 continue
+                
+            v_id = item.get("playlistItemData", {}).get("videoId")
+            if not v_id: 
+                continue
+
+            columns = item.get("flexColumns", [])
+            title = "Unknown"
+            artist = "Unknown Artist"
+            
+            if columns and isinstance(columns, list):
+                # Estrazione Titolo
+                first_col = columns[0].get("musicResponsiveListItemFlexColumnRenderer", {})
+                runs = first_col.get("text", {}).get("runs", [])
+                if runs:
+                    title = runs[0].get("text", "Unknown")
+
+                # Estrazione Artista
+                if len(columns) > 1:
+                    second_col = columns[1].get("musicResponsiveListItemFlexColumnRenderer", {})
+                    artist_runs = second_col.get("text", {}).get("runs", [])
+                    artist_parts = [
+                        r["text"] for r in artist_runs 
+                        if "browseId" in r.get("navigationEndpoint", {}).get("browseEndpoint", {})
+                    ]
+                    if artist_parts:
+                        artist = ", ".join(artist_parts)
+
+            thumbnails = item.get("thumbnail", {}).get("musicThumbnailRenderer", {}).get("thumbnail", {}).get("thumbnails", [])
+            cover = thumbnails[-1].get("url") if thumbnails else ""
+
+            track_list.append(TrackMetadata(
+                id=v_id,
+                title=title,
+                artists=artist,
+                album_artist=artist,
+                album="YouTube Music",
+                duration_ms=0,
+                cover_url=cover,
+                external_url=f"https://music.youtube.com/watch?v={v_id}",
+                extra_info={"provider": "youtube"}
+            ))
 
         return len(track_list) - count_before
 
-    def _get_continuation_token(self, data: Dict) -> Optional[str]:
+    def _get_continuation_token(self, data: dict) -> str | None:
         tokens = self._find_key_recursive(data, "continuation")
         return next(tokens, None)
 
-    def _fetch_continuation(self, token: str) -> Optional[Dict]:
+    def _fetch_continuation(self, token: str) -> dict | None:
         url = f"https://music.youtube.com/youtubei/v1/browse?alt=json&ctoken={quote(token)}&continuation={quote(token)}"
         try:
-            resp = self._session.post(url, json={"context": {"client": {"clientName": "WEB_REMIX", "clientVersion": INNERTUBE_CLIENT_VERSION}}}, timeout=10)
+            resp = self._session.post(
+                url, 
+                json={"context": {"client": {"clientName": "WEB_REMIX", "clientVersion": INNERTUBE_CLIENT_VERSION}}}, 
+                timeout=10
+            )
             return resp.json() if resp.is_success else None
         except httpx.RequestError as e: 
             logger.debug(f"[youtube] Errore di rete in _fetch_continuation: {e}")
             return None
 
     def _find_key_recursive(self, data: Any, key: str) -> Iterator[Any]:
-        """Generatore per cercare chiavi ricorsivamente nei dizionari e nelle liste."""
         if isinstance(data, dict):
             for k, v in data.items():
                 if k == key: 
@@ -223,12 +239,7 @@ class YouTubeProvider(BaseProvider):
     # Odesli & Deezer Metadata Enrichment (Portato da JS)
     # ------------------------------------------------------------------
 
-    def _enrich_metadata_with_odesli(self, metadata: TrackMetadata, platform_url: str) -> Optional[str]:
-        """
-        Interroga Odesli per risolvere l'URL di YouTube Music.
-        Se manca l'ISRC, utilizza il Deezer ID (se disponibile) interrogando l'API di Deezer.
-        (Equivalente alla funzione enrichTrack nel file index.js)
-        """
+    def _enrich_metadata_with_odesli(self, metadata: TrackMetadata, platform_url: str) -> str | None:
         api_url = f"https://api.song.link/v1-alpha.1/links?url={quote(platform_url)}"
         
         try:
@@ -244,7 +255,7 @@ class YouTubeProvider(BaseProvider):
                         metadata.isrc = entity_data.get("isrc")
                         logger.info(f"[youtube] ISRC trovato via Odesli: {metadata.isrc}")
 
-                # 2. Fallback su API Deezer per ISRC se non trovato in Odesli (logica JS)
+                # 2. Fallback su API Deezer per ISRC
                 if not metadata.isrc and "deezer" in links:
                     deezer_url = links["deezer"].get("url", "")
                     match = re.search(r'/track/(\d+)', deezer_url)
@@ -260,8 +271,6 @@ class YouTubeProvider(BaseProvider):
                                     logger.info(f"[youtube] ISRC recuperato via fallback Deezer API: {metadata.isrc}")
                         except httpx.RequestError as e:
                             logger.warning(f"[youtube] Deezer API fallback errore di rete: {e}")
-                        except Exception as e:
-                            logger.warning(f"[youtube] Deezer API fallback fallito: {e}")
 
                 # 3. Ritorna URL YouTube
                 yt_info = links.get("youtubeMusic") or links.get("youtube")
@@ -290,7 +299,6 @@ class YouTubeProvider(BaseProvider):
             logger.info(f"[youtube] URL risolto e metadati arricchiti con successo: {yt_url}")
             return yt_url
 
-        # Fallback alla ricerca testuale diretta
         if metadata.title and metadata.artists:
             yt_url = self._search_youtube_direct(metadata.title, metadata.artists)
             if yt_url:
@@ -336,19 +344,19 @@ class YouTubeProvider(BaseProvider):
     # ------------------------------------------------------------------
 
     def _download_direct_innertube(self, video_id: str, dest_path: str) -> bool:
-        def _yt_dlp_progress(d):
-            if d['status'] == 'downloading':
+        def _yt_dlp_progress(d: dict) -> None:
+            if d.get('status') == 'downloading':
                 downloaded = d.get('downloaded_bytes', 0)
                 total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
                 if self._progress_cb and total > 0:
                     self._progress_cb(downloaded, total)
 
         class MuteLogger:
-            def debug(self, msg): pass
-            def warning(self, msg): pass
-            def error(self, msg): pass
+            def debug(self, msg: str) -> None: pass
+            def info(self, msg: str) -> None: pass
+            def warning(self, msg: str) -> None: pass
+            def error(self, msg: str) -> None: pass
 
-        # Costruisce il template output in maniera sicura cross-platform
         out_tmpl = str(Path(dest_path).with_suffix('.%(ext)s'))
 
         ydl_opts = {
@@ -360,7 +368,7 @@ class YouTubeProvider(BaseProvider):
             'outtmpl': out_tmpl,
             'extractor_args': {
                 'youtube': [
-                    'player_client=android,mweb,ios',  # Catena di client come definito nel JS
+                    'player_client=android,mweb,ios',
                     'player_skip=webpage,configs,js'
                 ]
             },
@@ -392,11 +400,8 @@ class YouTubeProvider(BaseProvider):
         return False
 
     def _request_cobalt(self, video_url: str) -> str | None:
-        """
-        Interroga Cobalt. Allineato alla priorità JS (api.zarz.moe come primaria)
-        """
         cobalt_instances = [
-            "https://api.zarz.moe",       # Priorità alta (Da JS CONFIG.cobaltAudioURL)
+            "https://api.zarz.moe",
             "https://co.wuk.sh",
             "https://cobalt.qiaeru.tech",
             "https://cobalt.cibere.dev",
@@ -413,7 +418,6 @@ class YouTubeProvider(BaseProvider):
         for base_url in cobalt_instances:
             try:
                 logger.debug(f"[youtube] Tentativo Cobalt via: {base_url}")
-                # Nuovo standard Cobalt v10 (Come nel JS)
                 payload_v10 = {
                     "url": video_url,
                     "downloadMode": "audio",
@@ -437,22 +441,18 @@ class YouTubeProvider(BaseProvider):
                         return dl_url
             except httpx.RequestError as exc:
                 logger.debug(f"[youtube] Errore di rete Cobalt su {base_url}: {exc}")
-                continue
             except Exception as exc:
                 logger.debug(f"[youtube] Fallimento Cobalt su {base_url}: {exc}")
-                continue
 
         logger.warning("[youtube] Tutti i server Cobalt sono attualmente offline o irraggiungibili.")
         return None
 
     def _request_yt1d(self, video_url: str) -> str | None:
-        """
-        Allineato al parsing avanzato del JS extractYt1dDownloadURL()
-        """
         try:
             res_config = self._session.get("https://yt1d.io/results/", headers={"User-Agent": _DEFAULT_UA}, timeout=10)
             nonce_match = re.search(r'"nonce"\s*:\s*"([^"]+)"', res_config.text)
-            if not nonce_match: return None
+            if not nonce_match: 
+                return None
             nonce = nonce_match.group(1)
 
             payload = {
@@ -468,12 +468,12 @@ class YouTubeProvider(BaseProvider):
                 "Referer": "https://yt1d.io/results/",
                 "User-Agent": _DEFAULT_UA
             }
+            
             res_audio = self._session.post("https://yt1d.io/wp-admin/admin-ajax.php", data=payload, headers=headers, timeout=15)
             if res_audio.status_code == 200:
                 data = res_audio.json()
-                
-                # Allineamento chiavi JS
                 dl_url = data.get("downloadUrl") or data.get("downloadURL") or data.get("url")
+                
                 if not dl_url and data.get("data"):
                     nested = data["data"]
                     dl_url = nested.get("downloadUrl") or nested.get("downloadURL") or nested.get("url")
@@ -481,54 +481,13 @@ class YouTubeProvider(BaseProvider):
                 if dl_url and dl_url.startswith("http"):
                     logger.info("[youtube] YT1D URL generated successfully")
                     return dl_url
+                    
         except httpx.RequestError as exc:
             logger.warning(f"[youtube] yt1d fallback network error: {exc}")
         except Exception as exc:
             logger.warning(f"[youtube] yt1d fallback failed: {exc}")
+            
         return None
-
-    # ------------------------------------------------------------------
-    # Metadata embedding per MP3 (ID3)
-    # ------------------------------------------------------------------
-
-    def _embed_metadata(self, filepath: str, title: str, artist: str, album: str, album_artist: str, date: str, track_num: int, total_tracks: int, disc_num: int, total_discs: int, cover_url: str = "", publisher: str = "", url: str = "", lyrics: str = "", genre: str = "", bpm: str = "") -> None:
-        try:
-            try:
-                audio = ID3(filepath)
-                audio.delete()
-            except ID3NoHeaderError:
-                audio = ID3()
-
-            if title:        audio.add(TIT2(encoding=3, text=str(title)))
-            if artist:       audio.add(TPE1(encoding=3, text=str(artist)))
-            if album:        audio.add(TALB(encoding=3, text=str(album)))
-            if album_artist: audio.add(TPE2(encoding=3, text=str(album_artist)))
-            if date:         audio.add(TDRC(encoding=3, text=str(date)))
-            if genre:        audio.add(TCON(encoding=3, text=str(genre)))
-            if bpm:          audio.add(TBPM(encoding=3, text=str(bpm)))
-
-            audio.add(TRCK(encoding=3, text=f"{_safe_int(track_num)}/{_safe_int(total_tracks)}"))
-            audio.add(TPOS(encoding=3, text=f"{_safe_int(disc_num)}/{_safe_int(total_discs)}"))
-
-            if publisher: audio.add(TPUB(encoding=3, text=[str(publisher)]))
-            if url:       audio.add(WXXX(encoding=3, desc="", url=str(url)))
-
-            audio.add(COMM(encoding=3, lang="eng", desc="", text=["https://github.com/ShuShuzinhuu/SpotiFLAC-Module-Version"]))
-
-            if lyrics:
-                audio.add(USLT(encoding=3, lang="eng", desc="", text=lyrics))
-
-            if cover_url:
-                try:
-                    r = self._session.get(cover_url, timeout=10)
-                    if r.status_code == 200:
-                        audio.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=r.content))
-                except Exception as exc:
-                    logger.warning(f"[youtube] Cover download failed: {exc}")
-
-            audio.save(filepath, v2_version=3)
-        except Exception as exc:
-            logger.warning(f"[youtube] embed_metadata failed: {exc}")
 
     # ------------------------------------------------------------------
     # BaseProvider interface
@@ -545,6 +504,7 @@ class YouTubeProvider(BaseProvider):
                 first_artist_only=first_artist_only,
                 extension=".m4a",
             )
+            
             if self._file_exists(dest):
                 return DownloadResult.skipped_result(self.name, str(dest), fmt="m4a")
 
@@ -561,7 +521,6 @@ class YouTubeProvider(BaseProvider):
             if not video_id:
                 return DownloadResult.fail(self.name, "Could not extract video ID")
 
-            from ..core.musicbrainz import AsyncMBFetch
             mb_fetcher = AsyncMBFetch(metadata.isrc) if metadata.isrc else None
 
             try:
@@ -606,7 +565,6 @@ class YouTubeProvider(BaseProvider):
                         continue
 
             if not download_success:
-                # Pulizia di sicurezza nel caso i fallback falliscano definitivamente
                 if os.path.exists(str(dest)):
                     try:
                         os.remove(str(dest))
@@ -615,7 +573,6 @@ class YouTubeProvider(BaseProvider):
                 return DownloadResult.fail(self.name, "All YouTube download sources failed (Direct, Cobalt, YT1D)")
 
             # Validazione del file finale
-            from ..core.download_validation import validate_downloaded_track
             expected_s = metadata.duration_ms // 1000
             valid, err_msg = validate_downloaded_track(str(dest), expected_s)
             if not valid:
@@ -665,6 +622,7 @@ class YouTubeProvider(BaseProvider):
                 enrich_qobuz_token=qobuz_token or "",
                 is_album=is_album,
             )
+            
             embed_metadata(str(dest), metadata, opts, session=self._session)
 
             return DownloadResult.ok(self.name, str(dest), fmt="m4a")
