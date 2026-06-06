@@ -239,7 +239,7 @@ class HealthResult(NamedTuple):
     url:      str
     method:   str
     ok:       bool
-    latency:  float   # ms; -1 = irraggiungibile
+    latency:  float
     detail:   str
 
 
@@ -259,7 +259,6 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
 
         if method == "POST":
             if provider == "deezer":
-                # Il resolver specifico di Deezer richiede un payload particolare
                 req_kwargs["json"] = {
                     "platform": "deezer",
                     "url": "https://www.deezer.com/track/3135556"
