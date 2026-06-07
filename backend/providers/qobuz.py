@@ -64,6 +64,7 @@ _API_CONFIG_RE = re.compile(
 _STREAM_APIS: list[str] = [
     "https://qbz.afkarxyz.qzz.io/api/track/",
     "https://qobuz.spotbye.qzz.io/api/track/",
+    "https://qobuz.kennyy.com.br/api/download-music?",
 ]
 
 _POST_APIS: list[str] = [
@@ -263,6 +264,8 @@ def _compute_signature(path: str, params: dict, timestamp: str, secret: str) -> 
 
 
 def _build_stream_url(api_base: str, track_id: int, quality: str) -> str:
+    if "kennyy.com.br" in api_base:
+        return f"{api_base}track_id={track_id}&quality={quality}"
     if api_base.endswith("="):
         return f"{api_base}{track_id}&quality={quality}"
     return f"{api_base}{track_id}?quality={quality}"
