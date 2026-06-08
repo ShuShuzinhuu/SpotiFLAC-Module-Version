@@ -849,6 +849,8 @@ class QobuzProvider(BaseProvider):
                 metadata.composer = composer_obj["name"]
                 
             qobuz_extra_tags = {}
+            
+            # --- DATI BASE E GERARCHICI ---
             if album_data.get("genre") and album_data["genre"].get("name"):
                 qobuz_extra_tags["GENRE"] = album_data["genre"]["name"]
                 
@@ -858,6 +860,36 @@ class QobuzProvider(BaseProvider):
                 
             if album_data.get("upc"):
                 qobuz_extra_tags["BARCODE"] = album_data["upc"]
+                qobuz_extra_tags["UPC"] = album_data["upc"]
+
+            # --- DETTAGLI AUDIO E TECNICI ---
+            if album_data.get("maximum_technical_specifications"):
+                qobuz_extra_tags["TECHNICAL_SPECIFICATIONS"] = album_data["maximum_technical_specifications"]
+            
+            # ReplayGain
+            audio_info = track.get("audio_info", {})
+            if "replaygain_track_gain" in audio_info:
+                qobuz_extra_tags["REPLAYGAIN_TRACK_GAIN"] = f"{audio_info['replaygain_track_gain']} dB"
+            if "replaygain_track_peak" in audio_info:
+                qobuz_extra_tags["REPLAYGAIN_TRACK_PEAK"] = str(audio_info['replaygain_track_peak'])
+
+            # --- CREDITI E TESTI ---
+            if track.get("performers"):
+                qobuz_extra_tags["COMMENT"] = track["performers"]
+            if track.get("parental_warning"):
+                qobuz_extra_tags["ITUNESADVISORY"] = "1"
+
+            # --- ID E URL ---
+            qobuz_track_id = str(track.get("id", ""))
+            qobuz_album_id = str(album_data.get("qobuz_id", ""))
+            if qobuz_track_id: qobuz_extra_tags["QOBUZ_TRACK_ID"] = qobuz_track_id
+            if qobuz_album_id: qobuz_extra_tags["QOBUZ_ALBUM_ID"] = qobuz_album_id
+            if album_data.get("url"): qobuz_extra_tags["URL"] = album_data["url"]
+
+            # --- AWARDS ---
+            awards = album_data.get("awards", [])
+            if awards:
+                qobuz_extra_tags["AWARDS"] = ", ".join([a.get("name") for a in awards])
                 
             if track.get("isrc"):
                 metadata.isrc = track["isrc"]
