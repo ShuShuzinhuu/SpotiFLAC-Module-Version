@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from backend.core import provider_stats
-from backend.core.provider_stats import ProviderScorer
+from SpotiFLAC.core import provider_stats
+from SpotiFLAC.core.provider_stats import ProviderScorer
 
 
 class ProviderStatsTests(unittest.TestCase):

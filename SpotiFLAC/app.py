@@ -1404,7 +1404,7 @@ def run_gui():
 
     # 2) frontend inside the backend package (if present)
     try:
-        import backend as _sp_pkg
+        import SpotiFLAC as _sp_pkg
         pkg_frontend = os.path.join(os.path.dirname(_sp_pkg.__file__), 'frontend', 'index.html')
         candidates.append(pkg_frontend)
     except Exception:

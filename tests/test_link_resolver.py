@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from backend.core.link_resolver import LinkResolver
+from SpotiFLAC.core.link_resolver import LinkResolver
 
 
 class LinkResolverTests(unittest.TestCase):
