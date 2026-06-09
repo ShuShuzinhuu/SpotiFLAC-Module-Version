@@ -18,6 +18,9 @@ from urllib.parse import urlparse
 
 import httpx
 from .http import NetworkManager
+import threading
+
+
 
 # ---------------------------------------------------------------------------
 # Helper per la validazione del payload
@@ -56,6 +59,10 @@ def _contains_streaming_url(body: str) -> bool:
 
     return False
 
+def _check_one_gated(provider: str, method: str, url: str) -> HealthResult:
+    """Rispetta il semaforo globale prima di aprire una connessione."""
+    with _CONN_SEM:
+        return _check_one(provider, method, url)
 
 # ---------------------------------------------------------------------------
 # Import endpoint lists directly from provider modules
@@ -213,6 +220,13 @@ def _load_endpoints() -> dict[str, list[tuple[str, str]]]:
             ("GET", "https://music.wjhe.top/api/music/joox/url?ID=11259&quality=1000&format=flac")
         ]
 
+    # ── FlacDownloader ────────────────────────────────────────────────────
+    try:
+        from ..providers.flacdownloader import _API_BASE as FLAC_BASE
+        endpoints["flacdownloader"] = [("GET", f"{FLAC_BASE}/download-token?t=9997018&f=FLAC")]
+    except ImportError:
+        endpoints["flacdownloader"] = [("GET", "https://flacdownloader.com/flac/download-token?t=9997018&f=FLAC")]
+
     return endpoints
 
 
@@ -221,10 +235,68 @@ def _load_endpoints() -> dict[str, list[tuple[str, str]]]:
 # ---------------------------------------------------------------------------
 
 _UA      = "SpotiFLAC-HealthCheck/4.5.0"
-_TIMEOUT = 5
+_TIMEOUT = 2
+_MAX_WORKERS = 3 
+_CONN_SEM = threading.Semaphore(_MAX_WORKERS)
+_ZARZ_HEALTH_URL = "https://api.zarz.moe/v1/health"
 
-# Endpoint POST-only che non richiedono payload per rispondere (accettano body vuoto)
-_POST_PROBE_ONLY: frozenset[str] = frozenset()
+_HC_CLIENT: httpx.Client | None = None
+_HC_LOCK = threading.Lock()
+
+def _get_health_client() -> httpx.Client:
+    global _HC_CLIENT
+    if _HC_CLIENT is None:
+        with _HC_LOCK:
+            if _HC_CLIENT is None:
+                _HC_CLIENT = httpx.Client(
+                    limits=httpx.Limits(
+                        max_connections=_MAX_WORKERS,
+                        max_keepalive_connections=2,
+                        keepalive_expiry=5,
+                    ),
+                    timeout=_TIMEOUT,
+                )
+    return _HC_CLIENT
+
+def _zarz_bulk_check(services: list[str]) -> dict[str, HealthResult]:
+    """
+    Una sola richiesta a Zarz per ricavare lo stato di tutti i provider.
+    Ritorna {provider: HealthResult} solo per i provider presenti nella risposta.
+    """
+    try:
+        t0 = time.perf_counter()
+        client = NetworkManager.get_sync_client()
+        resp = client.get(
+            _ZARZ_HEALTH_URL,
+            headers={"User-Agent": _UA},
+            timeout=_TIMEOUT,
+        )
+        ms = (time.perf_counter() - t0) * 1000
+
+        if resp.status_code != 200:
+            return {}
+
+        svc_map = json.loads(resp.text).get("services", {})
+        out: dict[str, HealthResult] = {}
+
+        for svc in services:
+            key = "qobuz" if svc == "qbz" else svc
+            if key not in svc_map:
+                continue
+            info = svc_map[key]
+            if info.get("status") == 401 and info.get("detail") == "auth_required":
+                ok, detail = False, "Auth required"
+            elif info.get("ok") is True or info.get("status") == 200:
+                ok, detail = True, info.get("detail") or "ok"
+            else:
+                ok     = False
+                detail = f"Zarz {info.get('status')} ({info.get('detail', 'error')})"
+
+            out[svc] = HealthResult(svc, _ZARZ_HEALTH_URL, "GET", ok, ms, detail)
+
+        return out
+    except Exception:
+        return {}
 
 # Carica gli endpoint una sola volta al momento dell'import
 _ENDPOINTS: dict[str, list[tuple[str, str]]] = _load_endpoints()
@@ -257,6 +329,13 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
             "allow_redirects": True,
         }
 
+        if provider == "flacdownloader":
+            req_kwargs["headers"].update({
+                "Accept": "*/*",
+                "Content-Type": "application/json",
+                "X-Download-Access": "l@p*gute)77=g5clebcp4lz#=x%(*rwg+ku0_)bh=&%6wg!a"
+            })
+
         if method == "POST":
             if provider == "deezer":
                 req_kwargs["json"] = {
@@ -275,7 +354,7 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
                 req_kwargs["json"] = {"url": dummy_url}
 
         # Usiamo il nostro connection pool centralizzato
-        client = NetworkManager.get_sync_client()
+        client = _get_health_client()
         resp = client.request(method, url, follow_redirects=True, **{k: v for k, v in req_kwargs.items() if k != 'allow_redirects'})
         ms = (time.perf_counter() - t0) * 1000
 
@@ -384,7 +463,7 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
                     ok = True
                 else:
                     try:
-                        parsed = json.loads(body)
+                        parsed = json.loads(resp.text)
                         if isinstance(parsed, dict) and body.strip():
                             ok     = True
                             detail = parsed.get("error", "JSON OK")
@@ -410,6 +489,19 @@ def _check_one(provider: str, method: str, url: str) -> HealthResult:
                         detail = parsed.get("error", {}).get("message", "API Error")
                 except ValueError:
                     detail = "Bad JSON"
+
+            # ── FlacDownloader ────────────────────────────────────────────
+            elif provider == "flacdownloader":
+                try:
+                    parsed = json.loads(body)
+                    # Se l'API restituisce un token o un errore JSON gestito, è online
+                    if "token" in parsed or "expires" in parsed or "error" in parsed:
+                        ok = True
+                        detail = "API OK"
+                    else:
+                        detail = "Unknown JSON"
+                except ValueError:
+                    detail = "CF Blocked / HTML"
 
             # ── Apple / SoundCloud / YouTube / default ─────────────────────
             else:
@@ -447,40 +539,55 @@ def run_health_check(
         *,
         include_all_endpoints: bool = True,
 ) -> list[HealthResult]:
+    results: list[HealthResult] = []
     tasks:   list[tuple[str, str, str]] = []
-    results: list[HealthResult]         = []
 
+    # YouTube → sempre locale, nessuna rete
     for svc in services:
         if svc == "youtube":
             results.append(HealthResult("youtube", "yt-dlp (local binary)", "CLI", True, 0.0, "local"))
 
+    remaining = [s for s in services if s != "youtube"]
+
+    # ── Fast-path: una richiesta Zarz per tutti i provider ─────────────────
+    zarz_results = _zarz_bulk_check(remaining)
+
+    for svc in remaining:
+        zarz_r = zarz_results.get(svc)
+
+        if zarz_r and zarz_r.ok:
+            # Provider confermato OK da Zarz → nessuna sonda individuale
+            results.append(zarz_r)
+            continue
+
+        # Provider assente da Zarz, o segnalato come down → sonda individuale
         eps = _ENDPOINTS.get(svc)
         if not eps:
+            if zarz_r:
+                results.append(zarz_r)   # almeno restituiamo il risultato Zarz
             continue
+
+        # Escludi il Zarz health (già controllato sopra)
+        eps_to_probe = [(m, u) for m, u in eps if "zarz.moe/v1/health" not in u]
+
         if include_all_endpoints:
-            tasks.extend((svc, m, u) for m, u in eps)
-        else:
-            m, u = eps[0]
+            tasks.extend((svc, m, u) for m, u in eps_to_probe)
+        elif eps_to_probe:
+            m, u = eps_to_probe[0]
             tasks.append((svc, m, u))
 
-    if not tasks:
-        return results
+    # ── Sonde individuali (solo per provider non già risolti da Zarz) ───────
+    if tasks:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
+            futs = {pool.submit(_check_one_gated, p, m, u): (p, m, u) for p, m, u in tasks}
+            for fut in concurrent.futures.as_completed(futs):
+                results.append(fut.result())
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), 20)) as pool:
-        futs = {pool.submit(_check_one, p, m, u): (p, m, u) for p, m, u in tasks}
-        for fut in concurrent.futures.as_completed(futs):
-            results.append(fut.result())
-
-    # ── Post-processing: auth_required dal Zarz health check blocca l'intero provider ──
-    auth_blocked: set[str] = {
-        r.provider for r in results
-        if "auth" in r.detail.lower() and not r.ok
-    }
+    # ── Post-processing auth_required ──────────────────────────────────────
+    auth_blocked = {r.provider for r in results if "auth" in r.detail.lower() and not r.ok}
     if auth_blocked:
         results = [
-            r._replace(ok=False, detail="Auth required")
-            if r.provider in auth_blocked
-            else r
+            r._replace(ok=False, detail="Auth required") if r.provider in auth_blocked else r
             for r in results
         ]
 
