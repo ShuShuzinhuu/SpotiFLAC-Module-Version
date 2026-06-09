@@ -131,7 +131,7 @@ def _header() -> None:
 
 _ALL_SERVICES = [
     "tidal", "qobuz", "deezer", "amazon", "soundcloud", "apple", 
-    "youtube", "pandora", "joox", "netease", "migu", "kuwo", "spoti"
+    "youtube", "pandora", "joox", "netease", "migu", "kuwo", "spoti", "flacdownloader"
 ]
 def _run_health_check():
     try:
@@ -557,7 +557,7 @@ def run_interactive() -> dict:
             "Services (order = priority):",
             options  = [
                 "deezer", "tidal", "qobuz", "amazon", "joox", "netease", 
-                "migu", "kuwo", "spoti", "soundcloud", "youtube", "apple", "pandora"
+                "migu", "kuwo", "spoti", "soundcloud", "youtube", "apple", "pandora", "flacdownloader"
             ],
             defaults = ["tidal"],
             ordered  = True,

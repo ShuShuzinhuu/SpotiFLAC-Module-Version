@@ -70,7 +70,7 @@ class SpotiFLAC_API:
         self.log("Python Backend connected.", "info")
         self.log(f"Default download folder: {self.download_dir}", "info")
         self._check_ffmpeg_startup()
-        self.run_health_check(["tidal", "qobuz", "deezer", "apple", "soundcloud", "spoti"])
+        self.run_health_check(["tidal", "qobuz", "deezer", "apple", "soundcloud", "spoti", "flacdownloader"])
         app_version = self.app_version
         try:
             if self._window:
