@@ -83,6 +83,27 @@ class SpotiFLAC_API:
     def get_version(self):
         return self.app_version
 
+    def get_latest_version(self) -> dict:
+        client = NetworkManager.get_sync_client()
+        try:
+            resp = client.get(
+                "https://api.github.com/repos/ShuShuzinhuu/SpotiFLAC-Module-Version/releases/latest",
+                headers={
+                    "Accept": "application/vnd.github.v3+json",
+                    "User-Agent": "SpotiFLAC-Desktop",
+                },
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return {"latest_version": "", "published_at": ""}
+
+            data = resp.json() or {}
+            latest_version = str(data.get("tag_name", "") or "").lstrip("v").strip()
+            published_at = str(data.get("published_at", "") or "")
+            return {"latest_version": latest_version, "published_at": published_at}
+        except Exception:
+            return {"latest_version": "", "published_at": ""}
+
     def _check_ffmpeg_startup(self) -> None:
         try:
             from .core.ffmpeg_check import check_ffmpeg
