@@ -991,6 +991,8 @@ def parse_home_feed(raw_data: dict) -> dict:
         if not title:
             continue
             
+        sec_uri = sec_item.get("uri", "")
+            
         sec_items = sec_item.get("sectionItems", {}).get("items", [])
         items = []
         
@@ -1012,12 +1014,10 @@ def parse_home_feed(raw_data: dict) -> dict:
             artists = ""
             description = content.get("description", "")
             
-            # --- INIZIALIZZA LE VARIABILI LOCALI COME IN JS ---
             album_id = ""
             album_name = ""
             duration_ms = 0
             
-            # Estrazione sicura della copertina
             if item_type == "album":
                 sources = content.get("coverArt", {}).get("sources", [])
                 if sources: cover_url = sources[0].get("url", "")
@@ -1041,14 +1041,12 @@ def parse_home_feed(raw_data: dict) -> dict:
                 if artist_items:
                     artists = ", ".join(a.get("profile", {}).get("name", "") for a in artist_items if a.get("profile", {}).get("name"))
                 
-                # --- ASSEGNA I VALORI ALLE VARIABILI LOCALI ---
                 album_uri = content.get("albumOfTrack", {}).get("uri", "")
                 album_id = album_uri.split(":")[-1] if ":" in album_uri else ""
                 album_name = content.get("albumOfTrack", {}).get("name", "")
                 dur = content.get("duration") or content.get("trackDuration") or {}
                 duration_ms = dur.get("totalMilliseconds", 0) if isinstance(dur, dict) else 0
 
-            # --- ESEGUI L'APPEND ALLA FINE, COME IL PUSH DEL JS ---
             items.append({
                 "id": item_id,
                 "uri": uri,
@@ -1062,3 +1060,15 @@ def parse_home_feed(raw_data: dict) -> dict:
                 "duration_ms": duration_ms,
                 "provider_id": "spotify-web",
             })
+        if items:
+            sections.append({
+                "title": title,
+                "uri": sec_uri,
+                "items": items
+            })
+
+    return {
+        "success": True,
+        "greeting": greeting,
+        "sections": sections
+    }
