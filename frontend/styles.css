@@ -410,6 +410,10 @@
       background: var(--surface2); display: inline-grid; place-items: center;
       color: var(--text); font-weight: 700; font-size: 12px; flex-shrink:0;
       border: 1px solid var(--border); margin-right: 6px;
+      overflow: hidden;
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
     }
     .owner-avatar.hidden { display: none; }
     #album-description {

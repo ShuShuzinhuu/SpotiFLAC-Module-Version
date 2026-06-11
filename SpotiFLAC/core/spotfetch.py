@@ -33,16 +33,28 @@ class SpotifyWebClient:
         resp = self._session.get("https://open.spotify.com")
         resp.raise_for_status()
         
-        match = re.search(r'<script id="appServerConfig" type="text/plain">([^<]+)</script>', resp.text)
+        match = re.search(r'<script[^>]+id=["\']appServerConfig["\'][^>]*>([^<]+)</script>', resp.text, re.I)
         if match:
             try:
                 decoded = base64.b64decode(match.group(1)).decode('utf-8')
                 cfg = json.loads(decoded)
-                self.client_version = cfg.get("clientVersion", "")
+                self.client_version = cfg.get("clientVersion", self.client_version)
             except Exception as e:
                 logger.debug(f"[spotfetch] Errore decodifica appServerConfig: {e}")
 
+        if not self.client_version:
+            fallback = re.search(r'"clientVersion"\s*:\s*"([^"]+)"', resp.text)
+            if fallback:
+                self.client_version = fallback.group(1)
+                logger.debug(f"[spotfetch] clientVersion fallback extracted: {self.client_version}")
+
         self.device_id = self._session.cookies.get("sp_t", "")
+        if not self.device_id:
+            cookie_header = resp.headers.get("set-cookie", "")
+            cookie_match = re.search(r'sp_t=([^;]+)', cookie_header)
+            if cookie_match:
+                self.device_id = cookie_match.group(1)
+        logger.debug(f"[spotfetch] _get_session_info: device_id={self.device_id}")
 
     def _get_access_token(self) -> None:
         """Genera il TOTP e ottiene il primo access token (endpoint: /api/token)."""
@@ -63,7 +75,6 @@ class SpotifyWebClient:
         }
         
         try:
-            logger.debug(f"[spotfetch] Requesting access token from https://open.spotify.com/api/token")
             resp = self._session.get("https://open.spotify.com/api/token", params=params, headers=headers, timeout=10)
             resp.raise_for_status()
             
@@ -100,7 +111,6 @@ class SpotifyWebClient:
                 }
             }
         }
-        
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json"
@@ -112,6 +122,9 @@ class SpotifyWebClient:
         data = resp.json()
         if data.get("response_type") == "RESPONSE_GRANTED_TOKEN_RESPONSE":
             self.client_token = data.get("granted_token", {}).get("token", "")
+        else:
+            logger.error(f"[spotfetch] Unexpected clienttoken response: {data}")
+            raise RuntimeError("Spotify client token request did not return a granted token")
 
     def initialize(self) -> None:
         if not self.client_version or not self.device_id:
@@ -178,7 +191,46 @@ class SpotifyWebClient:
             res = {"small": fallback_url, "medium": fallback_url, "large": fallback_url}
 
         return res
-    
+
+    def extract_cover_url(self, cover_data: dict) -> str:
+        """Estrae l'URL di copertina preferito senza costruire una mappa completa."""
+        if not cover_data or not isinstance(cover_data, dict):
+            return ""
+
+        direct_url = cover_data.get("url") or cover_data.get("src") or cover_data.get("href")
+        if isinstance(direct_url, str) and direct_url:
+            return direct_url
+
+        sources = cover_data.get("sources")
+        if sources is None:
+            square = cover_data.get("squareCoverImage", {}).get("image", {}).get("data", {})
+            if isinstance(square, dict):
+                sources = square.get("sources")
+
+        if isinstance(sources, list):
+            preferred = ""
+            fallback = ""
+            for source in sources:
+                if not isinstance(source, dict):
+                    continue
+                url = source.get("url")
+                if not isinstance(url, str) or not url:
+                    continue
+
+                width = source.get("width") or source.get("maxWidth") or 0
+                height = source.get("height") or source.get("maxHeight") or 0
+
+                if width == 640 or width == 300:
+                    return url
+                if width >= 300 and height >= 300 and not preferred:
+                    preferred = url
+                if not fallback:
+                    fallback = url
+
+            return preferred or fallback or ""
+
+        return ""
+
     def get_home_feed(self, time_zone: str = "Europe/Rome") -> dict:
         """Recupera l'Home Feed di Spotify (Daily Mix, Nuove uscite, ecc.)"""
         payload = {
@@ -263,7 +315,6 @@ class SpotifyWebClient:
             "Spotify-App-Version": self.client_version,
             "Content-Type": "application/json",
         }
-        
         logger.debug(f"[spotfetch] Sending GraphQL query: {payload.get('operationName', 'unknown')}")
         # Allineato a Go: endpoint query V2
         resp = self._session.post("https://api-partner.spotify.com/pathfinder/v2/query", json=payload, headers=headers)

@@ -140,6 +140,7 @@ class SpotiFLAC_API:
         playlist_description=None,
         playlist_followers=None,
         playlist_owner="",
+        playlist_owner_avatar="",
         source="",
         artist_listeners=None,
         artist_rank=None,
@@ -160,6 +161,8 @@ class SpotiFLAC_API:
             payload["followers"] = playlist_followers
         if playlist_owner:
             payload["owner"] = playlist_owner
+        if playlist_owner_avatar:
+            payload["owner_avatar"] = playlist_owner_avatar
         if source:
             payload["source"] = source
         if artist_listeners is not None:
@@ -1157,6 +1160,7 @@ class SpotiFLAC_API:
                     playlist_description=collection_meta.get("description"),
                     playlist_followers=collection_meta.get("followers"),
                     playlist_owner=collection_meta.get("owner", ""),
+                    playlist_owner_avatar=collection_meta.get("owner_avatar", ""),
                     source=collection_meta.get("source", ""),
                     release_date=collection_meta.get("release_date"),
                     track_count=collection_meta.get("track_count"),
@@ -1168,13 +1172,13 @@ class SpotiFLAC_API:
             try:
                 from .core.session_memory import add_url_to_history
                 _lower = url.lower()
-                if '/track/' in _lower or 'watch?v=' in _lower or 'youtu.be' in _lower:
+                if '/track/' in _lower or _lower.startswith('spotify:track:') or 'watch?v=' in _lower or 'youtu.be' in _lower:
                     _url_type = 'track'
-                elif '/album/' in _lower:
+                elif '/album/' in _lower or _lower.startswith('spotify:album:'):
                     _url_type = 'album'
-                elif '/playlist/' in _lower or ('list=' in _lower and 'olak5uy_' not in _lower):
+                elif '/playlist/' in _lower or _lower.startswith('spotify:playlist:') or ('list=' in _lower and 'olak5uy_' not in _lower):
                     _url_type = 'playlist'
-                elif '/artist/' in _lower or 'spotify:artist:' in _lower:
+                elif '/artist/' in _lower or _lower.startswith('spotify:artist:'):
                     _url_type = 'artist'
                 else:
                     _url_type = ''

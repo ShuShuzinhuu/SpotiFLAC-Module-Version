@@ -95,13 +95,20 @@ def _best_cover(cover_urls: dict) -> str:
     return cover_urls.get("large") or cover_urls.get("medium") or cover_urls.get("small", "")
 
 
-def _extract_playlist_owner(playlist_v2: dict) -> str:
+def _get_playlist_owner_data(playlist_v2: dict) -> dict:
     owner_data = playlist_v2.get("owner") or {}
     if not owner_data:
         owner_v2 = playlist_v2.get("ownerV2") or {}
         if isinstance(owner_v2, dict):
             owner_data = owner_v2.get("data") or {}
-    if not isinstance(owner_data, dict):
+    if isinstance(owner_data, dict):
+        return owner_data
+    return {}
+
+
+def _extract_playlist_owner(playlist_v2: dict) -> str:
+    owner_data = _get_playlist_owner_data(playlist_v2)
+    if not owner_data:
         return ""
 
     profile = owner_data.get("profile")
@@ -109,6 +116,16 @@ def _extract_playlist_owner(playlist_v2: dict) -> str:
         return profile.get("name", "") or owner_data.get("displayName", "") or owner_data.get("name", "")
 
     return owner_data.get("displayName", "") or owner_data.get("name", "")
+
+
+def _extract_playlist_owner_avatar(playlist_v2: dict) -> str:
+    owner_data = _get_playlist_owner_data(playlist_v2)
+    if not owner_data:
+        return ""
+    avatar_data = owner_data.get("avatar") or {}
+    if not isinstance(avatar_data, dict):
+        return ""
+    return SpotifyWebClient().extract_cover_url(avatar_data)
 
 
 def _extract_playlist_cover(playlist_v2: dict) -> str:
@@ -322,7 +339,7 @@ class SpotifyMetadataClient:
         track_union = data.get("data", {}).get("trackUnion", {})
 
         album_data = track_union.get("albumOfTrack", {})
-        cover = _best_cover(self.web_client.extract_cover_image(album_data.get("coverArt", {})))
+        cover = self.web_client.extract_cover_url(album_data.get("coverArt", {}))
 
         # albumOfTrack in getTrack non include artists → fetch separato
         album_artists_str = _join_artists(album_data.get("artists", {}))
@@ -352,11 +369,15 @@ class SpotifyMetadataClient:
         if others:
             artists_list.extend(_extract_artist_names(others))
 
-        # 3. Fallback all'album se necessario
+        # 3. Supporto aggiuntivo per la struttura standard degli artisti
+        if not artists_list:
+            artists_list.extend(_extract_artist_names(track_union.get("artists", {})))
+
+        # 4. Fallback all'album se necessario
         if not artists_list:
             artists_list = _extract_artist_names(album_data.get("artists", {}))
             
-        # 4. Fallback finale se tutto fallisce
+        # 5. Fallback finale se tutto fallisce
         if not artists_list:
             artists_list = ["Unknown Artist"]
 
@@ -456,7 +477,7 @@ class SpotifyMetadataClient:
             offset += limit
 
         album_name = album_union.get("name", "Unknown Album")
-        cover = _best_cover(self.web_client.extract_cover_image(album_union.get("coverArt", {})))
+        cover = self.web_client.extract_cover_url(album_union.get("coverArt", {}))
         album_artists = _join_artists(album_union.get("artists", {}))
         release_date = album_union.get("date", {}).get("isoString", "")
         total_tracks = album_union.get("tracksV2", {}).get("totalCount", 0)
@@ -537,9 +558,8 @@ class SpotifyMetadataClient:
                 f_raw = playlist_v2.get("followers")
                 followers = f_raw.get("totalCount", 0) if isinstance(f_raw, dict) else int(f_raw or 0)
                 playlist_owner = _extract_playlist_owner(playlist_v2)
-                playlist_cover = _best_cover(
-                    self.web_client.extract_cover_image(playlist_v2.get("images", {}))
-                ) or _extract_playlist_cover(playlist_v2)
+                playlist_cover = self.web_client.extract_cover_url(playlist_v2.get("images", {})) or _extract_playlist_cover(playlist_v2)
+                playlist_owner_avatar = _extract_playlist_owner_avatar(playlist_v2)
 
             content = playlist_v2.get("content", {})
             items = content.get("items", [])
@@ -567,7 +587,7 @@ class SpotifyMetadataClient:
             if not artists_list:
                 artists_list = _extract_artist_names(album_data.get("artists", {})) or ["Unknown Artist"]
 
-            cover_urls = self.web_client.extract_cover_image(album_data.get("coverArt", {}))
+            cover = self.web_client.extract_cover_url(album_data.get("coverArt", {}))
             album_artists = _join_artists(album_data.get("artists", {})) or artists_list[0]
 
             c_items = album_data.get("copyright", {}).get("items", [])
@@ -585,7 +605,7 @@ class SpotifyMetadataClient:
                 total_tracks=0,
                 duration_ms=_safe_duration_ms(track_data.get("trackDuration")),
                 release_date="",
-                cover_url=_best_cover(cover_urls),
+                cover_url=cover,
                 external_url=_track_url(track_id),
                 copyright=copyright_str,
                 composer="",
@@ -597,9 +617,11 @@ class SpotifyMetadataClient:
         info = {
             "name": playlist_name,
             "owner": playlist_owner,
+            "owner_avatar": playlist_owner_avatar,
             "cover_url": playlist_cover,
             "description": playlist_desc,
             "followers": followers,
+            "track_count": len(tracks),
             "source": "Spotify",
         }
         return info, tracks, playlist_cover
@@ -645,7 +667,7 @@ class SpotifyMetadataClient:
                 track_artists_str = _join_artists(t.get("artists", {}))
                 album_artists_str = _join_artists(album_node.get("artists", {})) or track_artists_str
 
-                cover = _best_cover(self.web_client.extract_cover_image(album_node.get("coverArt", {})))
+                cover = self.web_client.extract_cover_url(album_node.get("coverArt", {}))
                 results.append(TrackMetadata(
                     id=t["id"],
                     title=t.get("name", "Unknown"),
@@ -693,14 +715,13 @@ class SpotifyMetadataClient:
                 if kind == "album":
                     entry["artists"] = _join_artists(node.get("artists", {}))
                     entry["release_date"] = node.get("date", {}).get("isoString", "")
-                    entry["cover_url"] = _best_cover(
-                        self.web_client.extract_cover_image(node.get("coverArt", {}))
-                    )
+                    entry["cover_url"] = self.web_client.extract_cover_url(node.get("coverArt", {}))
                 elif kind == "artist":
-                    cover_data = node.get("visualIdentity") or node.get("visuals", {}).get("avatarImage", {})
-                    entry["cover_url"] = _best_cover(
-                        self.web_client.extract_cover_image(cover_data)
-                    )
+                    cover_url = self.web_client.extract_cover_url(node.get("visualIdentity", {}))
+                    if not cover_url:
+                        alt_cover_data = node.get("visuals", {}).get("avatarImage", {})
+                        cover_url = self.web_client.extract_cover_url(alt_cover_data)
+                    entry["cover_url"] = cover_url
                 elif kind == "playlist":
                     owner = node.get("owner", {})
                     if not owner:
@@ -708,9 +729,7 @@ class SpotifyMetadataClient:
                         if isinstance(owner_v2, dict):
                             owner = owner_v2.get("data") or {}
                     entry["owner"] = owner.get("displayName") or owner.get("name") or ""
-                    entry["cover_url"] = _best_cover(
-                        self.web_client.extract_cover_image(node.get("images", {}))
-                    ) or _extract_playlist_cover(node)
+                    entry["cover_url"] = self.web_client.extract_cover_url(node.get("images", {})) or _extract_playlist_cover(node)
                 results.append(entry)
             return results
 
@@ -977,6 +996,47 @@ class SpotifyMetadataClient:
 
         raise SpotiflacError(ErrorKind.INVALID_URL, f"Tipo Spotify non supportato: {t}")
     
+def _extract_explore_artists(content: dict[str, Any]) -> str:
+    artist_items = []
+    raw_artists = content.get("artists")
+    if isinstance(raw_artists, dict):
+        artist_items = raw_artists.get("items") or []
+    elif isinstance(raw_artists, list):
+        artist_items = raw_artists
+
+    names = []
+    for artist in artist_items:
+        if not isinstance(artist, dict):
+            continue
+        profile = artist.get("profile")
+        if isinstance(profile, dict):
+            name = profile.get("name")
+        else:
+            name = artist.get("name")
+        if isinstance(name, str) and name:
+            names.append(name)
+
+    if names:
+        return ", ".join(names)
+
+    artist_obj = content.get("artist") or {}
+    if isinstance(artist_obj, dict):
+        profile = artist_obj.get("profile")
+        if isinstance(profile, dict):
+            name = profile.get("name")
+            if isinstance(name, str) and name:
+                return name
+        fallback_name = artist_obj.get("name")
+        if isinstance(fallback_name, str) and fallback_name:
+            return fallback_name
+
+    subtitle = content.get("subtitle") or content.get("secondaryText") or ""
+    if isinstance(subtitle, str) and subtitle:
+        return subtitle.strip()
+
+    return ""
+
+
 def parse_home_feed(raw_data: dict) -> dict:
     """Formatta i dati grezzi dell'Home Feed per la GUI."""
     home_data = raw_data.get("data", {}).get("home", {})
@@ -1037,10 +1097,8 @@ def parse_home_feed(raw_data: dict) -> dict:
             elif item_type == "track":
                 sources = content.get("albumOfTrack", {}).get("coverArt", {}).get("sources", [])
                 if sources: cover_url = sources[0].get("url", "")
-                artist_items = content.get("artists", {}).get("items", [])
-                if artist_items:
-                    artists = ", ".join(a.get("profile", {}).get("name", "") for a in artist_items if a.get("profile", {}).get("name"))
-                
+                artists = _extract_explore_artists(content)
+
                 album_uri = content.get("albumOfTrack", {}).get("uri", "")
                 album_id = album_uri.split(":")[-1] if ":" in album_uri else ""
                 album_name = content.get("albumOfTrack", {}).get("name", "")

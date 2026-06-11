@@ -733,6 +733,7 @@ window.app_set_metadata = (data) => {
       d.description,
       d.followers,
       d.owner,
+      d.owner_avatar,
       d.source,
       d.artist_listeners,
       d.artist_rank,
@@ -858,7 +859,7 @@ function setPlaycountHeaderLabel(label) {
 let g_albumReleaseDate = '';
 let g_albumTrackCount = 0;
 
-function setAlbumCard(title, artist, coverUrl, quality, description, followers, owner, source, artistListeners, artistRank, artistVerified, artistBiography, releaseDate, trackCount) {
+function setAlbumCard(title, artist, coverUrl, quality, description, followers, owner, ownerAvatar, source, artistListeners, artistRank, artistVerified, artistBiography, releaseDate, trackCount) {
   g_albumReleaseDate = releaseDate || '';
   g_albumTrackCount = trackCount || 0;
   
@@ -947,7 +948,12 @@ function setAlbumCard(title, artist, coverUrl, quality, description, followers, 
   }
 
   if (!isArtistCard) {
-    const hasMetaDetails = !!((ownerEl && ownerEl.textContent) || (followersEl && followersEl.textContent) || (sourceEl && sourceEl.textContent));
+    const hasMetaDetails = !!(
+      (ownerEl && ownerEl.textContent) ||
+      (followersEl && followersEl.textContent) ||
+      (sourceEl && sourceEl.textContent) ||
+      ownerAvatar
+    );
     metaDetails.classList.toggle('hidden', !hasMetaDetails);
   }
 
@@ -959,10 +965,16 @@ function setAlbumCard(title, artist, coverUrl, quality, description, followers, 
     artistEl.textContent = artist || '';
   }
 
-  if (owner) {
+  if (ownerAvatar) {
+    avatarEl.style.backgroundImage = `url('${encodeURI(ownerAvatar)}')`;
+    avatarEl.textContent = '';
+    avatarEl.classList.remove('hidden');
+  } else if (owner) {
+    avatarEl.style.backgroundImage = '';
     avatarEl.textContent = owner.trim().charAt(0).toUpperCase();
     avatarEl.classList.remove('hidden');
   } else {
+    avatarEl.style.backgroundImage = '';
     avatarEl.textContent = '';
     avatarEl.classList.add('hidden');
   }
@@ -2051,9 +2063,25 @@ window.app_handle_provider_search_results = function(results) {
     return kind === 'artist' ? '👤' : kind === 'album' ? '💿' : kind === 'playlist' ? '📋' : '🎵';
   }
 
+  function resolveSearchImage(value) {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const resolved = resolveSearchImage(entry);
+        if (resolved) return resolved;
+      }
+      return '';
+    }
+    if (typeof value === 'object') {
+      return value.url || value.src || value.href || '';
+    }
+    return '';
+  }
+
   function makeItemHTML(item) {
     const url  = item.external_url || item.external_urls || '';
-    const img  = item.cover_url || item.images || item.cover || item.image || '';
+    const img  = resolveSearchImage(item.cover_url || item.cover || item.image || item.images);
     const name = escHtml(item.name || item.title || '');
     const meta = escHtml(item.artists || item.artist || item.owner || '');
     const dur  = item._kind === 'track' ? fmtMs(item.duration_ms) : '';
@@ -2215,10 +2243,10 @@ function sortTracks() {
 function detectUrlType(url) {
   if (!url) return '';
   const u = url.toLowerCase();
-  if (u.includes('/track/') || u.includes('watch?v=') || u.includes('youtu.be/')) return 'track';
-  if (u.includes('/album/') || (u.includes('playlist') && u.includes('olak5uy_'))) return 'album';
-  if (u.includes('/playlist/') || (u.includes('list=') && !u.includes('olak5uy_'))) return 'playlist';
-  if (u.includes('/artist/') || u.includes('/browse/artist')) return 'artist';
+  if (u.includes('spotify:track:') || u.includes('/track/') || u.includes('watch?v=') || u.includes('youtu.be/')) return 'track';
+  if (u.includes('spotify:album:') || u.includes('/album/') || (u.includes('playlist') && u.includes('olak5uy_'))) return 'album';
+  if (u.includes('spotify:playlist:') || u.includes('/playlist/') || (u.includes('list=') && !u.includes('olak5uy_'))) return 'playlist';
+  if (u.includes('spotify:artist:') || u.includes('/artist/') || u.includes('/browse/artist')) return 'artist';
   return '';
 }
  
