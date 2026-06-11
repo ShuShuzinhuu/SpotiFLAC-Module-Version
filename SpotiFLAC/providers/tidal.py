@@ -849,12 +849,23 @@ class TidalProvider(BaseProvider):
                         except Exception:
                             pass
 
-    @staticmethod
-    def _mux_audio(src: Path, dst: Path, quality: str) -> Path:
+    def _mux_audio(self, src: Path, dst: Path, quality: str) -> Path:
         si = None
 
-        quality_norm = _normalize_quality(quality)
-        is_lossy = quality_norm in ("DOLBY_ATMOS", "HIGH", "LOW")
+        try:
+            cmd_probe = [
+                "ffprobe", "-v", "quiet", "-select_streams", "a:0",
+                "-show_entries", "stream=codec_name",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(src)
+            ]
+            codec = subprocess.check_output(cmd_probe, text=True).strip().lower()
+        except Exception:
+            logger.warning("[tidal] ffprobe failed to detect codec, falling back to quality guess")
+            quality_norm = _normalize_quality(quality)
+            codec = "eac3" if quality_norm == "DOLBY_ATMOS" else "flac"
+
+        is_lossy = codec not in ("flac", "alac")
         final_dst = dst.with_suffix(".m4a") if is_lossy else dst.with_suffix(".flac")
 
         cmd = ["ffmpeg", "-y", "-i", str(src), "-vn"]

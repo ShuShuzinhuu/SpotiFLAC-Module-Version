@@ -178,6 +178,36 @@ class SpotifyWebClient:
             res = {"small": fallback_url, "medium": fallback_url, "large": fallback_url}
 
         return res
+    
+    def get_home_feed(self, time_zone: str = "Europe/Rome") -> dict:
+        """Recupera l'Home Feed di Spotify (Daily Mix, Nuove uscite, ecc.)"""
+        payload = {
+            "operationName": "home",
+            "variables": {
+                "timeZone": time_zone
+            },
+            "extensions": {
+                "persistedQuery": {
+                    "version": 1,
+                    "sha256Hash": "3a67ee0ea6abad2ebad2e588a9aa130fc98d6b553f5b05ac6467503d02133bdc"
+                }
+            }
+        }
+        return self.query(payload)
+
+    def get_browse_categories(self) -> dict:
+        """Recupera le categorie e i generi esplorabili"""
+        payload = {
+            "operationName": "browseAll",
+            "variables": {},
+            "extensions": {
+                "persistedQuery": {
+                    "version": 1,
+                    "sha256Hash": "864fdecccb9bb893141df3776d0207886c7fa781d9e586b9d4eb3afa387eea42"
+                }
+            }
+        }
+        return self.query(payload)
 
     def get_track_composer(self, track_id: str) -> str:
         """Query nativa GraphQL per ottenere i compositori senza scraping HTML."""
@@ -482,3 +512,46 @@ class SpotifyWebClient:
             offset += limit
 
         return all_items
+    
+    def spotify_id_to_hex_gid(self, spotify_id: str) -> str:
+        """Converte un Spotify base62 ID nel GID esadecimale richiesto dall'endpoint metadata."""
+        alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        bytes_ = []
+        for char in spotify_id:
+            value = alphabet.index(char)
+            carry = value
+            for j in range(len(bytes_)):
+                total = bytes_[j] * 62 + carry
+                bytes_[j] = total & 0xFF
+                carry = total >> 8
+            while carry > 0:
+                bytes_.append(carry & 0xFF)
+                carry >>= 8
+        while len(bytes_) < 16:
+            bytes_.append(0)
+        return "".join(f"{b:02x}" for b in reversed(bytes_))
+
+    def get_isrc_from_metadata(self, track_id: str) -> str:
+        """Recupera l'ISRC dall'endpoint binario spclient (stesso approccio del JS)."""
+        try:
+            gid = self.spotify_id_to_hex_gid(track_id)
+            resp = self._session.get(
+                f"https://spclient.wg.spotify.com/metadata/4/track/{gid}?market=from_token",
+                headers={
+                    "Authorization": f"Bearer {self.access_token}",
+                    "Client-Token": self.client_token,
+                    "Spotify-App-Version": self.client_version,
+                    "App-Platform": "WebPlayer",
+                }
+            )
+            if resp.status_code == 401:
+                self.initialize()
+                return self.get_isrc_from_metadata(track_id)
+            if resp.status_code != 200:
+                return ""
+            import re
+            match = re.search(rb'isrc[\x00-\x1f]+([A-Za-z0-9]{12})', resp.content)
+            return match.group(1).decode().upper() if match else ""
+        except Exception as e:
+            logger.debug(f"[spotfetch] ISRC lookup failed for {track_id}: {e}")
+            return ""

@@ -24,8 +24,6 @@ function detectAndApplyOSStyles() {
 }
 
 // Esegui il rilevamento al caricamento della pagina
-document.addEventListener('DOMContentLoaded', detectAndApplyOSStyles);
-// Fallback se DOMContentLoaded è già stato scatenato
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', detectAndApplyOSStyles);
 } else {
@@ -3051,6 +3049,91 @@ function renderHealthResults(data) {
 function pyWin(method, arg) {
   if (arg !== undefined) window.pywebview?.api?.[method]?.(arg);
   else window.pywebview?.api?.[method]?.();
+}
+
+// --- EXPLORE LOGIC ---
+async function loadExploreData() {
+  const sectionsContainer = $('explore-sections');
+  const greetingEl = $('explore-greeting');
+  
+  if (!sectionsContainer) return;
+  
+  sectionsContainer.innerHTML = '<div style="text-align:center; padding: 40px; color: var(--muted);">Loading feed...</div>';
+  if (window.pywebview?.api?.get_spotify_home_feed) {
+    try {
+      const homeData = await window.pywebview.api.get_spotify_home_feed();
+      
+      if (homeData && homeData.success) {
+        if (greetingEl) greetingEl.textContent = homeData.greeting || 'Esplora';
+        renderHomeSections(homeData.sections);
+      } else {
+        sectionsContainer.innerHTML = '<div style="color:var(--red);">Unable to load feed. Check your connection.</div>';
+      }
+    } catch (e) {
+      logMessage('Errore caricamento explore feed: ' + e, 'error');
+      sectionsContainer.innerHTML = '<div style="color:var(--red);">Network error.</div>';
+    }
+  } else {
+    // Demo Mode
+    if (greetingEl) greetingEl.textContent = 'Explore (Demo)';
+    sectionsContainer.innerHTML = '<div style="color:var(--muted);">Python backend not connected. Unable to load recommendations.</div>';
+  }
+}
+
+function renderHomeSections(sections) {
+  const container = $('explore-sections');
+  container.innerHTML = '';
+
+  sections.forEach(section => {
+    if (!section.items || section.items.length === 0) return;
+
+    const sectionEl = document.createElement('div');
+    const titleEl = document.createElement('h3');
+    titleEl.className = 'explore-section-title';
+    titleEl.textContent = section.title;
+    sectionEl.appendChild(titleEl);
+
+    const gridEl = document.createElement('div');
+    gridEl.className = 'explore-grid';
+
+    section.items.forEach(item => {
+      const card = document.createElement('div');
+      card.className = 'explore-card';
+      
+      const imgUrl = item.cover_url || 'assets/icons/spotify.svg';
+      const subText = item.description || item.artists || item.type;
+
+      card.innerHTML = `
+        <img src="${escHtml(imgUrl)}" loading="lazy" onerror="this.src='assets/icons/spotify.svg'">
+        <div class="explore-card-title" title="${escHtml(item.name)}">${escHtml(item.name)}</div>
+        <div class="explore-card-subtitle" title="${escHtml(subText)}">${escHtml(subText)}</div>
+      `;
+
+      card.onclick = () => {
+        // Torna alla home page
+        switchView('home');
+        
+        // Passa in modalità Fetch (Link)
+        const mode = $('searchMode');
+        if (mode && mode.value === 'search') {
+          toggleSearchMode(); // Simula click per rimetterlo a "link"
+        }
+        
+        // Inserisci l'URI
+        const input = $('urlInput');
+        if (input) {
+          input.value = item.uri || `spotify:${item.type}:${item.id}`;
+          // Scatena la ricerca
+          onFetch(); 
+        }
+      };
+
+      gridEl.appendChild(card);
+    });
+
+    sectionEl.appendChild(gridEl);
+    container.appendChild(sectionEl);
+  });
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────

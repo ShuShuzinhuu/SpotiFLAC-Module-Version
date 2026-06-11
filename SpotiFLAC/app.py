@@ -247,6 +247,21 @@ class SpotiFLAC_API:
         
     def cache_image(self, url):
         return url
+    
+    def get_spotify_home_feed(self):
+        """Metodo chiamato da app.js per recuperare l'Home Feed."""
+        try:
+            from .core.spotfetch import SpotifyWebClient
+            from .providers.spotify_metadata import parse_home_feed
+            
+            client = SpotifyWebClient()
+            raw_data = client.get_home_feed()
+            formatted_data = parse_home_feed(raw_data)
+            return formatted_data
+        except Exception as e:
+            import logging
+            logging.error(f"Errore durante il recupero dell'Home Feed: {e}")
+            return {"success": False, "error": str(e)}
 
     def search_provider(self, query, limit=50):
         """Search music providers (Spotify) for metadata matching `query`.

@@ -255,6 +255,8 @@ def _normalize_release_type(release_type: str) -> str:
         return "album"
     if normalized == "COMPILATION":
         return "compilation"
+    if normalized == "APPEARS_ON":
+        return "appears_on"
     return "single"
 
 
@@ -734,6 +736,8 @@ class SpotifyMetadataClient:
         """Ricerca filtrata per un singolo tipo: track | album | artist | playlist."""
         if kind not in ("track", "album", "artist", "playlist"):
             raise ValueError(f"Tipo non valido: {kind!r}. Valori ammessi: track, album, artist, playlist")
+        data = self.web_client.query(self._search_payload(query, limit, offset))
+        search_v2 = data.get("data", {}).get("searchV2", {})
         results = self.search(query, limit=limit)
         key = "tracks" if kind == "track" else f"{kind}s"
         return results.get(key, [])[offset:]
@@ -832,6 +836,89 @@ class SpotifyMetadataClient:
                     continue
 
         return artist_info, all_tracks
+    
+    def get_home_feed(self, time_zone: str = "Europe/Rome") -> dict:
+        raw = self.web_client.get_home_feed(time_zone)
+        return parse_home_feed(raw)
+
+    def get_browse_categories(self) -> dict:
+        raw = self.web_client.get_browse_categories()
+        return self._parse_browse(raw)
+
+    def _parse_browse(self, raw: dict) -> dict:
+        sections = (raw.get("data", {})
+                    .get("browseV2", {})
+                    .get("data", {})
+                    .get("sections", {})
+                    .get("items", []))
+        categories = []
+        for section in sections:
+            section_title = (section.get("data") or {}).get("title", {}).get("text", "")
+            for item in section.get("sectionItems", {}).get("items", []):
+                content = item.get("content", {}).get("data", {})
+                card = (content.get("data") or {}).get("cardRepresentation", {})
+                name = card.get("title", {}).get("text") or content.get("name", "")
+                if not name:
+                    continue
+                uri = content.get("uri", "")
+                cat_id = uri.split(":")[-1] if ":" in uri else ""
+                categories.append({
+                    "id": cat_id,
+                    "uri": uri,
+                    "name": name,
+                    "image_url": ((card.get("artwork") or {}).get("sources") or [{}])[0].get("url", ""),
+                    "background_color": (card.get("backgroundColor") or {}).get("hex", ""),
+                    "section": section_title,
+                })
+        return {"success": True, "categories": categories}
+    
+    def enrich_track(self, track: TrackMetadata) -> TrackMetadata:
+        """Arricchisce ISRC, genre, label, copyright via Spotify metadata + Deezer."""
+        if not track.id:
+            return track
+
+        # 1. ISRC da Spotify
+        isrc = track.isrc or self.web_client.get_isrc_from_metadata(track.id)
+
+        # 2. Deezer per label/copyright/genre
+        if isrc:
+            deezer = self._fetch_deezer_by_isrc(isrc)
+            return TrackMetadata(
+                **{**track.__dict__,
+                "isrc": isrc,
+                "label": deezer.get("label", ""),
+                "copyright": deezer.get("copyright", track.copyright),
+                "genre": deezer.get("genre", ""),
+                }
+            )
+        return TrackMetadata(**{**track.__dict__, "isrc": isrc})
+
+    def _fetch_deezer_by_isrc(self, isrc: str) -> dict:
+        try:
+            import httpx
+            resp = httpx.get(f"https://api.deezer.com/track/isrc:{isrc}", timeout=8)
+            if resp.status_code != 200:
+                return {}
+            data = resp.json()
+            if not data.get("id"):
+                return {}
+            result = {"isrc": data.get("isrc", isrc)}
+            album_id = (data.get("album") or {}).get("id")
+            if album_id:
+                album_resp = httpx.get(f"https://api.deezer.com/album/{album_id}", timeout=8)
+                if album_resp.status_code == 200:
+                    album = album_resp.json()
+                    if album.get("label"):
+                        result["label"] = album["label"]
+                        year = (album.get("release_date") or "")[:4]
+                        result["copyright"] = f"{year} {album['label']}"
+                    genres = [g["name"] for g in (album.get("genres") or {}).get("data", [])]
+                    if genres:
+                        result["genre"] = ", ".join(genres)
+            return result
+        except Exception as e:
+            logger.debug(f"[spotify] Deezer enrich failed for ISRC {isrc}: {e}")
+            return {}
 
     # ------------------------------------------------------------------
     # Dispatcher principale
@@ -872,8 +959,6 @@ class SpotifyMetadataClient:
         if t in ("artist", "artist_discography"):
             # Rispetta il sub-type della discografia se presente nell'URL
             group = info.get("group", "album,single")
-            if group == "all":
-                group = "all"
             artist, tracks = self.get_artist_albums(info["id"], include_groups=group)
             artist_meta = {
                 "name":              artist.get("profile", {}).get("name", "Unknown Artist"),
@@ -891,3 +976,89 @@ class SpotifyMetadataClient:
             return artist_meta["name"], tracks, artist_meta.get("avatar", ""), artist_meta
 
         raise SpotiflacError(ErrorKind.INVALID_URL, f"Tipo Spotify non supportato: {t}")
+    
+def parse_home_feed(raw_data: dict) -> dict:
+    """Formatta i dati grezzi dell'Home Feed per la GUI."""
+    home_data = raw_data.get("data", {}).get("home", {})
+    greeting = home_data.get("greeting", {}).get("text", "")
+        
+    sections_data = home_data.get("sectionContainer", {}).get("sections", {}).get("items", [])
+    sections = []
+        
+    for sec_item in sections_data:
+        sec_data = sec_item.get("data", {})
+        title = sec_data.get("title", {}).get("text", "")
+        if not title:
+            continue
+            
+        sec_items = sec_item.get("sectionItems", {}).get("items", [])
+        items = []
+        
+        for item in sec_items:
+            content = item.get("content", {}).get("data", {})
+            uri = content.get("uri", "")
+            if not uri:
+                continue
+                
+            parts = uri.split(":")
+            if len(parts) < 3:
+                continue
+                
+            item_type = parts[1]
+            item_id = parts[2]
+            
+            name = content.get("name") or content.get("profile", {}).get("name", "")
+            cover_url = ""
+            artists = ""
+            description = content.get("description", "")
+            
+            # --- INIZIALIZZA LE VARIABILI LOCALI COME IN JS ---
+            album_id = ""
+            album_name = ""
+            duration_ms = 0
+            
+            # Estrazione sicura della copertina
+            if item_type == "album":
+                sources = content.get("coverArt", {}).get("sources", [])
+                if sources: cover_url = sources[0].get("url", "")
+                artist_items = content.get("artists", {}).get("items", [])
+                if artist_items:
+                    artists = ", ".join(a.get("profile", {}).get("name", "") for a in artist_items if a.get("profile", {}).get("name"))
+                    
+            elif item_type == "playlist":
+                sources = content.get("images", {}).get("items", [{}])[0].get("sources", [])
+                if sources: cover_url = sources[0].get("url", "")
+                artists = content.get("ownerV2", {}).get("data", {}).get("name", "")
+                
+            elif item_type == "artist":
+                sources = content.get("visuals", {}).get("avatarImage", {}).get("sources", [])
+                if sources: cover_url = sources[0].get("url", "")
+                
+            elif item_type == "track":
+                sources = content.get("albumOfTrack", {}).get("coverArt", {}).get("sources", [])
+                if sources: cover_url = sources[0].get("url", "")
+                artist_items = content.get("artists", {}).get("items", [])
+                if artist_items:
+                    artists = ", ".join(a.get("profile", {}).get("name", "") for a in artist_items if a.get("profile", {}).get("name"))
+                
+                # --- ASSEGNA I VALORI ALLE VARIABILI LOCALI ---
+                album_uri = content.get("albumOfTrack", {}).get("uri", "")
+                album_id = album_uri.split(":")[-1] if ":" in album_uri else ""
+                album_name = content.get("albumOfTrack", {}).get("name", "")
+                dur = content.get("duration") or content.get("trackDuration") or {}
+                duration_ms = dur.get("totalMilliseconds", 0) if isinstance(dur, dict) else 0
+
+            # --- ESEGUI L'APPEND ALLA FINE, COME IL PUSH DEL JS ---
+            items.append({
+                "id": item_id,
+                "uri": uri,
+                "type": item_type,
+                "name": name,
+                "artists": artists,
+                "description": description,
+                "cover_url": cover_url,
+                "album_id": album_id,
+                "album_name": album_name,
+                "duration_ms": duration_ms,
+                "provider_id": "spotify-web",
+            })
