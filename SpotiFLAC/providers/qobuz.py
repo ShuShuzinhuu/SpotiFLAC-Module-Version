@@ -71,8 +71,6 @@ _STREAM_APIS: list[str] = [
 _POST_APIS: list[str] = [
     "https://api.zarz.moe/v1/dl/qbz",
     "https://api.zarz.moe/v1/dl/qbz2",
-    "https://www.musicdl.me/api/qobuz/download",
-    "https://dl.musicdl.me/qobuz/download",
 ]
 
 _GDSTUDIO_APIS: list[str] = [
@@ -160,43 +158,6 @@ class QobuzCredentials:
             source="embedded-default",
             user_auth_token=os.environ.get("QOBUZ_AUTH_TOKEN")
         )
-
-_QOBUZ_MUSICDL_SEED = bytes([
-    0x73,0x70,0x6f,0x74,0x69,0x66,
-    0x6c,0x61,0x63,0x3a,0x71,0x6f,
-    0x62,0x75,0x7a,0x3a,0x6d,0x75,0x73,0x69,0x63,0x64,0x6c,0x3a,0x76,0x31,
-])
-_QOBUZ_MUSICDL_AAD = bytes([
-    0x71,0x6f,0x62,0x75,0x7a,0x7c,0x6d,0x75,0x73,0x69,0x63,0x64,
-    0x6c,0x7c,0x64,0x65,0x62,0x75,0x67,0x7c,0x76,0x31,
-])
-_QOBUZ_MUSICDL_NONCE = bytes([
-    0x91,0x2a,0x5c,0x77,0x0f,0x33,0xa8,0x14,0x62,0x9d,0xce,0x41,
-])
-_QOBUZ_MUSICDL_CIPHERTEXT_TAG = bytes([
-    0xf3,0x4a,0x83,0x45,0x24,0xb6,0x22,0xaf,0xd6,0xc3,0x6e,0x2d,
-    0x56,0xd1,0xbb,0x0b,0xe9,0x1b,0x4f,0x1c,0x5f,0x41,0x55,0xc2,
-    0xc6,0xdf,0xad,0x21,0x58,0xfe,0xd5,0xb8,0x2d,0x29,0xf9,0x9e,
-    0x6f,0xd6,
-    0x69,0x0c,0x42,0x70,0x14,0x83,0xff,0x14,0xc8,0xbe,0x17,0x00,
-    0x69,0xb1,0xfe,0xbb,
-])
-
-_qobuz_musicdl_key: str | None = None
-
-def _get_qobuz_musicdl_key() -> str:
-    global _qobuz_musicdl_key
-    if _qobuz_musicdl_key is not None:
-        return _qobuz_musicdl_key
-    key = hashlib.sha256(_QOBUZ_MUSICDL_SEED).digest()
-    aesgcm = AESGCM(key)
-    plaintext = aesgcm.decrypt(
-        _QOBUZ_MUSICDL_NONCE,
-        _QOBUZ_MUSICDL_CIPHERTEXT_TAG,
-        _QOBUZ_MUSICDL_AAD,
-    )
-    _qobuz_musicdl_key = plaintext.decode()
-    return _qobuz_musicdl_key
 
 
 def _load_cached_credentials() -> QobuzCredentials | None:
@@ -382,7 +343,6 @@ def _fetch_stream_url_once(
     is_local_api = (api_cleaning == local_api_url) and bool(local_api_url)
     
     is_zarz = "zarz.moe" in api_cleaning
-    is_musicdl = "musicdl.me" in api_cleaning
     is_gdstudio = "gdstudio" in api_cleaning
     is_wjhe = "wjhe.top" in api_cleaning
     is_squid = "squid.wtf" in api_cleaning
@@ -555,9 +515,6 @@ def _fetch_stream_url_once(
                 }
                 
                 post_headers = {"User-Agent": _ZARZ_USER_AGENT if is_zarz else _DEFAULT_UA}
-                if is_musicdl:
-                    post_headers["X-Debug-Key"] = _get_qobuz_musicdl_key()
-                    post_headers["Content-Type"] = "application/json"
 
                 resp = client.post(
                     api_base,

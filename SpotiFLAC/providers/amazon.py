@@ -743,9 +743,6 @@ class AmazonProvider(BaseProvider):
             out   = os.path.join(output_dir, f"{asin}{ext}")
 
             si = None
-            if os.name == "nt":
-                si = subprocess.STARTUPINFO()
-                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
             result = subprocess.run(
                 [_ffmpeg_path(), "-y", "-decryption_key", decryption_key.strip(),
@@ -839,6 +836,68 @@ class AmazonProvider(BaseProvider):
             os.remove(final)
         os.rename(temp_file, final)
         return final, api_meta
+    
+    def _download_from_musicdl_api(self, amazon_url: str, asin: str, output_dir: str) -> tuple[str, dict]:
+        """Scaricamento tramite Telegram Bot CDN (dl.musicdl.me)"""
+        logger.info("[amazon] Trying MusicDL API (ASIN: %s)", asin)
+
+        payload = {
+            "url": amazon_url,
+            "platform": "amazon"
+        }
+
+        try:
+            resp = self._session.post(
+                "https://dl.musicdl.me/download",
+                json=payload,
+                headers={"Content-Type": "application/json", "User-Agent": _DEFAULT_UA},
+                timeout=65
+            )
+        except (httpx.RequestError, httpx.ConnectError) as exc:
+            raise SpotiflacError(
+                ErrorKind.UNAVAILABLE, 
+                f"MusicDL API request failed: {exc}", 
+                self.name
+            ) from exc
+
+        if resp.status_code != 200:
+            raise SpotiflacError(
+                ErrorKind.UNAVAILABLE, 
+                f"MusicDL API returned {resp.status_code}: {resp.text}", 
+                self.name
+            )
+
+        data = resp.json()
+        if not data.get("success") or not data.get("download_url"):
+            raise SpotiflacError(
+                ErrorKind.UNAVAILABLE, 
+                f"MusicDL API failed: {data.get('error')}", 
+                self.name
+            )
+
+        stream_url = data["download_url"]
+        temp_file = os.path.join(output_dir, f"{asin}_musicdl.tmp")
+        
+        logger.info("[amazon] MusicDL returned stream URL, downloading...")
+
+        self._http.stream_to_file(stream_url, temp_file, self._progress_cb)
+
+        codec = self._get_codec(temp_file)
+        ext = ".flac" if codec == "flac" else ".m4a"
+        
+        final = os.path.join(output_dir, f"{asin}{ext}")
+        if os.path.exists(final):
+            os.remove(final)
+        os.rename(temp_file, final)
+
+        # Raccogliamo i metadati basilari che restituisce l'API
+        api_meta = {}
+        if data.get("title"):
+            api_meta["title"] = data["title"]
+        if data.get("artist"):
+            api_meta["artist"] = data["artist"]
+
+        return final, api_meta
 
     def _download_from_api(self, amazon_url: str, output_dir: str, quality: str) -> tuple[str, dict]:
         asin_match = re.search(r"(B[0-9A-Z]{9})", amazon_url)
@@ -886,14 +945,20 @@ class AmazonProvider(BaseProvider):
         print_source_banner("amazon", API_ENDPOINTS['spotbye2']['base_url'], fallback_quality)
         try:
             return self._download_from_spotbye_api(asin, output_dir, provider_key="spotbye2")
-        except SpotiflacError as exc:
-            logger.warning("[amazon] Spotbye2 failed: %s", exc)
-            raise
         except Exception as exc:
-            logger.warning("[amazon] Spotbye2 unexpected failure: %s", exc)
+            logger.warning("[amazon] Spotbye2 failed: %s", exc)
+            
+        logger.info("[amazon] Spotbye2 failed. Trying MusicDL API…")
+
+        # 5. MUSICDL (Fallback 4 - Telegram CDN)
+        print_source_banner("amazon", "https://dl.musicdl.me/download", "BEST QUALITY AVAILABLE (MOSTLY 16 bit 44.1 Hz)")
+        try:
+            return self._download_from_musicdl_api(amazon_url, asin, output_dir)
+        except Exception as exc:
+            logger.warning("[amazon] MusicDL failed: %s", exc)
             raise SpotiflacError(
                 ErrorKind.UNAVAILABLE,
-                f"spotbye2 API failed: {exc}",
+                f"All Amazon APIs (including MusicDL) failed. Last error: {exc}",
                 self.name,
             ) from exc
 
