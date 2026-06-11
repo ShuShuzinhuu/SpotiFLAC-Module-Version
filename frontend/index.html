@@ -20,7 +20,8 @@
 
   <div id="tb-logo">
     <span>SpotiFLAC</span>
-    <span id="tb-version">v...</span>
+    <span id="tb-version" class="clickable-version" onclick="openReleasePage()">v...</span>
+    <span id="tb-update-badge" class="update-badge hidden" title="Aggiornamento disponibile" onclick="openReleasePage()">⬆️</span>
   </div>
 </div>
 
@@ -29,6 +30,9 @@
   <nav id="sidebar">
     <button class="nav-btn active" id="nav-home"     onclick="switchView('home')"     title="Home" data-label="Home">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5L12 3l9 6.5V21H15v-5h-6v5H3z"/></svg>
+    </button>
+    <button class="nav-btn" id="nav-explore" onclick="switchView('explore'); loadExploreData();" title="Explore" data-label="Explore">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
     </button>
     <button class="nav-btn" id="nav-logs"     onclick="switchView('logs')"     title="Logs" data-label="Logs">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
@@ -54,7 +58,8 @@
             </div>
             <div class="hero-main">
               <div class="hero-title">SpotiFLAC</div>
-              <span id="hero-version" class="hero-version">v...</span>
+              <span id="hero-version" class="hero-version clickable-version" onclick="openReleasePage()">v...</span>
+              <span id="hero-update-badge" class="hero-update-badge hidden" title="Aggiornamento disponibile" onclick="openReleasePage()">Nuova versione</span>
             </div>
           </div>
           <div class="hero-subtitle">Get Spotify tracks in true FLAC from Tidal, Qobuz, Deezer & Amazon Music — no account required.</div>
@@ -237,7 +242,14 @@
           <div id="queue-counter"><span id="q-count">0 tracks</span><span id="q-done"></span></div>
         </div>
       </div>
-    </div> <div class="view" id="view-logs">
+    </div>
+    <div class="view" id="view-explore">
+      <div class="explore-container" style="padding: 20px; overflow-y: auto; height: 100%;">
+        <h2 id="explore-greeting" style="margin-bottom: 24px; font-size: 28px;">Esplora</h2>
+        <div id="explore-sections"></div>
+      </div>
+    </div>
+    <div class="view" id="view-logs">
       <div id="log-panel">
         <div id="log-header">
           <span>Terminal Logs</span>
@@ -568,8 +580,8 @@
     <div class="ft-desc">please wait while we retrieve the information</div>
   </div>
 </div>
+</div><!-- /app-body -->
 
 <script src="app.js"></script>
-
 </body>
 </html>

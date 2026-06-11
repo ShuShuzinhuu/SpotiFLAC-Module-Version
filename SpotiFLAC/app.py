@@ -83,6 +83,27 @@ class SpotiFLAC_API:
     def get_version(self):
         return self.app_version
 
+    def get_latest_version(self) -> dict:
+        client = NetworkManager.get_sync_client()
+        try:
+            resp = client.get(
+                "https://api.github.com/repos/ShuShuzinhuu/SpotiFLAC-Module-Version/releases/latest",
+                headers={
+                    "Accept": "application/vnd.github.v3+json",
+                    "User-Agent": "SpotiFLAC-Desktop",
+                },
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return {"latest_version": "", "published_at": ""}
+
+            data = resp.json() or {}
+            latest_version = str(data.get("tag_name", "") or "").lstrip("v").strip()
+            published_at = str(data.get("published_at", "") or "")
+            return {"latest_version": latest_version, "published_at": published_at}
+        except Exception:
+            return {"latest_version": "", "published_at": ""}
+
     def _check_ffmpeg_startup(self) -> None:
         try:
             from .core.ffmpeg_check import check_ffmpeg
@@ -140,6 +161,7 @@ class SpotiFLAC_API:
         playlist_description=None,
         playlist_followers=None,
         playlist_owner="",
+        playlist_owner_avatar="",
         source="",
         artist_listeners=None,
         artist_rank=None,
@@ -160,6 +182,8 @@ class SpotiFLAC_API:
             payload["followers"] = playlist_followers
         if playlist_owner:
             payload["owner"] = playlist_owner
+        if playlist_owner_avatar:
+            payload["owner_avatar"] = playlist_owner_avatar
         if source:
             payload["source"] = source
         if artist_listeners is not None:
@@ -247,6 +271,21 @@ class SpotiFLAC_API:
         
     def cache_image(self, url):
         return url
+    
+    def get_spotify_home_feed(self):
+        """Metodo chiamato da app.js per recuperare l'Home Feed."""
+        try:
+            from .core.spotfetch import SpotifyWebClient
+            from .providers.spotify_metadata import parse_home_feed
+            
+            client = SpotifyWebClient()
+            raw_data = client.get_home_feed()
+            formatted_data = parse_home_feed(raw_data)
+            return formatted_data
+        except Exception as e:
+            import logging
+            logging.error(f"Errore durante il recupero dell'Home Feed: {e}")
+            return {"success": False, "error": str(e)}
 
     def search_provider(self, query, limit=50):
         """Search music providers (Spotify) for metadata matching `query`.
@@ -1142,6 +1181,7 @@ class SpotiFLAC_API:
                     playlist_description=collection_meta.get("description"),
                     playlist_followers=collection_meta.get("followers"),
                     playlist_owner=collection_meta.get("owner", ""),
+                    playlist_owner_avatar=collection_meta.get("owner_avatar", ""),
                     source=collection_meta.get("source", ""),
                     release_date=collection_meta.get("release_date"),
                     track_count=collection_meta.get("track_count"),
@@ -1153,13 +1193,13 @@ class SpotiFLAC_API:
             try:
                 from .core.session_memory import add_url_to_history
                 _lower = url.lower()
-                if '/track/' in _lower or 'watch?v=' in _lower or 'youtu.be' in _lower:
+                if '/track/' in _lower or _lower.startswith('spotify:track:') or 'watch?v=' in _lower or 'youtu.be' in _lower:
                     _url_type = 'track'
-                elif '/album/' in _lower:
+                elif '/album/' in _lower or _lower.startswith('spotify:album:'):
                     _url_type = 'album'
-                elif '/playlist/' in _lower or ('list=' in _lower and 'olak5uy_' not in _lower):
+                elif '/playlist/' in _lower or _lower.startswith('spotify:playlist:') or ('list=' in _lower and 'olak5uy_' not in _lower):
                     _url_type = 'playlist'
-                elif '/artist/' in _lower or 'spotify:artist:' in _lower:
+                elif '/artist/' in _lower or _lower.startswith('spotify:artist:'):
                     _url_type = 'artist'
                 else:
                     _url_type = ''

@@ -24,8 +24,6 @@ function detectAndApplyOSStyles() {
 }
 
 // Esegui il rilevamento al caricamento della pagina
-document.addEventListener('DOMContentLoaded', detectAndApplyOSStyles);
-// Fallback se DOMContentLoaded è già stato scatenato
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', detectAndApplyOSStyles);
 } else {
@@ -423,6 +421,9 @@ async function fetchVersionWithRetry(retries = 10, delayMs = 200) {
         const hero = document.getElementById('hero-version');
         if (tb) tb.innerText = v && v !== 'unknown' ? `v${v}` : 'v...';
         if (hero) hero.innerText = v && v !== 'unknown' ? `v${v}` : 'v...';
+        if (v && v !== 'unknown' && v !== '...') {
+          await checkLatestVersion(v);
+        }
         return;
       }
     } catch (e) {
@@ -433,6 +434,75 @@ async function fetchVersionWithRetry(retries = 10, delayMs = 200) {
 }
 
 document.addEventListener('DOMContentLoaded', () => fetchVersionWithRetry(20, 200));
+
+const UPDATE_RELEASE_URL = 'https://github.com/ShuShuzinhuu/SpotiFLAC-Module-Version/releases';
+
+function normalizeVersionString(version) {
+  return String(version || '').trim().replace(/^v/i, '');
+}
+
+function compareVersionStrings(a, b) {
+  const normalize = (value) => String(value || '').split(/[.\-+]/).map(part => {
+    const num = Number(part);
+    return Number.isNaN(num) ? part : num;
+  });
+  const partsA = normalize(a);
+  const partsB = normalize(b);
+  const maxLen = Math.max(partsA.length, partsB.length);
+
+  for (let i = 0; i < maxLen; i++) {
+    const partA = partsA[i] !== undefined ? partsA[i] : 0;
+    const partB = partsB[i] !== undefined ? partsB[i] : 0;
+
+    if (typeof partA === 'number' && typeof partB === 'number') {
+      if (partA !== partB) return partA > partB ? 1 : -1;
+      continue;
+    }
+
+    const aStr = String(partA);
+    const bStr = String(partB);
+    if (aStr !== bStr) return aStr > bStr ? 1 : -1;
+  }
+  return 0;
+}
+
+function showUpdateBadge(latestVersion, publishedAt) {
+  const tbBadge = document.getElementById('tb-update-badge');
+  const heroBadge = document.getElementById('hero-update-badge');
+  const title = latestVersion ? `Aggiornamento disponibile: v${latestVersion}` : 'Aggiornamento disponibile';
+  if (tbBadge) {
+    tbBadge.title = publishedAt ? `${title}\nRilasciata: ${publishedAt}` : title;
+    tbBadge.classList.remove('hidden');
+  }
+  if (heroBadge) {
+    heroBadge.title = publishedAt ? `${title}\nRilasciata: ${publishedAt}` : title;
+    heroBadge.classList.remove('hidden');
+  }
+}
+
+async function openReleasePage() {
+  if (window.pywebview?.api?.open_url) {
+    window.pywebview.api.open_url(UPDATE_RELEASE_URL);
+  } else {
+    window.open(UPDATE_RELEASE_URL, '_blank');
+  }
+}
+
+async function checkLatestVersion(currentVersion) {
+  const normalizedCurrent = normalizeVersionString(currentVersion);
+  if (!normalizedCurrent || normalizedCurrent === 'unknown' || normalizedCurrent === '...') return;
+  if (!window.pywebview?.api || typeof window.pywebview.api.get_latest_version !== 'function') return;
+
+  try {
+    const info = await window.pywebview.api.get_latest_version();
+    const latestVersion = normalizeVersionString(info?.latest_version);
+    if (latestVersion && compareVersionStrings(latestVersion, normalizedCurrent) > 0) {
+      showUpdateBadge(latestVersion, info?.published_at || '');
+    }
+  } catch (error) {
+    console.warn('Failed to check for updates:', error);
+  }
+}
 
 function buildSortItem(item, index) {
   const d = document.createElement('div');
@@ -735,6 +805,7 @@ window.app_set_metadata = (data) => {
       d.description,
       d.followers,
       d.owner,
+      d.owner_avatar,
       d.source,
       d.artist_listeners,
       d.artist_rank,
@@ -860,7 +931,7 @@ function setPlaycountHeaderLabel(label) {
 let g_albumReleaseDate = '';
 let g_albumTrackCount = 0;
 
-function setAlbumCard(title, artist, coverUrl, quality, description, followers, owner, source, artistListeners, artistRank, artistVerified, artistBiography, releaseDate, trackCount) {
+function setAlbumCard(title, artist, coverUrl, quality, description, followers, owner, ownerAvatar, source, artistListeners, artistRank, artistVerified, artistBiography, releaseDate, trackCount) {
   g_albumReleaseDate = releaseDate || '';
   g_albumTrackCount = trackCount || 0;
   
@@ -949,7 +1020,12 @@ function setAlbumCard(title, artist, coverUrl, quality, description, followers, 
   }
 
   if (!isArtistCard) {
-    const hasMetaDetails = !!((ownerEl && ownerEl.textContent) || (followersEl && followersEl.textContent) || (sourceEl && sourceEl.textContent));
+    const hasMetaDetails = !!(
+      (ownerEl && ownerEl.textContent) ||
+      (followersEl && followersEl.textContent) ||
+      (sourceEl && sourceEl.textContent) ||
+      ownerAvatar
+    );
     metaDetails.classList.toggle('hidden', !hasMetaDetails);
   }
 
@@ -961,10 +1037,16 @@ function setAlbumCard(title, artist, coverUrl, quality, description, followers, 
     artistEl.textContent = artist || '';
   }
 
-  if (owner) {
+  if (ownerAvatar) {
+    avatarEl.style.backgroundImage = `url('${encodeURI(ownerAvatar)}')`;
+    avatarEl.textContent = '';
+    avatarEl.classList.remove('hidden');
+  } else if (owner) {
+    avatarEl.style.backgroundImage = '';
     avatarEl.textContent = owner.trim().charAt(0).toUpperCase();
     avatarEl.classList.remove('hidden');
   } else {
+    avatarEl.style.backgroundImage = '';
     avatarEl.textContent = '';
     avatarEl.classList.add('hidden');
   }
@@ -2053,9 +2135,25 @@ window.app_handle_provider_search_results = function(results) {
     return kind === 'artist' ? '👤' : kind === 'album' ? '💿' : kind === 'playlist' ? '📋' : '🎵';
   }
 
+  function resolveSearchImage(value) {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const resolved = resolveSearchImage(entry);
+        if (resolved) return resolved;
+      }
+      return '';
+    }
+    if (typeof value === 'object') {
+      return value.url || value.src || value.href || '';
+    }
+    return '';
+  }
+
   function makeItemHTML(item) {
     const url  = item.external_url || item.external_urls || '';
-    const img  = item.cover_url || item.images || item.cover || item.image || '';
+    const img  = resolveSearchImage(item.cover_url || item.cover || item.image || item.images);
     const name = escHtml(item.name || item.title || '');
     const meta = escHtml(item.artists || item.artist || item.owner || '');
     const dur  = item._kind === 'track' ? fmtMs(item.duration_ms) : '';
@@ -2217,10 +2315,10 @@ function sortTracks() {
 function detectUrlType(url) {
   if (!url) return '';
   const u = url.toLowerCase();
-  if (u.includes('/track/') || u.includes('watch?v=') || u.includes('youtu.be/')) return 'track';
-  if (u.includes('/album/') || (u.includes('playlist') && u.includes('olak5uy_'))) return 'album';
-  if (u.includes('/playlist/') || (u.includes('list=') && !u.includes('olak5uy_'))) return 'playlist';
-  if (u.includes('/artist/') || u.includes('/browse/artist')) return 'artist';
+  if (u.includes('spotify:track:') || u.includes('/track/') || u.includes('watch?v=') || u.includes('youtu.be/')) return 'track';
+  if (u.includes('spotify:album:') || u.includes('/album/') || (u.includes('playlist') && u.includes('olak5uy_'))) return 'album';
+  if (u.includes('spotify:playlist:') || u.includes('/playlist/') || (u.includes('list=') && !u.includes('olak5uy_'))) return 'playlist';
+  if (u.includes('spotify:artist:') || u.includes('/artist/') || u.includes('/browse/artist')) return 'artist';
   return '';
 }
  
@@ -3051,6 +3149,91 @@ function renderHealthResults(data) {
 function pyWin(method, arg) {
   if (arg !== undefined) window.pywebview?.api?.[method]?.(arg);
   else window.pywebview?.api?.[method]?.();
+}
+
+// --- EXPLORE LOGIC ---
+async function loadExploreData() {
+  const sectionsContainer = $('explore-sections');
+  const greetingEl = $('explore-greeting');
+  
+  if (!sectionsContainer) return;
+  
+  sectionsContainer.innerHTML = '<div style="text-align:center; padding: 40px; color: var(--muted);">Loading feed...</div>';
+  if (window.pywebview?.api?.get_spotify_home_feed) {
+    try {
+      const homeData = await window.pywebview.api.get_spotify_home_feed();
+      
+      if (homeData && homeData.success) {
+        if (greetingEl) greetingEl.textContent = homeData.greeting || 'Esplora';
+        renderHomeSections(homeData.sections);
+      } else {
+        sectionsContainer.innerHTML = '<div style="color:var(--red);">Unable to load feed. Check your connection.</div>';
+      }
+    } catch (e) {
+      logMessage('Errore caricamento explore feed: ' + e, 'error');
+      sectionsContainer.innerHTML = '<div style="color:var(--red);">Network error.</div>';
+    }
+  } else {
+    // Demo Mode
+    if (greetingEl) greetingEl.textContent = 'Explore (Demo)';
+    sectionsContainer.innerHTML = '<div style="color:var(--muted);">Python backend not connected. Unable to load recommendations.</div>';
+  }
+}
+
+function renderHomeSections(sections) {
+  const container = $('explore-sections');
+  container.innerHTML = '';
+
+  sections.forEach(section => {
+    if (!section.items || section.items.length === 0) return;
+
+    const sectionEl = document.createElement('div');
+    const titleEl = document.createElement('h3');
+    titleEl.className = 'explore-section-title';
+    titleEl.textContent = section.title;
+    sectionEl.appendChild(titleEl);
+
+    const gridEl = document.createElement('div');
+    gridEl.className = 'explore-grid';
+
+    section.items.forEach(item => {
+      const card = document.createElement('div');
+      card.className = 'explore-card';
+      
+      const imgUrl = item.cover_url || 'assets/icons/spotify.svg';
+      const subText = item.description || item.artists || item.type;
+
+      card.innerHTML = `
+        <img src="${escHtml(imgUrl)}" loading="lazy" onerror="this.src='assets/icons/spotify.svg'">
+        <div class="explore-card-title" title="${escHtml(item.name)}">${escHtml(item.name)}</div>
+        <div class="explore-card-subtitle" title="${escHtml(subText)}">${escHtml(subText)}</div>
+      `;
+
+      card.onclick = () => {
+        // Torna alla home page
+        switchView('home');
+        
+        // Passa in modalità Fetch (Link)
+        const mode = $('searchMode');
+        if (mode && mode.value === 'search') {
+          toggleSearchMode(); // Simula click per rimetterlo a "link"
+        }
+        
+        // Inserisci l'URI
+        const input = $('urlInput');
+        if (input) {
+          input.value = item.uri || `spotify:${item.type}:${item.id}`;
+          // Scatena la ricerca
+          onFetch(); 
+        }
+      };
+
+      gridEl.appendChild(card);
+    });
+
+    sectionEl.appendChild(gridEl);
+    container.appendChild(sectionEl);
+  });
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
