@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "SpotiFLAC"
-version = "1.0.8"
+version = "1.0.9"
 description = "Get Spotify tracks in true FLAC from Tidal, Qobuz & Amazon Music — no account required."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -61,17 +61,7 @@ include-package-data = true
 
 [tool.setuptools.data-files]
 "frontend" = [
-    "frontend/index.html",
-    "frontend/app.js",
-    "frontend/styles.css",
-]
-
-"frontend/assets/icons" = [
+    "frontend/*",
+    "frontend/assets/*",
     "frontend/assets/icons/*",
 ]
-
-
-# Use setuptools.find to locate the backend package inside `backend/`.
-# Previously `py-modules` was set which caused only top-level modules
-# (`launcher`, `app`) to be included in the wheel; switching to `packages`
-# ensures the package directory is packaged into the wheel.
