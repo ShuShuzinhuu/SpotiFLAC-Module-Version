@@ -269,8 +269,18 @@ async def _check_one(
     try:
         t0 = time.perf_counter()
 
+        # Header di base
         req_kwargs: dict = {"headers": {"User-Agent": _UA}}
 
+        # Iniezione degli header richiesti da FlacDownloader per aggirare il blocco
+        if "flacdownloader.com" in url or "/prepare" in url:
+            req_kwargs["headers"].update({
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+                "Accept": "application/json",
+                "Referer": "https://flacdownloader.com/it/download"
+            })
+
+        # Payload standard per l'API di Deezer
         if method == "POST" and provider == "deezer":
             req_kwargs["json"] = {
                 "platform": "deezer",
@@ -517,21 +527,36 @@ async def run_health_check(
 
     async with _make_async_client() as client:
         # ── Fast-path: una richiesta Zarz per tutti i provider ──────────────
+        # ── Fast-path: una richiesta Zarz per tutti i provider ──────────────
         zarz_results = await _zarz_bulk_check(client, remaining)
 
         for svc in remaining:
             zarz_r = zarz_results.get(svc)
-
-            if zarz_r and zarz_r.ok:
-                # Provider confermato OK da Zarz → nessuna sonda individuale
-                results.append(zarz_r)
-                continue
-
-            # Provider assente da Zarz o segnalato come down → sonda individuale
             eps = _ENDPOINTS.get(svc)
+
             if not eps:
                 if zarz_r:
-                    results.append(zarz_r)   # restituiamo almeno il risultato Zarz
+                    results.append(zarz_r)
+                continue
+
+            # Escludi l'endpoint Zarz (già controllato sopra)
+            eps_to_probe = [(m, u) for m, u in eps if "zarz.moe/v1/health" not in u]
+
+            if include_all_endpoints:
+                # FIX: Aggiungiamo ai risultati lo stato di Zarz (se presente)
+                if zarz_r:
+                    results.append(zarz_r)
+                # E ACCODIAMO TUTTI gli endpoint secondari affinché vengano sondati
+                task_list.extend((svc, m, u) for m, u in eps_to_probe)
+            else:
+                # Comportamento originale (fast-path): se Zarz è OK, salta i fallback
+                if zarz_r and zarz_r.ok:
+                    results.append(zarz_r)
+                elif eps_to_probe:
+                    m, u = eps_to_probe[0]
+                    task_list.append((svc, m, u))
+                elif zarz_r:
+                    results.append(zarz_r)
                 continue
 
             # Escludi l'endpoint Zarz (già controllato sopra)
