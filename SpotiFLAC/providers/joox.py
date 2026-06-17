@@ -53,7 +53,7 @@ class JooxProvider(BaseProvider):
         """Search for tracks on JOOX via GD Studio."""
         try:
             resp = self._session.get(
-                get_asian_provider_endpoint("joox", "search"),
+                get_asian_provider_endpoint("joox", "gdstudio"),
                 params={
                     "types":  "search",
                     "source": _SOURCE,
@@ -79,7 +79,7 @@ class JooxProvider(BaseProvider):
         """
         try:
             resp = self._session.get(
-                get_asian_provider_endpoint("joox", "stream"),
+                get_asian_provider_endpoint("joox", "gdstudio"),
                 params={
                     "types":  "url",
                     "source": _SOURCE,
@@ -106,7 +106,7 @@ class JooxProvider(BaseProvider):
         return "", 0
 
     def _get_stream_wjhe(self, track_id: str, quality: int = 1000, fmt: str = "flac") -> str:
-        url = get_asian_provider_endpoint("joox", "stream_wjhe")
+        url = get_asian_provider_endpoint("joox", "wjhe")
         params = {
             "ID":      track_id,
             "quality": quality,

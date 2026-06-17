@@ -851,8 +851,9 @@ class AmazonProvider(BaseProvider):
         }
 
         try:
+            _musicdl_url = get_amazon_endpoint("musicdl")
             resp = self._session.post(
-                "https://dl.musicdl.me/download",
+                _musicdl_url,
                 json=payload,
                 headers={"Content-Type": "application/json", "User-Agent": _DEFAULT_UA},
                 timeout=65

@@ -21,7 +21,7 @@ import httpx
 
 from .http import NetworkManager
 
-from ..providers.amazon import API_ENDPOINTS
+from ..providers.amazon import get_amazon_endpoint
 
 DEFAULT_LYRICS_PROVIDERS  = ["spotify", "apple", "musixmatch", "lrclib", "amazon"]
 DEFAULT_ENRICH_PROVIDERS  = ["deezer", "apple", "qobuz", "tidal", "soundcloud"]
@@ -309,7 +309,7 @@ def _fetch_amazon(isrc: str, timeout: int = 7) -> str:
         return ""
     try:
         r = NetworkManager.get_sync_client().get(
-            f"{API_ENDPOINTS['spotbye']}/lyrics/{isrc}",
+            f"{get_amazon_endpoint('spotbye1')}/lyrics/{isrc}",
             headers={"User-Agent": _UA},
             timeout=timeout,
         )

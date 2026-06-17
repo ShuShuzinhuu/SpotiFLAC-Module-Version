@@ -23,11 +23,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 
-API_ENDPOINTS = {
-    "proxy_direct": get_apple_music_endpoint("proxy_direct"),
-    "proxy_queued": get_apple_music_endpoint("proxy_queued")
-}
-
 class AppleMusicProvider(BaseProvider):
     name = "apple-music"
     # Allineato al default JS di downloadMaxWaitMinutes: 60 min
@@ -174,7 +169,8 @@ class AppleMusicProvider(BaseProvider):
             record_failure(self.name, proxy_direct)
 
         # 2. Tentativo in Coda (App)
-        download_endpoint = f"{API_ENDPOINTS['proxy_queued']}/download"
+        _proxy_queued = get_apple_music_endpoint("proxy_queued")
+        download_endpoint = f"{_proxy_queued}/download"
         try:
             resp = self._session.post(
                 download_endpoint,
@@ -206,25 +202,25 @@ class AppleMusicProvider(BaseProvider):
                     elapsed = int(time.time() - start_time)
                     print(f"  ⏳ Apple Music: in attesa del job {job_id[:8]}... ({elapsed}s trascorsi)")
 
-                st_resp = self._session.get(f"{API_ENDPOINTS['proxy_queued']}/status/{job_id}", timeout=15)
+                st_resp = self._session.get(f"{_proxy_queued}/status/{job_id}", timeout=15)
                 st_resp.raise_for_status()
                 st_data = st_resp.json()
                 status = st_data.get("status", "").lower()
 
                 if status == "completed":
-                    record_success(self.name, API_ENDPOINTS["proxy_queued"])
-                    return API_ENDPOINTS["proxy_queued"], f"{API_ENDPOINTS['proxy_queued']}/file/{job_id}"
+                    record_success(self.name, get_apple_music_endpoint("proxy_queued"))
+                    return _proxy_queued, f"{_proxy_queued}/file/{job_id}"
 
                 if status == "failed":
                     err = st_data.get('error', 'Errore API sconosciuto')
                     logger.warning("[apple-music] Errore API proxy per codec %s: %s", codec, err)
-                    record_failure(self.name, API_ENDPOINTS["proxy_queued"])
+                    record_failure(self.name, get_apple_music_endpoint("proxy_queued"))
                     return None, None
 
                 time.sleep(2.5)
 
             logger.warning("[apple-music] Timeout durante l'attesa della traccia con codec %s.", codec)
-            record_failure(self.name, API_ENDPOINTS["proxy_queued"])
+            record_failure(self.name, get_apple_music_endpoint("proxy_queued"))
             return None, None
 
         except Exception as e:

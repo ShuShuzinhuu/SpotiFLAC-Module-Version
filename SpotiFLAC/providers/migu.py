@@ -49,7 +49,7 @@ class MiguProvider(BaseProvider):
         """Cerca tracce su Migu tramite l'API specificata."""
         try:
             resp = self._session.get(
-                get_asian_provider_endpoint("migu", "api_base"),
+                get_asian_provider_endpoint("migu", "gdstudio"),
                 params={
                     "types":  "search",
                     "source": _SOURCE,
