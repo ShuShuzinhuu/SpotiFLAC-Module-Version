@@ -28,6 +28,7 @@ from ..core.musicbrainz import mb_result_to_tags
 from ..core.tagger import embed_metadata, EmbedOptions
 from ..core.endpoints import get_amazon_endpoint
 from ..core.quality import get_squid_tier, to_zarz_codec
+from ..core.flac_validation import validate_and_repair_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -523,6 +524,17 @@ class AmazonProvider(BaseProvider):
 
                 logger.info("[amazon] Squid download complete — %.1f MB (%s)",
                             written / 1024 / 1024, os.path.splitext(final_file)[1])
+                
+                # Validate and repair FLAC files if needed
+                if final_file.lower().endswith(".flac"):
+                    success, repair_msg = validate_and_repair_if_needed(final_file)
+                    if not success:
+                        logger.error("[amazon] FLAC file validation failed: %s", repair_msg)
+                        _cleanup()
+                        return None
+                    if repair_msg:
+                        logger.info("[amazon] FLAC file repair status: %s", repair_msg)
+                
                 return final_file, {}
 
             except Exception as exc:
@@ -687,7 +699,21 @@ class AmazonProvider(BaseProvider):
 
             if result.returncode != 0:
                 logger.warning("[amazon] Zarz decryption failed: %s", result.stderr.decode()[:100])
+                if os.path.exists(out):
+                    os.remove(out)
                 return None
+            
+            # Validate and repair FLAC files if needed
+            if ext == ".flac":
+                success, repair_msg = validate_and_repair_if_needed(out)
+                if not success:
+                    logger.error("[amazon] FLAC file validation failed: %s", repair_msg)
+                    if os.path.exists(out):
+                        os.remove(out)
+                    return None
+                if repair_msg:
+                    logger.info("[amazon] FLAC file repair status: %s", repair_msg)
+            
             return out, api_meta
 
         final = os.path.join(output_dir, f"{asin}{ext}")
@@ -779,6 +805,22 @@ class AmazonProvider(BaseProvider):
                     f"Decryption failed: {result.stderr.decode()[:100]}",
                     self.name,
                 )
+            
+            # Validate and repair FLAC files if needed
+            if ext == ".flac":
+                success, repair_msg = validate_and_repair_if_needed(out)
+                if not success:
+                    logger.error("[amazon] FLAC file validation failed: %s", repair_msg)
+                    if os.path.exists(out):
+                        os.remove(out)
+                    raise SpotiflacError(
+                        ErrorKind.FILE_IO,
+                        f"FLAC validation failed: {repair_msg}",
+                        self.name,
+                    )
+                if repair_msg:
+                    logger.info("[amazon] FLAC file repair status: %s", repair_msg)
+            
             return out, api_meta
 
         final = os.path.join(output_dir, f"{asin}.m4a")
@@ -850,12 +892,44 @@ class AmazonProvider(BaseProvider):
                     f"Decryption failed: {result.stderr.decode()[:100]}",
                     self.name,
                 )
+            
+            # Validate and repair FLAC files if needed
+            if ext == ".flac":
+                success, repair_msg = validate_and_repair_if_needed(out)
+                if not success:
+                    logger.error("[amazon] FLAC file validation failed: %s", repair_msg)
+                    if os.path.exists(out):
+                        os.remove(out)
+                    raise SpotiflacError(
+                        ErrorKind.FILE_IO,
+                        f"FLAC validation failed: {repair_msg}",
+                        self.name,
+                    )
+                if repair_msg:
+                    logger.info("[amazon] FLAC file repair status: %s", repair_msg)
+            
             return out, api_meta
 
         final = os.path.join(output_dir, f"{asin}{ext}")
         if os.path.exists(final):
             os.remove(final)
         os.rename(temp_file, final)
+        
+        # Validate and repair FLAC files if needed
+        if ext == ".flac":
+            success, repair_msg = validate_and_repair_if_needed(final)
+            if not success:
+                logger.error("[amazon] FLAC file validation failed: %s", repair_msg)
+                if os.path.exists(final):
+                    os.remove(final)
+                raise SpotiflacError(
+                    ErrorKind.FILE_IO,
+                    f"FLAC validation failed: {repair_msg}",
+                    self.name,
+                )
+            if repair_msg:
+                logger.info("[amazon] FLAC file repair status: %s", repair_msg)
+        
         return final, api_meta
     
     def _download_from_musicdl_api(self, amazon_url: str, asin: str, output_dir: str) -> tuple[str, dict]:
