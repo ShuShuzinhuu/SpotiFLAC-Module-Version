@@ -58,8 +58,8 @@ def parse_args(profile_defaults: dict | None = None) -> argparse.Namespace:
         formatter_class = argparse.RawDescriptionHelpFormatter,
     )
 
-    parser.add_argument("url",        help="Spotify, Tidal, Apple Music, SoundCloud, YouTube or Pandora URL")
-    parser.add_argument("output_dir", help="Destination directory")
+    parser.add_argument("url",        nargs="?", help="Spotify, Tidal, Apple Music, SoundCloud, YouTube or Pandora URL")
+    parser.add_argument("output_dir", nargs="?", help="Destination directory")
 
     parser.add_argument(
         "--service", "-s",
@@ -114,6 +114,12 @@ def parse_args(profile_defaults: dict | None = None) -> argparse.Namespace:
         action="store_true",
         default=pd.get("interactive", False),
         help="Launch interactive mode (wizard)"
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        default=False,
+        help="Launch graphical user interface (GUI)"
     )
 
     # ── Profile ─────────────────────────────────────────────────────────────
@@ -215,7 +221,13 @@ def main() -> None:
     import importlib.util, importlib.resources
     from .core.ffmpeg_check import print_ffmpeg_warning
 
-    # Interactive mode (explicit flag)
+    # GUI mode (explicit --gui flag)
+    if "--gui" in sys.argv:
+        from .app import run_gui
+        run_gui()
+        return
+
+    # Interactive mode (explicit --interactive flag)
     if "--interactive" in sys.argv:
         print_ffmpeg_warning()
         cfg = run_interactive()
@@ -252,8 +264,13 @@ def main() -> None:
         return
 
     if len(sys.argv) == 1:
-        from .app import run_gui
-        run_gui()
+        parser = argparse.ArgumentParser(
+            prog            = "spotiflac",
+            description     = "Download tracks in true FLAC/MP3 via Deezer, Tidal, Qobuz, SoundCloud, YouTube, Pandora and more.",
+            formatter_class = argparse.RawDescriptionHelpFormatter,
+        )
+        parser.add_argument("--gui", action="store_true", help="Launch graphical user interface (GUI)")
+        parser.print_help()
         return
 
     # ── CLI mode ──────────────────────────────────────────────────────
@@ -268,6 +285,17 @@ def main() -> None:
     merged_defaults = {**file_cfg, **profile_defaults}
 
     args = parse_args(profile_defaults=merged_defaults)
+    
+    # Check that URL and output_dir are provided for CLI mode
+    if not args.url or not args.output_dir:
+        parser = argparse.ArgumentParser(
+            prog            = "spotiflac",
+            description     = "Download tracks in true FLAC/MP3 via Deezer, Tidal, Qobuz, SoundCloud, YouTube, Pandora and more.",
+            formatter_class = argparse.RawDescriptionHelpFormatter,
+        )
+        parser.add_argument("--gui", action="store_true", help="Launch graphical user interface (GUI)")
+        parser.print_help()
+        return
 
     quality             = args.quality or merged_defaults.get("quality", "LOSSLESS")
     qobuz_local_api_url = args.qobuz_local_api_url or merged_defaults.get("qobuz_local_api_url")
