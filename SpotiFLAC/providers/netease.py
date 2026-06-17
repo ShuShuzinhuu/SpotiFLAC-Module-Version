@@ -14,6 +14,7 @@ from ..core.tagger import embed_metadata, EmbedOptions
 from ..core.download_validation import validate_downloaded_track
 from ..core.musicbrainz import AsyncMBFetch, mb_result_to_tags
 from ..core.endpoints import get_asian_provider_endpoint
+from ..core.flac_validation import validate_and_repair_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -401,6 +402,15 @@ class NeteaseProvider(BaseProvider):
                         )
                 except Exception as exc:
                     logger.warning("[netease] Lyrics embed failed: %s", exc)
+
+            # Validate and repair FLAC files if needed
+            if str(dest).lower().endswith(".flac"):
+                success, repair_msg = validate_and_repair_if_needed(str(dest))
+                if not success:
+                    logger.error("[netease] FLAC file validation failed: %s", repair_msg)
+                    raise SpotiflacError(ErrorKind.FILE_IO, f"FLAC validation failed: {repair_msg}", self.name)
+                if repair_msg:
+                    logger.info("[netease] FLAC file repair status: %s", repair_msg)
 
             return DownloadResult.ok(self.name, str(dest), fmt="flac")
 

@@ -34,6 +34,7 @@ from ..core.musicbrainz import AsyncMBFetch, mb_result_to_tags
 from ..core.tagger import EmbedOptions, _print_mb_summary, embed_metadata
 from ..core.endpoints import get_tidal_post_endpoints
 from ..core.quality import normalize_quality as _cq_normalize_quality, quality_fallback_chain as _cq_quality_fallback_chain
+from ..core.flac_validation import validate_and_repair_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -974,6 +975,17 @@ class TidalProvider(BaseProvider):
                 if final_dest.exists():
                     final_dest.unlink()
                 raise SpotiflacError(ErrorKind.UNAVAILABLE, f"Tidal returned a limited preview track ({actual_s}s).", self.name)
+
+            # Validate and repair FLAC files if needed
+            if str(final_dest).lower().endswith(".flac"):
+                success, repair_msg = validate_and_repair_if_needed(str(final_dest))
+                if not success:
+                    logger.error("[tidal] FLAC file validation failed: %s", repair_msg)
+                    if final_dest.exists():
+                        final_dest.unlink()
+                    raise SpotiflacError(ErrorKind.UNAVAILABLE, f"FLAC validation failed: {repair_msg}", self.name)
+                if repair_msg:
+                    logger.info("[tidal] FLAC file repair status: %s", repair_msg)
 
             mb_tags: dict[str, str] = {}
             if mb_fetcher:
