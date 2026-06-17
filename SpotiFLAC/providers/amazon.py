@@ -352,8 +352,11 @@ class AmazonProvider(BaseProvider):
             "user-agent":   _SQUID_UA,
         }
         try:
+            _squid_ep = get_amazon_endpoint("squid")
+            if not _squid_ep:
+                raise RuntimeError("[amazon] Squid endpoint not configured")
             challenge = self._session.get(
-                f"{get_amazon_endpoint('squid')}/captcha/challenge", headers=_h, timeout=15
+                f"{_squid_ep}/captcha/challenge", headers=_h, timeout=15
             ).json()
             solution  = self._solve_pow(challenge)
             encoded   = base64.b64encode(
@@ -361,7 +364,7 @@ class AmazonProvider(BaseProvider):
                            separators=(",", ":")).encode()
             ).decode()
             resp = self._session.post(
-                f"{get_amazon_endpoint('squid')}/captcha/verify",
+                f"{_squid_ep}/captcha/verify",
                 json={"payload": encoded}, headers=_h, timeout=15,
             )
             self._squid_token = resp.json()["token"]
@@ -394,7 +397,7 @@ class AmazonProvider(BaseProvider):
         Handles both native FLAC responses and M4A containers with FLAC stream inside.
         """
         logger.info("[amazon] Trying Squid API (ASIN: %s)", asin)
-
+ 
         _h = {
             "accept":       "*/*",
             "content-type": "application/json",
@@ -402,6 +405,10 @@ class AmazonProvider(BaseProvider):
             "referer":      "https://amz.squid.wtf/",
             "user-agent":   _SQUID_UA,
         }
+        _squid_ep = get_amazon_endpoint("squid")
+        if not _squid_ep:
+            logger.warning("[amazon] Squid endpoint not configured; skipping Squid fallback.")
+            return None
 
         q_str = str(requested_quality).lower().strip()
         tier  = "best" if q_str in ["hi_res", "hires", "hi-res", "hi-res-lossless"] else "hd"
@@ -422,11 +429,14 @@ class AmazonProvider(BaseProvider):
         for attempt in range(max_attempts):
             try:
                 token = self._get_squid_token(force_refresh=(attempt > 0))
+                if not token:
+                    logger.warning("[amazon] No squid token obtained; skipping attempt.")
+                    return None
                 _h["x-captcha-token"] = token
 
                 with self._session.stream(
                     "GET",
-                    f"{get_amazon_endpoint('squid')}/stream",
+                    f"{_squid_ep}/stream",
                     params=params,
                     headers=_h,
                     timeout=120,
@@ -852,6 +862,12 @@ class AmazonProvider(BaseProvider):
 
         try:
             _musicdl_url = get_amazon_endpoint("musicdl")
+            if not _musicdl_url:
+                raise SpotiflacError(
+                    ErrorKind.UNAVAILABLE,
+                    "MusicDL endpoint not configured",
+                    self.name
+                )
             resp = self._session.post(
                 _musicdl_url,
                 json=payload,
@@ -909,12 +925,25 @@ class AmazonProvider(BaseProvider):
         if not asin_match:
             raise RuntimeError(f"Cannot extract ASIN from: {amazon_url}")
         asin = asin_match.group(1)
-
+ 
         fallback_quality = str(quality).upper()
-
+ 
+        # Validate at least one Amazon endpoint is configured
+        _zarz_ep = get_amazon_endpoint("zarz")
+        _squid_ep = get_amazon_endpoint("squid")
+        _spotbye1_ep = get_amazon_endpoint("spotbye1")
+        _spotbye2_ep = get_amazon_endpoint("spotbye2")
+        _musicdl_ep = get_amazon_endpoint("musicdl")
+        if not any([_zarz_ep, _squid_ep, _spotbye1_ep, _spotbye2_ep, _musicdl_ep]):
+            raise SpotiflacError(
+                ErrorKind.UNAVAILABLE,
+                "No Amazon endpoints configured in registry",
+                self.name
+            )
+ 
         # 1. ZARZ API (Primary)
         codec = self._quality_to_zarz_codec(quality)
-        zarz_url = f"{get_amazon_endpoint('zarz')}/media?asin={asin}&codec={codec}"
+        zarz_url = f"{_zarz_ep}/media?asin={asin}&codec={codec}"
         display_quality = "Best Available Quality (up to 24-bit/48kHz)" if codec == "flac" else quality
         print_source_banner("amazon", "", display_quality)
 
