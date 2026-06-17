@@ -217,8 +217,8 @@ async def _check_one(
         # Header di base
         req_kwargs: dict = {"headers": {"User-Agent": _UA}}
 
-        # Iniezione degli header richiesti da FlacDownloader per aggirare il blocco
-        if "flacdownloader.com" in url or "/prepare" in url:
+        # Iniezione degli header richiesti per endpoint di tipo FlacDownloader
+        if "/prepare" in url:
             parsed = urlparse(url)
             origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
             req_kwargs["headers"].update({

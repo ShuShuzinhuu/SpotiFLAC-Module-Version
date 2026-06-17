@@ -371,7 +371,7 @@ def _fetch_stream_url_once(
     is_gdstudio = "gdstudio" in api_cleaning
     is_wjhe = "wjhe.top" in api_cleaning
     is_squid = "squid.wtf" in api_cleaning
-    is_flacdownloader = "flacdownloader.com" in api_cleaning
+    is_flacdownloader = "/prepare" in api_cleaning
     
     is_post = api_base in _POST_APIS or is_zarz or is_gdstudio or is_flacdownloader
     max_retries = _MAX_RETRIES_POST if is_post else _MAX_RETRIES_GET

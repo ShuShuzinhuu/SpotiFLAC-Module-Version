@@ -416,13 +416,13 @@ class DeezerProvider(BaseProvider):
 
             if not api_data.get("success"):
                 logger.warning("[deezer] Unable to resolve link via Zarz: %s", api_data.get("message", "Unknown error"))
-                logger.info("[deezer] Fallback: Trying with flacdownloader.com...")
+                logger.info("[deezer] Fallback: Trying with FlacDownloader...")
                 return self._download_via_flacdownloader(str(track_id), meta["title"], meta["artist"], output_dir)
 
             download_url = api_data.get("direct_download_url") or api_data.get("download_url")
             if not download_url:
                 logger.warning("[deezer] No download URL returned by the resolver.")
-                logger.info("[deezer] Fallback: Trying with flacdownloader.com...")
+                logger.info("[deezer] Fallback: Trying with FlacDownloader...")
                 return self._download_via_flacdownloader(str(track_id), meta["title"], meta["artist"], output_dir)
 
             requires_decryption = api_data.get("requires_client_decryption", False)
