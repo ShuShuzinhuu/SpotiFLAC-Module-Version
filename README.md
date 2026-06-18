@@ -102,10 +102,6 @@ docker run --rm -v "$(pwd)/downloads:/app/downloads" ghcr.io/ShuShuzinhuu/SpotiF
     https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT ./downloads -s tidal -q LOSSLESS
 ```
 
-Notes:
-- The GHCR workflow publishes multi-arch images and uses `GITHUB_TOKEN` for authentication, so no extra Docker credentials are required for the automated push.
-- Replace `<OWNER>` in the pull command with the repository owner (username or org).
-
 ---
 
 ```python
