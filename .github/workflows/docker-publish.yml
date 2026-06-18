@@ -2,8 +2,7 @@ name: Build and Publish Docker Image to GHCR
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
@@ -20,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Log in to the Container registry
         if: github.event_name != 'pull_request'
