@@ -190,6 +190,7 @@ def _display_health_check() -> dict[str, bool]:
 def _pick_from_history() -> str | None:
     try:
         from .core.session_memory import get_url_history, remove_url_from_history, clear_url_history
+        from .core.history import clear_recent_fetches
     except Exception:
         return None
 
@@ -212,7 +213,8 @@ def _pick_from_history() -> str | None:
 
         print(f"\n    {DIM('[Enter]')} Type a new URL to create a queue")
         print(f"    {DIM('[d + num]')} Delete an entry (e.g., d2, d5)")
-        print(f"    {DIM('[c]')} Clear all history")
+        print(f"    {DIM('[c]')} Clear URL history")
+        print(f"    {DIM('[r]')} Clear recent fetches")
 
         try:
             val = input("  → ").strip()
@@ -226,13 +228,26 @@ def _pick_from_history() -> str | None:
         val_lower = val.lower()
 
         if val_lower in ('c', 'clear'):
-            if _ask_bool("Are you sure you want to clear ALL history?", False):
+            if _ask_bool("Are you sure you want to clear URL history?", False):
                 try:
                     clear_url_history()
-                    print(f"\n  {GREEN('✓')} History cleared.\n")
+                    print(f"\n  {GREEN('✓')} URL history cleared.\n")
                     continue
                 except Exception as e:
-                    print(f"\n  {RED('✗')} Could not clear history: {e}\n")
+                    print(f"\n  {RED('✗')} Could not clear URL history: {e}\n")
+                    continue
+            else:
+                print()
+                continue
+
+        if val_lower in ('r', 'recent', 'clear recent'):
+            if _ask_bool("Are you sure you want to clear recent fetches?", False):
+                try:
+                    clear_recent_fetches()
+                    print(f"\n  {GREEN('✓')} Recent fetches cleared.\n")
+                    continue
+                except Exception as e:
+                    print(f"\n  {RED('✗')} Could not clear recent fetches: {e}\n")
                     continue
             else:
                 print()
@@ -468,7 +483,7 @@ def run_interactive() -> dict:
     except Exception:
         last_folder = "./Downloads"
 
-    cfg["output_dir"] = _ask("Destination folder", last_folder)
+    cfg["output_dir"] = _ask("Destination folder", cfg.get("output_dir", last_folder))
 
     try:
         from .core.session_memory import set_last_folder
@@ -492,9 +507,9 @@ def run_interactive() -> dict:
         print(f"  {DIM('Specify an exact filename for this single track (optional).')}")
         print(f"  {DIM('Example: my_files/favorite_song.flac')}")
 
-        use_custom = _ask_bool("Set a custom output path?", False)
+        use_custom = _ask_bool("Set a custom output path?", bool(cfg.get("output_path")))
         if use_custom:
-            cfg["output_path"] = _ask("Full file path including extension")
+            cfg["output_path"] = _ask("Full file path including extension", cfg.get("output_path", ""))
         else:
             cfg["output_path"] = None
     else:
@@ -561,7 +576,7 @@ def run_interactive() -> dict:
                 "deezer", "tidal", "qobuz", "amazon", "joox", "netease", 
                 "migu", "kuwo", "soundcloud", "youtube", "apple", "pandora"
             ],
-            defaults = ["tidal"],
+            defaults = cfg.get("services", ["tidal"]),
             ordered  = True,
         )
 
@@ -595,31 +610,51 @@ def run_interactive() -> dict:
         has_apple  = "apple"  in cfg["services"]
 
         if has_qobuz and not (has_tidal or has_deezer or has_apple):
+            q_default = {
+                "6": "6 (CD Lossless)",
+                "7": "7 (Hi-Res)",
+                "27": "27 (Hi-Res Max)",
+            }.get(str(cfg.get("quality", "6") or "6"), "6 (CD Lossless)")
             q_choice = _ask_choice(
                 "Qobuz Quality:",
                 options = ["6 (CD Lossless)", "7 (Hi-Res)", "27 (Hi-Res Max)"],
-                default = "6 (CD Lossless)",
+                default = q_default,
             )
             cfg["quality"] = normalize_quality(q_choice.split(" ")[0])
         elif has_tidal and not (has_qobuz or has_deezer or has_apple):
+            tidal_default = str(cfg.get("quality", "LOSSLESS") or "LOSSLESS").upper()
+            if tidal_default not in ["DOLBY_ATMOS", "HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW"]:
+                tidal_default = "LOSSLESS"
             q = _ask_choice(
                 "Tidal Quality:",
                 options = ["DOLBY_ATMOS", "HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW"],
-                default = "LOSSLESS",
+                default = tidal_default,
             )
             cfg["quality"] = normalize_quality(q)
         elif has_deezer and not (has_qobuz or has_tidal or has_apple):
+            deezer_default = {
+                "LOSSLESS": "LOSSLESS (FLAC)",
+                "HIGH": "HIGH (MP3 320)",
+                "NORMAL": "NORMAL (MP3 128)",
+            }.get(str(cfg.get("quality", "LOSSLESS") or "LOSSLESS").upper(), "LOSSLESS (FLAC)")
             q_choice = _ask_choice(
                 "Deezer Quality:",
                 options = ["LOSSLESS (FLAC)", "HIGH (MP3 320)", "NORMAL (MP3 128)"],
-                default = "LOSSLESS (FLAC)",
+                default = deezer_default,
             )
             cfg["quality"] = normalize_quality(q_choice.split(" ")[0])
         elif has_apple and not (has_qobuz or has_tidal or has_deezer):
+            apple_default = {
+                "ALAC": "ALAC (Lossless)",
+                "ATMOS": "ATMOS (Spatial)",
+                "AC3": "AC3",
+                "AAC": "AAC",
+                "AAC-LEGACY": "AAC-LEGACY",
+            }.get(str(cfg.get("quality", "ALAC") or "ALAC").upper(), "ALAC (Lossless)")
             q_choice = _ask_choice(
                 "Apple Music Quality:",
                 options = ["ALAC (Lossless)", "ATMOS (Spatial)", "AC3", "AAC", "AAC-LEGACY"],
-                default = "ALAC (Lossless)",
+                default = apple_default,
             )
             cfg["quality"] = normalize_quality(q_choice.split(" ")[0])
         elif has_qobuz or has_tidal or has_deezer or has_apple:
@@ -638,10 +673,12 @@ def run_interactive() -> dict:
             if has_apple:
                 combined_options.append("AAC-LEGACY (Legacy iTunes on Apple, HIGH elsewhere)")
 
+            quality_key = str(cfg.get("quality", "LOSSLESS") or "LOSSLESS").upper()
+            default_combined = next((opt for opt in combined_options if opt.startswith(quality_key)), combined_options[0])
             q_choice = _ask_choice(
                 "Combined Quality:",
                 options = combined_options,
-                default = combined_options[0],
+                default = default_combined,
             )
             if q_choice.startswith("LOSSLESS"):    cfg["quality"] = "LOSSLESS"
             elif q_choice.startswith("HI_RES"):    cfg["quality"] = "HI_RES"
@@ -661,7 +698,7 @@ def run_interactive() -> dict:
             )
             cfg["quality"] = normalize_quality(q)
 
-        cfg["allow_fallback"] = _ask_bool("Allow automatic quality fallback?", True)
+        cfg["allow_fallback"] = _ask_bool("Allow automatic quality fallback?", cfg.get("allow_fallback", True))
 
     # ── 5. Filename format ─────────────────────────────────────────────────
     _section("5 · Filename Format")
@@ -764,20 +801,20 @@ def run_interactive() -> dict:
         cfg["post_download_command"] = cfg.get("post_download_command", "")
 
     # ── 11. Optional Qobuz Local API ───────────────────────────────────────────────
-    _section("12 · Optional Qobuz Local API")
+    _section("11 · Optional Qobuz Local API")
     print(f"  {DIM('For a self-hosted Qobuz API, visit: https://github.com/BartolomeoRusso9/qobuz-api')}")
     cfg["qobuz_local_api_url"] = _ask(
         "Qobuz local API URL (leave blank to skip)",
         cfg.get("qobuz_local_api_url", "") or "",
     ) or None
 
-    # ── 12.5. Custom Tidal API ───────────────────────────────────────────────
+    # ── 11.5. Custom Tidal API ───────────────────────────────────────────────
     print(f"  {DIM('Self-host your own hifi-api instance for guaranteed availability.')}")
     print(f"  {DIM('Create one at: https://github.com/binimum/hifi-api')}")
     cfg["tidal_custom_api"] = _ask("Custom Tidal API URL (leave blank to skip)", cfg.get("tidal_custom_api", "") or "") or None
 
-    # ── 13. Loop ─────────────────────────────────────────────────────────────
-    loop_str = _ask("Repeat every N minutes (leave blank to disable)", "")
+    # ── 12. Loop ─────────────────────────────────────────────────────────────
+    loop_str = _ask("Repeat every N minutes (leave blank to disable)", str(cfg.get("loop", "")))
     cfg["loop"] = int(loop_str) if loop_str.isdigit() else None
 
     # ── Profile save ────────────────────────────────────────────────────────
