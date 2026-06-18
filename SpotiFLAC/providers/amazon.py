@@ -159,6 +159,58 @@ class AmazonProvider(BaseProvider):
             return self._session.post(url, json=payload, headers=headers, timeout=30)
         return self._session.get(url, params=params, headers=headers, timeout=30)
 
+    def _do_request_with_retry(
+            self,
+            method: str,
+            url: str,
+            *,
+            max_retries: int = 2,
+            base_delay_s: float = 2.0,
+            **kwargs,
+    ) -> httpx.Response:
+        retry_statuses = {429, 500, 502, 503, 504}
+        for attempt in range(max_retries):
+            try:
+                response = self._session.request(method, url, **kwargs)
+            except httpx.RequestError as exc:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        "[amazon] HTTP request error on attempt %d/%d: %s",
+                        attempt + 1,
+                        max_retries,
+                        exc,
+                    )
+                    time.sleep(base_delay_s * (attempt + 1))
+                    continue
+                raise
+
+            if response.status_code in retry_statuses:
+                if attempt < max_retries - 1:
+                    if response.status_code == 429:
+                        retry_after = response.headers.get("Retry-After")
+                        try:
+                            delay = float(retry_after) if retry_after else base_delay_s * (attempt + 1)
+                        except ValueError:
+                            delay = base_delay_s * (attempt + 1)
+                    else:
+                        delay = base_delay_s * (attempt + 1)
+
+                    logger.warning(
+                        "[amazon] Retry %d/%d due to HTTP %d for %s %s",
+                        attempt + 1,
+                        max_retries,
+                        response.status_code,
+                        method.upper(),
+                        url,
+                    )
+                    response.close()
+                    time.sleep(delay)
+                    continue
+
+            return response
+
+        return response
+
     # ------------------------------------------------------------------
     # Songlink / Fallback -> Amazon URL Resolver
     # ------------------------------------------------------------------
@@ -463,6 +515,14 @@ class AmazonProvider(BaseProvider):
                         time.sleep(base_delay_s)
                         continue
 
+                    if resp.status_code in (502, 503, 504) and attempt < max_attempts - 1:
+                        logger.warning(
+                            "[amazon] Squid API returned HTTP %d, retrying after backoff…",
+                            resp.status_code,
+                        )
+                        time.sleep(base_delay_s * (attempt + 1))
+                        continue
+
                     if resp.status_code != 200:
                         logger.warning("[amazon] Squid API returned HTTP %d", resp.status_code)
                         return None
@@ -586,24 +646,20 @@ class AmazonProvider(BaseProvider):
             except ImportError:
                 pass
 
-            max_retries = 2
-            base_delay = 3.0
-            for attempt in range(max_retries):
-                try:
-                    r = self._make_api_request(
-                        provider_key="zarz",
-                        endpoint="/media",
-                        headers=headers,
-                        params={"asin": asin, "codec": target_codec}
-                    )
-                    if r.status_code == 429:
-                        time.sleep(base_delay * (2 ** attempt))
-                        continue
-                    return r
-                except (httpx.RequestError, httpx.ConnectError) as e:
-                    logger.warning("[amazon] Zarz API connection error: %s", e)
-                    break
-            return None
+            url = f"{get_amazon_endpoint('zarz').rstrip('/')}/media"
+            try:
+                return self._do_request_with_retry(
+                    "GET",
+                    url,
+                    headers=headers,
+                    params={"asin": asin, "codec": target_codec},
+                    timeout=30,
+                    max_retries=2,
+                    base_delay_s=3.0,
+                )
+            except (httpx.RequestError, httpx.ConnectError) as e:
+                logger.warning("[amazon] Zarz API connection error: %s", e)
+                return None
 
         resp = _fetch_zarz(codec)
 
@@ -743,10 +799,21 @@ class AmazonProvider(BaseProvider):
             params   = None
             headers  = {"X-Debug-Key": _get_amazon_debug_key()}
 
+        url = f"{endpoint_url.rstrip('/')}{endpoint}"
         try:
-            resp = self._make_api_request(
-                provider_key=provider_key, endpoint=endpoint,
-                headers=headers, payload=payload, params=params, method=method
+            request_kwargs = {
+                "headers": headers,
+                "timeout": 30,
+            }
+            if method == "POST":
+                request_kwargs["json"] = payload
+            elif params is not None:
+                request_kwargs["params"] = params
+
+            resp = self._do_request_with_retry(
+                method,
+                url,
+                **request_kwargs,
             )
         except (httpx.RequestError, httpx.ConnectError) as exc:
             raise SpotiflacError(
@@ -831,11 +898,12 @@ class AmazonProvider(BaseProvider):
 
     def _download_from_spotbye1_api(self, asin: str, output_dir: str) -> tuple[str, dict]:
         base_url = get_amazon_endpoint("spotbye1")
-        resp = self._session.post(
+        resp = self._do_request_with_retry(
+            "POST",
             f"{base_url}/track",
             json={"asin": asin, "tier": "best"},
             headers={"Accept": "*/*", "User-Agent": _DEFAULT_UA},
-            timeout=30
+            timeout=30,
         )
 
         if resp.status_code != 200:
@@ -949,11 +1017,12 @@ class AmazonProvider(BaseProvider):
                     "MusicDL endpoint not configured",
                     self.name
                 )
-            resp = self._session.post(
+            resp = self._do_request_with_retry(
+                "POST",
                 _musicdl_url,
                 json=payload,
                 headers={"Content-Type": "application/json", "User-Agent": _DEFAULT_UA},
-                timeout=65
+                timeout=65,
             )
         except (httpx.RequestError, httpx.ConnectError) as exc:
             raise SpotiflacError(
