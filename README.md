@@ -92,9 +92,6 @@ Published image (GHCR)
 Official images are published to GitHub Container Registry (GHCR) via GitHub Actions. You can pull them with:
 
 ```bash
-# Replace `<OWNER>` with the GitHub user or org that owns this repo
-docker pull ghcr.io/<OWNER>/SpotiFLAC-Module-Version:latest
-# example:
 docker pull ghcr.io/ShuShuzinhuu/SpotiFLAC-Module-Version:latest
 ```
 
