@@ -23,7 +23,21 @@ class HistoryManager:
             json.dump(history[:50], f, indent=2)
 
     def get_all(self) -> List[dict]:
-        if not self.path.exists(): return []
+        if not self.path.exists():
+            return []
         try:
             return json.loads(self.path.read_text(encoding="utf-8"))
-        except: return []
+        except Exception:
+            return []
+
+    def clear(self) -> None:
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump([], f, indent=2)
+
+
+def get_recent_fetches() -> List[dict]:
+    return HistoryManager().get_all()
+
+
+def clear_recent_fetches() -> None:
+    HistoryManager().clear()

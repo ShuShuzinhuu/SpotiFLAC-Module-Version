@@ -24,6 +24,11 @@ from ..core.endpoints import get_youtube_endpoints
 
 logger = logging.getLogger(__name__)
 
+
+def _shorten_api_url(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed.netloc or url
+
 _DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -408,7 +413,7 @@ class YouTubeProvider(BaseProvider):
 
         for base_url in cobalt_instances:
             try:
-                logger.debug(f"[youtube] Tentativo Cobalt via: {base_url}")
+                logger.debug(f"[youtube] Tentativo Cobalt via: {_shorten_api_url(base_url)}")
                 payload_v10 = {
                     "url": video_url,
                     "downloadMode": "audio",
@@ -434,12 +439,12 @@ class YouTubeProvider(BaseProvider):
                     data = resp.json()
                     dl_url = data.get("url") or data.get("audio") or data.get("audioUrl")
                     if dl_url:
-                        logger.info(f"[youtube] Cobalt URL generato con successo da {api_url}")
+                        logger.info(f"[youtube] Cobalt URL generato con successo da {_shorten_api_url(api_url)}")
                         return dl_url
             except httpx.RequestError as exc:
-                logger.debug(f"[youtube] Error di rete Cobalt su {base_url}: {exc}")
+                logger.debug(f"[youtube] Error di rete Cobalt su {_shorten_api_url(base_url)}: {exc}")
             except Exception as exc:
-                logger.debug(f"[youtube] Fallimento Cobalt su {base_url}: {exc}")
+                logger.debug(f"[youtube] Fallimento Cobalt su {_shorten_api_url(base_url)}: {exc}")
 
         logger.warning("[youtube] Tutti i server Cobalt sono attualmente offline o irraggiungibili.")
         return None

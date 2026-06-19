@@ -143,7 +143,8 @@ class DeezerProvider(BaseProvider):
 
                 if resp.status_code == 429:
                     delay = max(delay, 2.0)
-                    logger.warning("[deezer] HTTP 429 Rate Limit on %s. Retrying in %.1fs...", url, delay)
+                    host = urllib.parse.urlparse(url).netloc or url
+                    logger.warning("[deezer] HTTP 429 Rate Limit on %s. Retrying in %.1fs...", host, delay)
                     last_err = RuntimeError("rate limited (429)")
                     continue
 

@@ -1,0 +1,267 @@
+from __future__ import annotations
+
+import logging
+import os
+import re
+from pathlib import Path
+from typing import Any
+
+from .base import BaseProvider
+from ..core.console import print_source_banner
+from ..core.http import NetworkManager
+from ..core.models import TrackMetadata, DownloadResult
+from ..core.errors import SpotiflacError, ErrorKind, TrackNotFoundError
+from ..core.tagger import embed_metadata, EmbedOptions
+from ..core.download_validation import validate_downloaded_track
+from ..core.musicbrainz import AsyncMBFetch, mb_result_to_tags
+from ..core.endpoints import get_asian_provider_endpoint
+from ..core.flac_validation import validate_and_repair_if_needed
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+class GDStudioProvider(BaseProvider):
+    """Generic provider for GD Studio-based Asian sources.
+
+    Subclasses should call super().__init__(timeout_s=...) and set
+    `self._source` to the appropriate source string (e.g. 'netease').
+    """
+
+    def __init__(self, source: str, timeout_s: int = 30) -> None:
+        super().__init__(timeout_s=timeout_s)
+        self._source = source
+        self._session = NetworkManager.get_sync_client()
+        self._session.headers.update({"User-Agent": _DEFAULT_UA})
+
+    # Basic helpers shared across Netease/Kuwo/JOOX/Migu
+    def _search(self, query: str, count: int = 10) -> list[dict]:
+        try:
+            resp = self._session.get(
+                get_asian_provider_endpoint(self._source, "gdstudio"),
+                params={
+                    "types": "search",
+                    "source": self._source,
+                    "name": query,
+                    "count": count,
+                    "pages": 1,
+                },
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                return data.get("data", data.get("result", []))
+        except Exception as exc:
+            logger.debug("[%s] Search failed for '%s': %s", self._source, query, exc)
+        return []
+
+    def _get_stream(self, track_id: str, requested_quality: int | None = None) -> tuple[str, int]:
+        try:
+            params = {"types": "url", "source": self._source, "id": track_id}
+            if requested_quality:
+                params["br"] = requested_quality
+            resp = self._session.get(get_asian_provider_endpoint(self._source, "gdstudio"), params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            url = data.get("url", "")
+            actual_br = int(data.get("br", 0)) if isinstance(data.get("br", 0), (int, str)) else 0
+            return url, actual_br
+        except Exception as exc:
+            logger.debug("[%s] Stream fetch failed for id=%s: %s", self._source, track_id, exc)
+        return "", 0
+
+    def _get_pic_url(self, pic_id: str, size: int = 500) -> str:
+        if not pic_id:
+            return ""
+        try:
+            resp = self._session.get(
+                get_asian_provider_endpoint(self._source, "gdstudio"),
+                params={"types": "pic", "source": self._source, "id": pic_id, "size": size},
+                timeout=8,
+            )
+            resp.raise_for_status()
+            return resp.json().get("url", "")
+        except Exception as exc:
+            logger.debug("[%s] Pic fetch failed for pic_id=%s: %s", self._source, pic_id, exc)
+        return ""
+
+    def _get_lyric(self, lyric_id: str) -> str:
+        if not lyric_id:
+            return ""
+        try:
+            resp = self._session.get(
+                get_asian_provider_endpoint(self._source, "gdstudio"),
+                params={"types": "lyric", "source": self._source, "id": lyric_id},
+                timeout=8,
+            )
+            resp.raise_for_status()
+            return resp.json().get("lyric", "")
+        except Exception as exc:
+            logger.debug("[%s] Lyric fetch failed for id=%s: %s", self._source, lyric_id, exc)
+        return ""
+
+    def _get_album_tracks(self, album_id: str) -> list[dict]:
+        try:
+            resp = self._session.get(
+                get_asian_provider_endpoint(self._source, "gdstudio"),
+                params={"types": "search", "source": f"{self._source}_album", "name": album_id, "count": 100, "pages": 1},
+                timeout=12,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, list):
+                return data
+        except Exception as exc:
+            logger.debug("[%s] Album tracks fetch failed for id=%s: %s", self._source, album_id, exc)
+        return []
+
+    def _item_to_metadata(self, item: dict, position: int = 1) -> TrackMetadata:
+        track_id = str(item.get("id", ""))
+        title = item.get("name", "Unknown")
+        raw_artists = item.get("artist", [])
+        if isinstance(raw_artists, list):
+            artist_str = ", ".join(a.get("name", "") if isinstance(a, dict) else str(a) for a in raw_artists).strip(", ") or "Unknown"
+        else:
+            artist_str = str(raw_artists) or "Unknown"
+        album = item.get("album", "Unknown")
+        pic_id = str(item.get("pic_id", ""))
+        cover_url = self._get_pic_url(pic_id) if pic_id else ""
+        return TrackMetadata(
+            id = f"{self._source}_{track_id}",
+            title = title,
+            artists = artist_str,
+            album = album,
+            album_artist = artist_str,
+            duration_ms = 0,
+            cover_url = cover_url,
+            external_url = "",
+            extra_info = {"provider": self._source, "raw_track_id": track_id, "pic_id": pic_id, "lyric_id": str(item.get("lyric_id", track_id))},
+        )
+
+    # Generic get_url / download_track reuse the same logic used previously in individual modules
+    def get_url(self, url: str) -> tuple[str, list[TrackMetadata]]:
+        match = re.search(r"(\d{5,})", url)
+        if match and "_album" in url.lower():
+            album_id = match.group(1)
+            items = self._get_album_tracks(album_id)
+            if items:
+                tracks = [self._item_to_metadata(it, i+1) for i, it in enumerate(items)]
+                return tracks[0].album if tracks else "Unknown Album", tracks
+
+        if match:
+            track_id = match.group(1)
+            items = self._search(track_id, count=1)
+            if items:
+                meta = self._item_to_metadata(items[0])
+                return meta.title, [meta]
+
+        query = url.strip()
+        items = self._search(query, count=20)
+        if not items:
+            raise SpotiflacError(ErrorKind.TRACK_NOT_FOUND, f"No results for: {query}", self.name)
+        tracks = [self._item_to_metadata(it, i+1) for i, it in enumerate(items)]
+        return f"Search: {query}", tracks
+
+    def download_track(self, metadata: TrackMetadata, output_dir: str, **kwargs: Any) -> DownloadResult:
+        try:
+            extra = metadata.extra_info or {}
+            raw_track_id = extra.get("raw_track_id", "")
+            if not raw_track_id:
+                query = f"{metadata.title} {metadata.first_artist}".strip()
+                items = self._search(query, count=5)
+                if not items:
+                    raise TrackNotFoundError(self.name, f"Track not found on {self._source}: {query}")
+                raw_track_id = str(items[0].get("id", ""))
+                extra = {"raw_track_id": raw_track_id, "pic_id": str(items[0].get("pic_id", "")), "lyric_id": str(items[0].get("lyric_id", raw_track_id))}
+
+            dl_url, actual_br = self._get_stream(raw_track_id)
+            if not dl_url:
+                raise SpotiflacError(ErrorKind.UNAVAILABLE, f"No lossless stream available on {self._source} for id={raw_track_id}", self.name)
+
+            dest = self._build_output_path(metadata, output_dir, kwargs.get("filename_format", "{title} - {artist}"), kwargs.get("position",1), kwargs.get("include_track_num",False), kwargs.get("use_album_track_num",False), kwargs.get("first_artist_only",False), extension=".flac")
+            if self._file_exists(dest):
+                return DownloadResult.skipped_result(self.name, str(dest), fmt="flac")
+
+            mb_fetcher = AsyncMBFetch(metadata.isrc) if metadata.isrc else None
+            print_source_banner(self._source, "", "FLAC")
+            self._http.stream_to_file(dl_url, str(dest), self._progress_cb)
+
+            expected_s = metadata.duration_ms // 1000
+            valid, err_msg = validate_downloaded_track(str(dest), expected_s)
+            if not valid:
+                if dest.exists():
+                    os.remove(str(dest))
+                return DownloadResult.fail(self.name, f"Validation failed: {err_msg}")
+
+            gd_lyrics = None
+            if kwargs.get("embed_lyrics") and extra.get("lyric_id"):
+                gd_lyrics = self._get_lyric(extra.get("lyric_id"))
+
+            mb_tags = {}
+            if mb_fetcher:
+                res = mb_fetcher.future.result()
+                mb_tags = mb_result_to_tags(res)
+
+            if extra.get("pic_id") and not metadata.cover_url:
+                cover_url = self._get_pic_url(extra.get("pic_id"))
+                if cover_url:
+                    metadata = metadata.model_copy(update={"cover_url": cover_url})
+
+            opts = EmbedOptions(first_artist_only=kwargs.get("first_artist_only", False), cover_url=metadata.cover_url, extra_tags=mb_tags, embed_lyrics=kwargs.get("embed_lyrics", False), lyrics_providers=kwargs.get("lyrics_providers", []), enrich=kwargs.get("enrich_metadata", False), enrich_providers=kwargs.get("enrich_providers", []), enrich_qobuz_token=kwargs.get("qobuz_token", ""), is_album=kwargs.get("is_album", False))
+            embed_metadata(str(dest), metadata, opts, session=self._session)
+
+            if gd_lyrics and gd_lyrics.strip():
+                try:
+                    from mutagen.flac import FLAC as _FLAC
+                    audio = _FLAC(str(dest))
+                    if "LYRICS" not in audio:
+                        audio["LYRICS"] = gd_lyrics
+                        audio.save()
+                except Exception:
+                    pass
+
+            return DownloadResult.ok(self.name, str(dest))
+
+        except SpotiflacError as exc:
+            logger.error("[%s] %s", self._source, exc)
+            return DownloadResult.fail(self.name, str(exc))
+        except Exception as exc:
+            logger.exception("[%s] unexpected error", self._source)
+            return DownloadResult.fail(self.name, str(exc))
+
+
+# Thin subclasses for specific GDStudio sources kept here to centralize logic
+class JooxProvider(GDStudioProvider):
+    name = "joox"
+
+    def __init__(self, timeout_s: int = 30) -> None:
+        super().__init__(source="joox", timeout_s=timeout_s)
+
+
+class NeteaseProvider(GDStudioProvider):
+    name = "netease"
+
+    def __init__(self, timeout_s: int = 30) -> None:
+        super().__init__(source="netease", timeout_s=timeout_s)
+
+
+class MiguProvider(GDStudioProvider):
+    name = "migu"
+
+    def __init__(self, timeout_s: int = 30) -> None:
+        super().__init__(source="migu", timeout_s=timeout_s)
+
+
+class KuwoProvider(GDStudioProvider):
+    name = "kuwo"
+
+    def __init__(self, timeout_s: int = 30) -> None:
+        super().__init__(source="kuwo", timeout_s=timeout_s)

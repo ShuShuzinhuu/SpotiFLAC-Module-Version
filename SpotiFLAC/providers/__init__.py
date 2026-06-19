@@ -8,10 +8,7 @@ from .soundcloud import SoundCloudProvider
 from .youtube import YouTubeProvider
 from .pandora import PandoraProvider
 from .spotify_metadata import SpotifyMetadataClient, parse_spotify_url
-from .joox import JooxProvider
-from .netease import NeteaseProvider
-from .migu import MiguProvider
-from .kuwo import KuwoProvider
+from .gdstudio import JooxProvider, NeteaseProvider, MiguProvider, KuwoProvider
 
 __all__ = [
     "BaseProvider",

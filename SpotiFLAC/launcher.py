@@ -270,6 +270,7 @@ def main() -> None:
             formatter_class = argparse.RawDescriptionHelpFormatter,
         )
         parser.add_argument("--gui", action="store_true", help="Launch graphical user interface (GUI)")
+        parser.add_argument("--interactive", action="store_true", help="Launch interactive mode (wizard)")
         parser.print_help()
         return
 
@@ -294,6 +295,7 @@ def main() -> None:
             formatter_class = argparse.RawDescriptionHelpFormatter,
         )
         parser.add_argument("--gui", action="store_true", help="Launch graphical user interface (GUI)")
+        parser.add_argument("--interactive", action="store_true", help="Launch interactive mode (wizard)")
         parser.print_help()
         return
 

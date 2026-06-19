@@ -26,6 +26,7 @@ _HTTP_TIMEOUT = 4
 _GLOBAL_TIMEOUT = 6.0
 # TTL cache ISRC in secondi (1 ora)
 _ENRICHMENT_CACHE_TTL = 3600.0
+_ENRICHMENT_CACHE_MAX = 2000
 # Max API Tidal da interrogare in parallelo per l'enrichment
 _TIDAL_MAX_APIS = 10
 _TIDAL_MAX_WORKERS = 5
@@ -95,7 +96,16 @@ def _put_cached(isrc: str, data: EnrichedMetadata) -> None:
     if not isrc:
         return
     with _cache_lock:
-        _enrichment_cache[isrc.upper()] = (data, time.time())
+        key = isrc.upper()
+        _enrichment_cache[key] = (data, time.time())
+        # Evict oldest entries if cache grows too large
+        if len(_enrichment_cache) > _ENRICHMENT_CACHE_MAX:
+            # find oldest
+            oldest_key = min(_enrichment_cache.items(), key=lambda kv: kv[1][1])[0]
+            try:
+                _enrichment_cache.pop(oldest_key, None)
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------

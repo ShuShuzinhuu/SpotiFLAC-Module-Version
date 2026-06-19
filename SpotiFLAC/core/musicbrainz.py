@@ -30,6 +30,8 @@ _USER_AGENT = "SpotiFLAC/2.0 ( support@spotbye.qzz.io )"
 _LOOKUP_FAILED = object()
 
 _mb_cache: dict[str, object] = {}
+_MB_CACHE_MAX = 2000
+_mb_cache_order: list[str] = []
 _mb_inflight: dict[str, threading.Event] = {}
 _mb_inflight_mu = threading.Lock()
 
@@ -260,6 +262,13 @@ def fetch_mb_metadata(isrc: str) -> dict:
         # così i follower non devono aspettare e i retry inutili vengono evitati
         # finché MB non torna online (gestito da should_skip_mb).
         _mb_cache[cache_key] = res
+        try:
+            _mb_cache_order.append(cache_key)
+            if len(_mb_cache_order) > _MB_CACHE_MAX:
+                old = _mb_cache_order.pop(0)
+                _mb_cache.pop(old, None)
+        except Exception:
+            pass
         event.set()
         with _mb_inflight_mu:
             _mb_inflight.pop(cache_key, None)

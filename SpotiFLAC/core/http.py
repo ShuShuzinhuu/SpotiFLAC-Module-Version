@@ -49,6 +49,34 @@ class NetworkManager:
             cls._async_client = httpx.AsyncClient(limits=limits, timeout=30.0)
         return cls._async_client
 
+    @classmethod
+    def close(cls) -> None:
+        """Close any active httpx clients to release resources."""
+        try:
+            if cls._sync_client is not None:
+                try:
+                    cls._sync_client.close()
+                except Exception:
+                    pass
+                cls._sync_client = None
+            if cls._async_client is not None:
+                try:
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # schedule close
+                        loop.create_task(cls._async_client.aclose())
+                    else:
+                        loop.run_until_complete(cls._async_client.aclose())
+                except Exception:
+                    try:
+                        cls._async_client.aclose()
+                    except Exception:
+                        pass
+                cls._async_client = None
+        except Exception:
+            pass
+
 
 # --- RATE LIMITER ORIGINALE ---
 class RateLimiter:
@@ -159,7 +187,7 @@ class HttpClient:
         except ValueError:
             raise ParseError(self._provider, "Invalid JSON")
 
-    def stream_to_file(self, url: str, dest_path: str, progress_cb: Any = None, chunk_size: int = 256 * 1024, extra_headers: dict | None = None):
+    def stream_to_file(self, url: str, dest_path: str, progress_cb: Any = None, chunk_size: int = 256 * 1024, extra_headers: dict | None = None, stop_event: Any = None):
         """Versione classica (stabile): Scaricamento sequenziale."""
         temp = dest_path + ".part"
         headers = extra_headers or {}
@@ -174,6 +202,12 @@ class HttpClient:
                 
                 with open(temp, "wb") as f:
                     for chunk in resp.iter_bytes(chunk_size=chunk_size):
+                        # Check for external cancellation event
+                        evt = stop_event or getattr(self, "_stop_event", None)
+                        if evt is not None and getattr(evt, "is_set", lambda: False)():
+                            if os.path.exists(temp):
+                                os.remove(temp)
+                            raise NetworkError(self._provider, "Stream cancelled by stop_event")
                         if chunk:
                             f.write(chunk)
                             downloaded += len(chunk)
@@ -203,3 +237,8 @@ class HttpClient:
                         downloaded += len(chunk)
                         if progress_cb: progress_cb(downloaded, total)
         os.replace(temp, dest_path)
+
+
+    # Ensure NetworkManager closes clients on process exit to avoid resource warnings in tests
+    import atexit as _atexit
+    _atexit.register(NetworkManager.close)

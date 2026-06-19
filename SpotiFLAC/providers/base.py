@@ -41,6 +41,16 @@ class BaseProvider(ABC):
     def set_progress_callback(self, cb: Callable[[int, int], None]) -> None:
         self._progress_cb = cb
 
+    def set_stop_event(self, ev) -> None:
+        """Attach a threading.Event used to signal cancellation to the provider and its HttpClient."""
+        try:
+            self._stop_event = ev
+            # also propagate to the underlying HttpClient when present
+            if hasattr(self, "_http") and self._http is not None:
+                setattr(self._http, "_stop_event", ev)
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
     # Interface methods — subclasses must implement
     # ------------------------------------------------------------------

@@ -135,6 +135,12 @@ def download_one(
  
                 cb = ProgressCallback(item_id=metadata.id, track_name=metadata.title)
                 provider.set_progress_callback(cb)
+                # Propagate cancellation event to provider for cooperative shutdown
+                if hasattr(provider, "set_stop_event"):
+                    try:
+                        provider.set_stop_event(stop_event)
+                    except Exception:
+                        pass
  
                 result = provider.download_track(
                     metadata,

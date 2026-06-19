@@ -10,12 +10,43 @@ on:
         description: 'Nome da versão per creare la Release (ex: v1.0.0)'
         required: false
         type: string
-  push:
-    tags:
-      - 'v*'
 
 jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dev dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install .
+
+      - name: Run ruff
+        shell: bash
+        run: |
+          if command -v ruff >/dev/null 2>&1; then ruff check .; else echo "ruff not installed"; fi
+
+      - name: Run black --check
+        shell: bash
+        run: |
+          if command -v black >/dev/null 2>&1; then black --check .; else echo "black not installed"; fi
+
+      - name: Run tests
+        shell: bash
+        run: |
+          pytest -q
+
   build:
+    needs: lint-and-test
     strategy:
       fail-fast: false
       matrix:

@@ -19,7 +19,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Any, NamedTuple
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -32,7 +32,7 @@ from ..core.link_resolver import LinkResolver
 from ..core.models import DownloadResult, TrackMetadata
 from ..core.musicbrainz import AsyncMBFetch, mb_result_to_tags
 from ..core.tagger import EmbedOptions, _print_mb_summary, embed_metadata
-from ..core.endpoints import get_tidal_post_endpoints
+from ..core.endpoints import get_tidal_post_endpoints, get_community_url
 from ..core.quality import normalize_quality as _cq_normalize_quality, quality_fallback_chain as _cq_quality_fallback_chain
 from ..core.flac_validation import validate_and_repair_if_needed
 
@@ -45,6 +45,14 @@ logger = logging.getLogger(__name__)
 _TIDAL_APIS_GET = []
 
 _TIDAL_API_POST = get_tidal_post_endpoints()
+
+_TIDAL_COMMUNITY_URL = ""
+try:
+    _TIDAL_COMMUNITY_URL = get_community_url("tidal")
+except Exception:
+    pass
+if _TIDAL_COMMUNITY_URL:
+    _TIDAL_API_POST = list(_TIDAL_API_POST) + [_TIDAL_COMMUNITY_URL]
 
 _CLEAN_POST_APIS = frozenset(a.rstrip('/') for a in _TIDAL_API_POST)
 
@@ -118,7 +126,7 @@ def _mark_api_rate_limited(api_url: str, wait_s: float) -> None:
     key = api_url.rstrip("/")
     with _api_cooldown_lock:
         _api_cooldown_until[key] = time.time() + wait_s
-    logger.debug("[tidal] API %s rate-limited per %.1fs", key, wait_s)
+    logger.debug("[tidal] API rate-limited per %.1fs", wait_s)
 
 def _is_api_rate_limited(api_url: str) -> bool:
     key = api_url.rstrip("/")
@@ -414,8 +422,8 @@ def _fetch_tidal_url_once(
             jitter = random.uniform(0, _RETRY_JITTER_S)
             actual_delay = delay + jitter
             logger.debug(
-                "[tidal] retry %d/%d for %s after %.2fs",
-                attempt, _MAX_RETRIES, api, actual_delay
+                "[tidal] retry %d/%d after %.2fs",
+                attempt, _MAX_RETRIES, actual_delay
             )
             time.sleep(actual_delay)
             delay *= 2
@@ -574,19 +582,19 @@ def _fetch_tidal_url_parallel(
             api = futures[fut]
             try:
                 dl_url = fut.result()
-                logger.debug("[tidal] parallel: got URL from %s in %.2fs", api, time.time() - start)
+                logger.debug("[tidal] parallel: got URL in %.2fs", time.time() - start)
                 pool.shutdown(wait=False, cancel_futures=True)
                 return api, dl_url
             except Exception as exc:
                 err_msg = str(exc)[:80]
-                errors.append(f"{api}: {err_msg}")
-                print_api_failure("tidal", api, err_msg)
+                errors.append(f"api: {err_msg}")
+                print_api_failure("tidal", "", err_msg)
     except (TimeoutError, FuturesTimeoutError):
         errors.append("global timeout exceeded")
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
 
-    logger.debug("[tidal] All APIs failed details: %s", "; ".join(errors))
+    logger.debug("[tidal] All %d APIs failed", len(available))
     raise SpotiflacError(
         ErrorKind.UNAVAILABLE,
         f"All {len(available)} Tidal APIs failed (of {len(apis)} total, {len(apis)-len(available)} in cooldown).",
@@ -620,7 +628,7 @@ class TidalProvider(BaseProvider):
         if custom_api_url:
             clean = custom_api_url.strip().rstrip("/")
             base_apis = [clean] + [a for a in base_apis if a.rstrip("/") != clean]
-            logger.info("[tidal] Custom API instance registered: %s", clean)
+            logger.info("[tidal] Custom API instance registered")
 
         self._apis = base_apis
         self._qobuz_token: str | None = qobuz_token or os.environ.get("QOBUZ_AUTH_TOKEN")
@@ -663,7 +671,7 @@ class TidalProvider(BaseProvider):
                     if resp.status_code == 429:
                         wait_s = float(resp.headers.get("Retry-After", _RATE_LIMIT_DEFAULT))
                         _mark_api_rate_limited(base, wait_s)
-                        logger.debug("[tidal] search rate-limited su %s, salto (cooldown %.0fs)", base, wait_s)
+                        logger.debug("[tidal] search rate-limited, skip (cooldown %.0fs)", wait_s)
                         break
                     if resp.status_code != 200:
                         continue
@@ -829,6 +837,11 @@ class TidalProvider(BaseProvider):
             total_bytes += len(chunk)
 
             for i, url in enumerate(media_urls):
+                # Cooperative cancellation: check provider stop_event if set
+                evt = getattr(self, "_stop_event", None)
+                if evt is not None and getattr(evt, "is_set", lambda: False)():
+                    raise RuntimeError("Download cancelled by stop_event")
+
                 resp = self._session.get(url, timeout=15, headers=headers)
                 resp.raise_for_status()
                 chunk = resp.content
