@@ -192,6 +192,10 @@ class AmazonProvider(BaseProvider):
                             delay = float(retry_after) if retry_after else base_delay_s * (attempt + 1)
                         except ValueError:
                             delay = base_delay_s * (attempt + 1)
+                        # Cap Retry-After to avoid blocking for server-specified
+                        # values that can be tens of minutes long. Fall through
+                        # to the next provider quickly instead.
+                        delay = min(delay, 10.0)
                     else:
                         delay = base_delay_s * (attempt + 1)
 
@@ -654,8 +658,10 @@ class AmazonProvider(BaseProvider):
                     headers=headers,
                     params={"asin": asin, "codec": target_codec},
                     timeout=30,
-                    max_retries=2,
-                    base_delay_s=3.0,
+                    # Only one attempt on Zarz: if it 429s it's rate-limited and
+                    # a quick retry won't clear it. Fall through to Squid fast.
+                    max_retries=1,
+                    base_delay_s=2.0,
                 )
             except (httpx.RequestError, httpx.ConnectError) as e:
                 logger.warning("[amazon] Zarz API connection error: %s", e)
@@ -670,7 +676,13 @@ class AmazonProvider(BaseProvider):
 
         if not resp or resp.status_code != 200:
             status = resp.status_code if resp else "Connection Error"
-            logger.warning("[amazon] Zarz API failed with status: %s", status)
+            if status == 429:
+                logger.warning(
+                    "[amazon] Zarz API rate-limited (HTTP 429) for ASIN %s — skipping to next provider",
+                    asin,
+                )
+            else:
+                logger.warning("[amazon] Zarz API failed with status: %s", status)
             return None
 
         try:
