@@ -14,6 +14,18 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+import re
+
+
+class _RedactUrlFilter(logging.Filter):
+    _url_re = re.compile(r'https?://\S+')
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = self._url_re.sub('[endpoint]', record.getMessage())
+        record.args = ()
+        return True
+
+logging.getLogger("httpx").addFilter(_RedactUrlFilter())
 
 from .errors import (
     AuthError, RateLimitedError, NetworkError,
