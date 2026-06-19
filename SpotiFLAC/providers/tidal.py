@@ -19,7 +19,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Any, NamedTuple
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -37,6 +37,11 @@ from ..core.quality import normalize_quality as _cq_normalize_quality, quality_f
 from ..core.flac_validation import validate_and_repair_if_needed
 
 logger = logging.getLogger(__name__)
+
+
+def _shorten_api_url(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed.netloc or url
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -118,7 +123,7 @@ def _mark_api_rate_limited(api_url: str, wait_s: float) -> None:
     key = api_url.rstrip("/")
     with _api_cooldown_lock:
         _api_cooldown_until[key] = time.time() + wait_s
-    logger.debug("[tidal] API %s rate-limited per %.1fs", key, wait_s)
+    logger.debug("[tidal] API %s rate-limited per %.1fs", _shorten_api_url(key), wait_s)
 
 def _is_api_rate_limited(api_url: str) -> bool:
     key = api_url.rstrip("/")
@@ -574,12 +579,14 @@ def _fetch_tidal_url_parallel(
             api = futures[fut]
             try:
                 dl_url = fut.result()
-                logger.debug("[tidal] parallel: got URL from %s in %.2fs", api, time.time() - start)
+                short_api = _shorten_api_url(api)
+                logger.debug("[tidal] parallel: got URL from %s in %.2fs", short_api, time.time() - start)
                 pool.shutdown(wait=False, cancel_futures=True)
                 return api, dl_url
             except Exception as exc:
                 err_msg = str(exc)[:80]
-                errors.append(f"{api}: {err_msg}")
+                short_api = _shorten_api_url(api)
+                errors.append(f"{short_api}: {err_msg}")
                 print_api_failure("tidal", api, err_msg)
     except (TimeoutError, FuturesTimeoutError):
         errors.append("global timeout exceeded")
@@ -620,7 +627,7 @@ class TidalProvider(BaseProvider):
         if custom_api_url:
             clean = custom_api_url.strip().rstrip("/")
             base_apis = [clean] + [a for a in base_apis if a.rstrip("/") != clean]
-            logger.info("[tidal] Custom API instance registered: %s", clean)
+            logger.info("[tidal] Custom API instance registered: %s", _shorten_api_url(clean))
 
         self._apis = base_apis
         self._qobuz_token: str | None = qobuz_token or os.environ.get("QOBUZ_AUTH_TOKEN")

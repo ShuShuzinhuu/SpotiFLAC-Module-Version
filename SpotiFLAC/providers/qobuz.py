@@ -38,6 +38,11 @@ from ..core.quality import map_musicdl_quality
 
 logger = logging.getLogger(__name__)
 
+
+def _shorten_api_url(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed.netloc or url
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -123,14 +128,15 @@ def _score_track_candidate(query: str, track: dict) -> int:
 
     title_norm = _normalize_search_text(track.get("title", ""))
     
-    version = track.get("version", "").strip()
-    display_title = f"{track.get('title', '')} ({version})" if version else track.get("title", "")
+    version = (track.get("version") or "").strip()
+    title_text = track.get("title") or ""
+    display_title = f"{title_text} ({version})" if version else title_text
     display_norm = _normalize_search_text(display_title)
 
-    performer = track.get("performer", {}).get("name", "")
-    album_artist = track.get("album", {}).get("artist", {}).get("name", "")
+    performer = (track.get("performer") or {}).get("name", "")
+    album_artist = (track.get("album") or {}).get("artist", {}).get("name", "")
     artist_norm = _normalize_search_text(performer or album_artist)
-    album_norm = _normalize_search_text(track.get("album", {}).get("title", ""))
+    album_norm = _normalize_search_text((track.get("album") or {}).get("title", ""))
     
     score = 0
 
@@ -141,7 +147,9 @@ def _score_track_candidate(query: str, track: dict) -> int:
 
     if artist_norm and artist_norm in query_norm: score += 180
     if album_norm and album_norm in query_norm: score += 100
-    if track.get("isrc", "").strip(): score += 15
+    isrc_value = track.get("isrc") or ""
+    if isinstance(isrc_value, str) and isrc_value.strip():
+        score += 15
     if track.get("maximum_bit_depth", 0) >= 24: score += 10
     if track.get("maximum_sampling_rate", 0) >= 88.2: score += 10
 
@@ -649,14 +657,16 @@ def _fetch_stream_url_parallel(
             api = futures[fut]
             try:
                 stream_url = fut.result()
-                logger.debug("[qobuz] parallel: got URL from %s in %.2fs", api, time.time() - start)
+                short_api = _shorten_api_url(api)
+                logger.debug("[qobuz] parallel: got URL from %s in %.2fs", short_api, time.time() - start)
                 pool.shutdown(wait=False, cancel_futures=True)
                 record_success("qobuz", api)
                 print_source_banner("qobuz", "", quality)
                 return api, stream_url
             except Exception as exc:
                 err_msg = str(exc)[:80]
-                errors.append(f"{api}: {err_msg}")
+                short_api = _shorten_api_url(api)
+                errors.append(f"{short_api}: {err_msg}")
                 record_failure("qobuz", api)
                 print_api_failure("qobuz", api, err_msg)
     except FuturesTimeoutError:
@@ -1059,7 +1069,7 @@ class QobuzProvider(BaseProvider):
                     if actual_duration > 0 and actual_duration <= 35 and expected_s > 45:
                         err = "Preview-length audio detected (30s limit)"
                         
-                    logger.warning("[qobuz] API %s returned invalid file: %s. Blacklisting endpoint and retrying...", winner_api, err)
+                    logger.warning("[qobuz] API %s returned invalid file: %s. Blacklisting endpoint and retrying...", _shorten_api_url(winner_api), err)
                     record_failure("qobuz", winner_api)  
                     excluded_apis.add(winner_api)
                     last_err = err

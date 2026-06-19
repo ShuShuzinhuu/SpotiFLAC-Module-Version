@@ -196,7 +196,7 @@ class AmazonProvider(BaseProvider):
                         delay = base_delay_s * (attempt + 1)
 
                     logger.warning(
-                        "[amazon] Retry %d/%d due to HTTP",
+                        "[amazon] Retry %d/%d due to HTTP %d (%s %s)",
                         attempt + 1,
                         max_retries,
                         response.status_code,

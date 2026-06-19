@@ -21,7 +21,7 @@ class SongstatsProvider:
         results = {"isrc": None, "tidal": None, "amazon": None, "deezer": None}
         
         try:
-            resp = self.http.get(url)
+            resp = self.http.get(url, follow_redirects=True)
             
             # 1. Fallback rapido per l'ISRC
             isrc_match = re.search(r'isrc\\":\\"(.*?)\\"', resp.text)

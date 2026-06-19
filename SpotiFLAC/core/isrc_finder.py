@@ -46,6 +46,12 @@ class IsrcFinder:
         if not client or not client.access_token:
             return None
 
+        try:
+            gid = client.spotify_id_to_hex_gid(track_id)
+        except Exception as e:
+            logger.debug("[isrc_finder] Invalid Spotify ID for hex conversion: %s", e)
+            return None
+
         url = f"https://spclient.wg.spotify.com/metadata/4/track/{gid}"
         try:
             from .http import NetworkManager
