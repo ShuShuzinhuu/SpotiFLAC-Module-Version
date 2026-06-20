@@ -13,6 +13,7 @@ Both formats share the same pipeline:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -274,6 +275,28 @@ def _embed_flac(
     audio.save()
     logger.debug("[tagger/flac] tags written: %s", path.name)
 
+
+async def _write_tags_async(
+        path:        Path,
+        tags:        dict[str, str],
+        cover_data:  bytes | None,
+        lyrics:      str | None,
+        lyrics_prov: str,
+        multi_artist: bool,
+        is_flac:     bool,
+        is_mp3:      bool,
+        is_m4a:      bool,
+) -> None:
+    if is_flac:
+        await asyncio.to_thread(_embed_flac, path, tags, cover_data, lyrics, lyrics_prov, multi_artist)
+    elif is_mp3:
+        await asyncio.to_thread(_embed_id3, path, tags, cover_data, lyrics, lyrics_prov)
+    elif is_m4a:
+        await asyncio.to_thread(_embed_m4a, path, tags, cover_data, lyrics, lyrics_prov)
+    else:
+        raise SpotiflacError(ErrorKind.FILE_IO, f"Unsupported file type: {path.suffix}")
+
+
 def _embed_m4a(
         path:        Path,
         tags:        dict[str, str],
@@ -364,6 +387,144 @@ class EmbedOptions:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+async def embed_metadata_async(
+        filepath:          str | Path,
+        metadata:          TrackMetadata,
+        opts:              EmbedOptions,
+        *,
+        cover_data:        bytes | None = None,
+        session:           Any | None = None,
+        multi_artist:      bool  = True,
+) -> None:
+    path = Path(filepath)
+    if not path.exists():
+        raise SpotiflacError(ErrorKind.FILE_IO, f"File not found: {path}")
+
+    is_mp3  = path.suffix.lower() == ".mp3"
+    is_flac = path.suffix.lower() == ".flac"
+    is_m4a  = path.suffix.lower() in (".m4a", ".aac")
+
+    if not is_mp3 and not is_flac and not is_m4a:
+        logger.warning("[tagger] formato non supportato: %s — skip", path.suffix)
+        return
+
+    # ── 1. Metadata enrichment ─────────────────────────────────────────────
+    enriched_tags: dict[str, str] = {}
+    enriched_cover_url: str = ""
+
+    if opts.enrich:
+        try:
+            from .metadata_enrichment import enrich_metadata_async as _enrich
+            enriched = await _enrich(
+                track_name  = metadata.title,
+                artist_name = metadata.first_artist,
+                isrc        = metadata.isrc,
+                providers   = opts.enrich_providers,
+                qobuz_token = opts.enrich_qobuz_token,
+            )
+            enriched_tags      = enriched.as_tags()
+            enriched_cover_url = enriched.cover_url_hd
+            if enriched._sources:
+                field_names = {"cover_url_hd": "cover", "explicit": "advisory"}
+                details = ", ".join(
+                    f"{field_names.get(field, field)} ({provider})"
+                    for field, provider in enriched._sources.items()
+                )
+                print(f"  ✦ Enriched with: {details}")
+            logger.debug("[tagger] enriched: %s", list(enriched_tags.keys()))
+        except Exception as exc:
+            logger.warning("[tagger] enrichment failed: %s", exc)
+
+    # ── 2. Cover art ───────────────────────────────────────────────────────
+    if not cover_data:
+        best_cover = enriched_cover_url or opts.cover_url or metadata.cover_url
+        if best_cover:
+            cover_data = await _fetch_cover_async(best_cover, session)
+
+    # ── 3. Lyrics ──────────────────────────────────────────────────────────
+    lyrics: str | None = None
+    lyrics_prov: str = ""
+
+    if opts.embed_lyrics and metadata.title and metadata.first_artist:
+        try:
+            from .lyrics import fetch_lyrics_async
+            res = await fetch_lyrics_async(
+                track_name       = metadata.title,
+                artist_name      = metadata.first_artist,
+                album_name       = metadata.album,
+                duration_s       = metadata.duration_ms // 1000,
+                track_id         = metadata.id,
+                isrc             = metadata.isrc,
+                providers        = opts.lyrics_providers,
+            )
+            if isinstance(res, tuple):
+                lyrics, lyrics_prov = res
+            else:
+                lyrics = res
+        except Exception as exc:
+            logger.warning("[tagger] lyrics fetch failed: %s", exc)
+
+    # ── 4. Costruzione dizionario tag base ─────────────────────────────────
+    tags = metadata.as_flac_tags(first_artist_only=opts.first_artist_only)
+    tags["DESCRIPTION"] = SOURCE_TAG
+
+    # Merge enrichment + extra (MusicBrainz, ecc.)
+    merged_extra: dict[str, str] = {**enriched_tags}
+    if opts.extra_tags:
+        merged_extra.update(opts.extra_tags)
+
+    # Per tracks singole l'GENRE dell'enrichment ha priorità
+    if not opts.is_album:
+        enrich_genre = enriched_tags.get("GENRE")
+        if enrich_genre:
+            tags["GENRE"] = enrich_genre
+            for k in [k for k in merged_extra if k.upper() == "GENRE"]:
+                del merged_extra[k]
+
+    # Guard: non sovrascrivere campi già presenti nel metadata base
+    if metadata.composer:
+        merged_extra.pop("COMPOSER", None)
+        merged_extra.pop("composer", None)
+    if metadata.copyright:
+        merged_extra.pop("COPYRIGHT", None)
+        merged_extra.pop("copyright", None)
+
+    # Handling date originali
+    orig_date = merged_extra.get("original_date") or merged_extra.get("ORIGINALDATE")
+    if orig_date:
+        tags["ORIGINALDATE"] = str(orig_date)
+        tags["ORIGINALYEAR"] = str(orig_date)[:4]
+
+    _date_keys = {
+        "ORIGINAL_DATE", "ORIGINAL_YEAR", "ORIGINALDATE", "ORIGINALYEAR",
+        "original_date", "original_year",
+    }
+    for key, val in merged_extra.items():
+        if key not in _date_keys and key.upper() not in _date_keys:
+            tags[key.upper()] = str(val)
+
+    try:
+        await _write_tags_async(
+            path,
+            tags,
+            cover_data,
+            lyrics,
+            lyrics_prov,
+            multi_artist,
+            is_flac,
+            is_mp3,
+            is_m4a,
+        )
+    except SpotiflacError:
+        raise
+    except Exception as exc:
+        raise SpotiflacError(
+            ErrorKind.FILE_IO,
+            f"Failed to embed metadata in {path.name}: {exc}",
+            cause=exc,
+        )
+
 
 def embed_metadata(
         filepath:          str | Path,
@@ -520,6 +681,27 @@ def _fetch_cover(url: str, session: Any | None = None) -> bytes | None:
             logger.warning("[tagger] cover attempt %d failed: %s", attempt + 1, exc)
         if attempt < 2:
             time.sleep(1.5 * (attempt + 1))
+    return None
+
+
+async def _fetch_cover_async(url: str, session: Any | None = None) -> bytes | None:
+    if not url:
+        return None
+
+    from .http import AsyncHttpClient
+    client = AsyncHttpClient(provider="tagger", timeout_s=10)
+    headers = {}
+
+    for attempt in range(3):
+        try:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 200:
+                return resp.content
+            logger.warning("[tagger] cover HTTP %s (attempt %d)", resp.status_code, attempt + 1)
+        except Exception as exc:
+            logger.warning("[tagger] cover attempt %d failed: %s", attempt + 1, exc)
+        if attempt < 2:
+            await asyncio.sleep(1.5 * (attempt + 1))
     return None
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import difflib
 import logging
 import time
@@ -379,3 +380,43 @@ class AppleMusicProvider(BaseProvider):
         except Exception as exc:
             logger.exception("[%s] Error inaspettato", self.name)
             return DownloadResult.fail(self.name, f"Inaspettato: {exc}")
+
+    async def download_track_async(
+            self,
+            metadata:            TrackMetadata,
+            output_dir:          str,
+            *,
+            quality:             str              = "alac",
+            filename_format:     str              = "{title} - {artist}",
+            position:            int              = 1,
+            include_track_num:   bool             = False,
+            use_album_track_num: bool             = False,
+            first_artist_only:   bool             = False,
+            allow_fallback:      bool             = True,
+            embed_lyrics:        bool             = False,
+            lyrics_providers:    list[str] | None = None,
+            enrich_metadata:     bool             = False,
+            enrich_providers:    list[str] | None = None,
+            qobuz_token:         str | None       = None,
+            is_album:            bool             = False,
+            **kwargs:            Any,
+    ) -> DownloadResult:
+        return await asyncio.to_thread(
+            self.download_track,
+            metadata,
+            output_dir,
+            quality=quality,
+            filename_format=filename_format,
+            position=position,
+            include_track_num=include_track_num,
+            use_album_track_num=use_album_track_num,
+            first_artist_only=first_artist_only,
+            allow_fallback=allow_fallback,
+            embed_lyrics=embed_lyrics,
+            lyrics_providers=lyrics_providers,
+            enrich_metadata=enrich_metadata,
+            enrich_providers=enrich_providers,
+            qobuz_token=qobuz_token,
+            is_album=is_album,
+            **kwargs,
+        )

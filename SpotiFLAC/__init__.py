@@ -101,7 +101,8 @@ def SpotiFLAC(
         post_download_action:  str              = "none",
         post_download_command: str              = "",
         tidal_custom_api:      str | None       = None,
-        timeout_s:             int | None       = None
+        timeout_s:             int | None       = None,
+        async_mode:            bool             = False,
 ) -> None:
     """
     Download tracks/album/playlist from Spotify, Tidal, Apple Music, Deezer, SoundCloud, Pandora and YouTube.
@@ -143,7 +144,10 @@ def SpotiFLAC(
 
     try:
         downloader = SpotiflacDownloader(opts)
-        downloader.run(url, loop_minutes=loop)
+        if async_mode:
+            downloader.run_async(url, loop_minutes=loop)
+        else:
+            downloader.run(url, loop_minutes=loop)
     except KeyboardInterrupt:
         print("\n\n[!] Operazione interrotta dall'utente.")
     except Exception as e:

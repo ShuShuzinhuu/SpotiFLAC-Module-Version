@@ -3,14 +3,17 @@ BaseProvider: classe astratta per tutti i provider audio.
 Implementa il pattern Protocol/Interface di Go.
 """
 from __future__ import annotations
+import asyncio
+import asyncio.subprocess as _subproc
+import inspect
 import logging
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Callable
+from typing import Awaitable, Callable
 
 from ..core.models import TrackMetadata, DownloadResult, build_filename
-from ..core.http import HttpClient, RetryConfig
+from ..core.http import AsyncHttpClient, AsyncRateLimiter, HttpClient, RetryConfig
 from ..core.errors import SpotiflacError
 
 logger = logging.getLogger(__name__)
@@ -23,18 +26,26 @@ class BaseProvider(ABC):
     la duplicazione presente nei file originali.
     """
     name: str = "base"
+    _is_async: bool = False
 
     def __init__(
             self,
             timeout_s:  int            = 30,
             retry:      RetryConfig | None = None,
             headers:    dict[str, str] | None = None,
+            rate_limiter: AsyncRateLimiter | None = None,
     ) -> None:
         self._http = HttpClient(
             provider  = self.name,
             timeout_s = timeout_s,
             retry     = retry,
             headers   = headers,
+        )
+        self._async_http = AsyncHttpClient(
+            provider    = self.name,
+            timeout_s   = timeout_s,
+            rate_limiter= rate_limiter,
+            headers     = headers,
         )
         self._progress_cb: Callable[[int, int], None] | None = None
 
@@ -73,7 +84,7 @@ class BaseProvider(ABC):
             enrich_providers:     list[str] | None = None,
             is_album:             bool = False,
             **kwargs,
-    ) -> DownloadResult:
+    ) -> DownloadResult | Awaitable[DownloadResult]:
         """
         Scarica la track e ritorna un DownloadResult.
 
@@ -81,6 +92,67 @@ class BaseProvider(ABC):
         should catch them and return DownloadResult.fail(...) in caso di errore.
         """
         raise NotImplementedError
+
+    async def download_track_async(
+            self,
+            metadata:   TrackMetadata,
+            output_dir: str,
+            *,
+            filename_format:      str  = "{title} - {artist}",
+            position:             int  = 1,
+            include_track_num:    bool = False,
+            use_album_track_num:  bool = False,
+            first_artist_only:    bool = False,
+            allow_fallback:       bool = True,
+            embed_lyrics:         bool = False,
+            lyrics_providers:     list[str] | None = None,
+            enrich_metadata:      bool = False,
+            enrich_providers:     list[str] | None = None,
+            is_album:             bool = False,
+            **kwargs,
+    ) -> DownloadResult:
+        """
+        Async wrapper for provider download_track.
+        If the provider implements async download_track, await it. Otherwise run it in a thread.
+        """
+        if inspect.iscoroutinefunction(self.download_track) or self._is_async:
+            result = self.download_track(
+                metadata,
+                output_dir,
+                filename_format=filename_format,
+                position=position,
+                include_track_num=include_track_num,
+                use_album_track_num=use_album_track_num,
+                first_artist_only=first_artist_only,
+                allow_fallback=allow_fallback,
+                embed_lyrics=embed_lyrics,
+                lyrics_providers=lyrics_providers,
+                enrich_metadata=enrich_metadata,
+                enrich_providers=enrich_providers,
+                is_album=is_album,
+                **kwargs,
+            )
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
+        return await asyncio.to_thread(
+            self.download_track,
+            metadata,
+            output_dir,
+            filename_format=filename_format,
+            position=position,
+            include_track_num=include_track_num,
+            use_album_track_num=use_album_track_num,
+            first_artist_only=first_artist_only,
+            allow_fallback=allow_fallback,
+            embed_lyrics=embed_lyrics,
+            lyrics_providers=lyrics_providers,
+            enrich_metadata=enrich_metadata,
+            enrich_providers=enrich_providers,
+            is_album=is_album,
+            **kwargs,
+        )
 
     # ------------------------------------------------------------------
     # Shared helpers
@@ -117,6 +189,26 @@ class BaseProvider(ABC):
             logger.debug("File already exists: %s (%.2f MB)", path.name, size_mb)
             return True
         return False
+
+    async def _run_ffmpeg(self, *args: str) -> tuple[int, str, str]:
+        """Executes ffmpeg asynchronously and returns (returncode, stdout, stderr)."""
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=_subproc.PIPE,
+            stderr=_subproc.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        return proc.returncode, stdout.decode(errors="ignore"), stderr.decode(errors="ignore")
+
+    async def _run_ffprobe(self, *args: str) -> tuple[int, str, str]:
+        """Executes ffprobe asynchronously and returns (returncode, stdout, stderr)."""
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=_subproc.PIPE,
+            stderr=_subproc.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        return proc.returncode, stdout.decode(errors="ignore"), stderr.decode(errors="ignore")
 
     # FIX: rimosso _safe_download — era codice morto.
     # Nessun provider lo chiamava: tutti invocano download_track() direttamente.

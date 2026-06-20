@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import asyncio.subprocess as _subproc
 import hashlib
 import json
 import logging
@@ -13,9 +15,14 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urlparse, quote
 
 import httpx
+try:
+    import aiofiles
+except ImportError:
+    aiofiles = None
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .base import BaseProvider
@@ -27,12 +34,12 @@ from ..core.errors import (
     TrackNotFoundError, NetworkError,
     ParseError, SpotiflacError, ErrorKind,
 )
-from ..core.http import RetryConfig, NetworkManager
+from ..core.http import AsyncHttpClient, RetryConfig, NetworkManager, async_zarz_rate_limiter
 from ..core.models import TrackMetadata, DownloadResult
-from ..core.musicbrainz import AsyncMBFetch, mb_result_to_tags
+from ..core.musicbrainz import AsyncMBFetch, mb_result_to_tags, fetch_mb_metadata_async
 from ..core.provider_stats import record_success, record_failure, prioritize_providers
 from ..core.tagger import _print_mb_summary, EmbedOptions
-from ..core.tagger import embed_metadata
+from ..core.tagger import embed_metadata, embed_metadata_async
 from ..core.endpoints import get_qobuz_endpoints
 from ..core.quality import map_musicdl_quality
 
@@ -244,6 +251,44 @@ def _scrape_credentials(session: httpx.Client) -> QobuzCredentials:
         bundle_url = "https://open.qobuz.com" + bundle_url
 
     bundle = session.get(bundle_url, headers=headers, timeout=30)
+    bundle.raise_for_status()
+
+    cm = _API_CONFIG_RE.search(bundle.text)
+    if not cm:
+        raise RuntimeError("app_id/app_secret not found in Qobuz bundle")
+
+    return QobuzCredentials(
+        app_id     = cm.group("app_id"),
+        app_secret = cm.group("app_secret"),
+        source     = bundle_url,
+    )
+
+async def _load_cached_credentials_async() -> QobuzCredentials | None:
+    try:
+        return await asyncio.to_thread(_load_cached_credentials)
+    except Exception as exc:
+        logger.warning("Failed to read Qobuz credentials cache async: %s", exc)
+        return None
+
+async def _save_cached_credentials_async(creds: QobuzCredentials) -> None:
+    await asyncio.to_thread(_save_cached_credentials, creds)
+
+async def _scrape_credentials_async() -> QobuzCredentials:
+    headers = {"User-Agent": _DEFAULT_UA}
+    client = await NetworkManager.get_async_client_safe()
+
+    resp = await client.get(f"{_OPEN_URL}1", headers=headers, timeout=15)
+    resp.raise_for_status()
+
+    m = _BUNDLE_RE.search(resp.text)
+    if not m:
+        raise RuntimeError("Qobuz bundle URL not found in HTML")
+
+    bundle_url = m.group(1)
+    if bundle_url.startswith("/"):
+        bundle_url = "https://open.qobuz.com" + bundle_url
+
+    bundle = await client.get(bundle_url, headers=headers, timeout=30)
     bundle.raise_for_status()
 
     cm = _API_CONFIG_RE.search(bundle.text)
@@ -737,6 +782,7 @@ def _fetch_stream_url_parallel(
 # ---------------------------------------------------------------------------
 class QobuzProvider(BaseProvider):
     name = "qobuz"
+    _is_async = True
 
     def __init__(
             self,
@@ -755,25 +801,40 @@ class QobuzProvider(BaseProvider):
         self._qobuz_token = qobuz_token or os.environ.get("QOBUZ_AUTH_TOKEN")
         self._local_api_url = local_api_url or os.environ.get("QOBUZ_LOCAL_API_URL")
 
-    def _get_credentials(self, force_refresh: bool = False) -> QobuzCredentials:
+    async def _async_raw_request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        client = await self._async_http._client()
+        # Extract user-provided headers and timeout to avoid duplicates
+        user_headers = kwargs.pop("headers", {})
+        headers = {**self._async_http._headers, **user_headers}
+        timeout = kwargs.pop("timeout", self._async_http._timeout)
+        return await client.request(
+            method,
+            url,
+            headers=headers,
+            timeout=timeout,
+            **kwargs,
+        )
+
+    async def _get_credentials_async(self, force_refresh: bool = False) -> QobuzCredentials:
         with self._creds_lock:
             if not force_refresh and self._creds and self._creds.is_fresh():
                 if self._qobuz_token and not self._creds.user_auth_token:
                     self._creds.user_auth_token = self._qobuz_token
                 return self._creds
-            disk = _load_cached_credentials()
-            if not force_refresh and disk and disk.is_fresh():
-                self._creds = disk
-                if self._qobuz_token and not self._creds.user_auth_token:
-                    self._creds.user_auth_token = self._qobuz_token
-                return self._creds
+
+        disk = await _load_cached_credentials_async()
+        if not force_refresh and disk and disk.is_fresh():
+            self._creds = disk
+            if self._qobuz_token and not self._creds.user_auth_token:
+                self._creds.user_auth_token = self._qobuz_token
+            return self._creds
 
         scraped: QobuzCredentials | None = None
         try:
-            candidate = _scrape_credentials(self._session)
-            if self._probe_credentials(candidate):
+            candidate = await _scrape_credentials_async()
+            if await self._probe_credentials_async(candidate):
                 scraped = candidate
-                _save_cached_credentials(scraped)
+                await _save_cached_credentials_async(scraped)
                 logger.info("[qobuz] fresh credentials (app_id=%s)", scraped.app_id)
         except Exception as exc:
             logger.warning("[qobuz] credential refresh failed: %s", exc)
@@ -791,6 +852,756 @@ class QobuzProvider(BaseProvider):
                 self._creds.user_auth_token = self._qobuz_token
             return self._creds
 
+    async def _probe_credentials_async(self, creds: QobuzCredentials) -> bool:
+        try:
+            resp = await self._do_signed_get_async(
+                "track/search",
+                {"query": _PROBE_ISRC, "limit": "1"},
+                creds,
+            )
+            return resp.json().get("tracks", {}).get("total", 0) > 0
+        except Exception:
+            return False
+
+    async def _do_signed_get_async(
+            self,
+            path:               str,
+            params:             dict,
+            creds:              QobuzCredentials | None = None,
+            force_refresh:      bool = False,
+            use_fallback_token: bool = False,
+            _depth:             int  = 0,
+    ) -> httpx.Response:
+        if creds is None:
+            creds = await self._get_credentials_async(force_refresh=force_refresh)
+
+        timestamp = str(int(time.time()))
+        signature = _compute_signature(path, params, timestamp, creds.app_secret)
+        req_params = {
+            **params,
+            "app_id":      creds.app_id,
+            "request_ts":  timestamp,
+            "request_sig": signature,
+        }
+        url     = f"{_API_BASE}/{path.strip('/')}"
+        headers = {"X-App-Id": creds.app_id}
+        if creds.user_auth_token and use_fallback_token:
+            headers["X-User-Auth-Token"] = creds.user_auth_token
+
+        resp = await self._async_raw_request("GET", url, params=req_params, headers=headers)
+
+        if resp.status_code in (400, 401) and _depth < 2:
+            if creds.user_auth_token and not use_fallback_token and not force_refresh:
+                return await self._do_signed_get_async(
+                    path, params, creds=creds,
+                    force_refresh=False, use_fallback_token=True, _depth=_depth + 1,
+                )
+            if not force_refresh:
+                return await self._do_signed_get_async(
+                    path, params,
+                    force_refresh=True, use_fallback_token=use_fallback_token,
+                    _depth=_depth + 1,
+                )
+        return resp
+
+    async def _get_gdstudio_ts9_async(self, host: str) -> str:
+        try:
+            client = await self._async_http._client()
+            resp = await client.get(f"https://{host}/time", timeout=5)
+            if resp.status_code == 200:
+                ts = resp.text.strip()
+                if len(ts) >= 9:
+                    return ts[:9]
+        except Exception:
+            pass
+        return str(int(time.time() * 1000))[:9]
+
+    async def _get_fd_token_async(
+            self,
+            client:    AsyncHttpClient,
+            origin:    str,
+            headers:   dict,
+            timeout_s: int,
+    ) -> str:
+        now = time.time()
+        with _fd_token_lock:
+            cached = _fd_token_cache.get(origin)
+            if cached and (now - cached[1]) < 55.0:
+                return cached[0]
+
+        resp = await client.get(f"{origin}/prepare", headers=headers, timeout=timeout_s)
+        if resp.status_code == 429:
+            raise RuntimeError("rate limited (HTTP 429) su /prepare")
+        if resp.status_code != 200:
+            raise RuntimeError(f"HTTP {resp.status_code} su /prepare (fd)")
+
+        t_token = resp.json().get("t")
+        if not t_token:
+            raise RuntimeError("fd /prepare: nessun token 't'")
+
+        with _fd_token_lock:
+            _fd_token_cache[origin] = (t_token, now)
+
+        return t_token
+
+    async def _fetch_stream_url_once_async(
+            self,
+            client:        AsyncHttpClient,
+            api_base:      str,
+            track_id:      int,
+            quality:       str,
+            timeout_s:     int = _API_TIMEOUT_S,
+            local_api_url: str | None = None,
+    ) -> str:
+        api_cleaning = api_base.rstrip('/')
+        is_local_api = bool(local_api_url) and api_cleaning == local_api_url.rstrip('/')
+
+        is_zarz = "zarz.moe" in api_cleaning
+        is_gdstudio = "gdstudio" in api_cleaning
+        is_wjhe = "wjhe.top" in api_cleaning
+        is_squid = "squid.wtf" in api_cleaning
+        is_fd = "flacdownloader.com" in api_cleaning
+
+        is_post = api_base in _POST_APIS or api_base in _COMMUNITY_APIS or is_zarz or is_gdstudio or is_fd
+        max_retries = _MAX_RETRIES_POST if is_post else _MAX_RETRIES_GET
+
+        headers = {
+            "User-Agent": _ZARZ_USER_AGENT if is_zarz else _DEFAULT_UA,
+            "Accept": "application/json"
+        }
+        last_err: Exception = RuntimeError("no attempts made")
+
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                delay = _backoff_delay(attempt)
+                logger.debug(
+                    "[qobuz] retry %d/%d for %s after %.2fs",
+                    attempt, max_retries, api_base, delay,
+                )
+                await asyncio.sleep(delay)
+
+            try:
+                if is_local_api:
+                    local_q = _map_local_api_quality(quality)
+                    url = f"{api_cleaning}/download-url/{track_id}?quality={local_q}"
+                    resp = await client.get(url, headers=headers, timeout=timeout_s)
+
+                elif is_gdstudio:
+                    host = urlparse(api_base).netloc
+                    ts9 = await self._get_gdstudio_ts9_async(host)
+                    br = "999" if quality in ("27", "7") else "740" if quality in ("", "6") else "320"
+                    payload = {
+                        "types": "url",
+                        "id": str(track_id),
+                        "source": "qobuz",
+                        "br": br,
+                        "s": _build_gdstudio_signature(host, str(track_id), ts9),
+                    }
+                    gdstudio_headers = {
+                        "User-Agent": _DEFAULT_UA,
+                        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                        "Origin": f"https://{host}",
+                        "Referer": f"https://{host}/",
+                        "Accept": "application/json",
+                    }
+                    resp = await client.post(api_base, data=payload, headers=gdstudio_headers, timeout=timeout_s)
+
+                elif is_wjhe:
+                    q_map = {"27": 2000, "7": 2000, "6": 1000, "": 1000}
+                    wjhe_q = q_map.get(quality, 1000)
+                    wjhe_f = "flac"
+                    url = f"{api_base}?ID={track_id}&quality={wjhe_q}&format={wjhe_f}"
+                    resp = await client.get(url, headers=headers, timeout=timeout_s, follow_redirects=False)
+                    if resp.status_code in (301, 302, 303, 307, 308):
+                        loc = resp.headers.get("Location")
+                        if loc and loc.startswith("http"):
+                            return loc
+
+                elif is_fd:
+                    parsed_fd = urlparse(api_cleaning)
+                    base_origin = f"{parsed_fd.scheme}://{parsed_fd.netloc}"
+                    t_token = await self._get_fd_token_async(client, base_origin, headers, timeout_s)
+                    fd_headers = headers.copy()
+                    fd_headers["X-Dl-Token"] = t_token
+                    fd_headers["Referer"] = f"{base_origin}/it/download"
+                    fmt_map = {"27": 27, "7": 7, "6": 6, "5": 5,
+                               "HI_RES_LOSSLESS": 27, "HI_RES": 7, "LOSSLESS": 6}
+                    fmt_id = fmt_map.get(quality, 7)
+                    payload_fd = {
+                        "url": f"{_OPEN_URL}{track_id}",
+                        "formatId": fmt_id,
+                    }
+                    resp = await client.post(api_cleaning, json=payload_fd, headers=fd_headers, timeout=timeout_s)
+
+                elif is_squid:
+                    import struct
+                    import base64
+                    parsed = urlparse(api_base)
+                    origin = f"{parsed.scheme}://{parsed.netloc}"
+                    squid_headers = {
+                        "User-Agent": _DEFAULT_UA,
+                        "Accept": "application/json, text/plain, */*",
+                        "Accept-Language": "en-US,en;q=0.9",
+                    }
+                    current_ts = int(time.time() * 1000)
+                    chal_resp = await client.get(
+                        f"{origin}/api/altcha/challenge",
+                        params={"ts": current_ts},
+                        headers=squid_headers,
+                        timeout=timeout_s,
+                    )
+                    chal_resp.raise_for_status()
+                    challenge_json_str = chal_resp.text
+                    challenge_data = json.loads(challenge_json_str)
+                    params = challenge_data["parameters"]
+                    salt_hex = params.get("salt", "")
+                    nonce_hex = params["nonce"]
+                    key_prefix = params["keyPrefix"]
+                    algorithm = params.get("algorithm", "SHA-256")
+                    cost = params.get("cost", 1)
+                    key_length = params.get("keyLength", 32)
+                    if algorithm != "SHA-256":
+                        raise ValueError(f"Algoritmo ALTCHA non supportato: {algorithm}")
+                    salt_bytes = bytes.fromhex(salt_hex) if salt_hex else b""
+                    nonce_bytes = bytes.fromhex(nonce_hex)
+                    start_time = time.time()
+                    counter = 0
+                    derived = b""
+                    while True:
+                        password = nonce_bytes + struct.pack(">I", counter)
+                        data = password
+                        for i in range(cost):
+                            data = hashlib.sha256(data).digest()
+                        derived = data[:key_length]
+                        hex_digest = derived.hex()
+                        if hex_digest.startswith(key_prefix):
+                            break
+                        counter += 1
+                    elapsed = (time.time() - start_time) * 1000
+                    min_elapsed = 160.0 + random.uniform(0, 20)
+                    if elapsed < min_elapsed:
+                        await asyncio.sleep((min_elapsed - elapsed) / 1000.0)
+                    solution = {
+                        "counter": counter,
+                        "derivedKey": hex_digest,
+                        "time": round(max(elapsed, min_elapsed), 1),
+                    }
+                    payload_json = f'{{"challenge":{challenge_json_str},"solution":{json.dumps(solution, separators=(",", ":"))}}}'
+                    payload_b64 = base64.b64encode(payload_json.encode()).decode()
+                    verify_resp = await client.post(
+                        f"{origin}/api/altcha/verify",
+                        json={"payload": payload_b64},
+                        headers={
+                            "Origin": origin,
+                            "Referer": f"{origin}/",
+                            **squid_headers,
+                        },
+                        timeout=timeout_s,
+                    )
+                    verify_resp.raise_for_status()
+                    url = _build_stream_url(api_base, track_id, quality)
+                    resp = await client.get(
+                        url,
+                        headers={
+                            "Origin": origin,
+                            "Referer": f"{origin}/",
+                            **squid_headers,
+                        },
+                        timeout=timeout_s,
+                    )
+
+                elif is_post:
+                    if is_zarz:
+                        await async_zarz_rate_limiter.wait_for_slot()
+                    payload = {
+                        "quality": _map_musicdl_quality(quality),
+                        "upload_to_r2": False,
+                        "url": f"{_OPEN_URL}{track_id}",
+                    }
+                    post_headers = {"User-Agent": _ZARZ_USER_AGENT if is_zarz else _DEFAULT_UA}
+                    resp = await client.post(api_base, json=payload, headers=post_headers, timeout=timeout_s)
+
+                else:
+                    url = _build_stream_url(api_base, track_id, quality)
+                    resp = await client.get(url, headers=headers, timeout=timeout_s)
+
+                if resp.status_code == 429:
+                    retry_after = _parse_retry_after(resp)
+                    wait = _backoff_delay(attempt + 1, retry_after)
+                    last_err = RuntimeError("rate limited (HTTP 429)")
+                    if attempt < max_retries:
+                        await asyncio.sleep(wait)
+                    continue
+
+                if resp.status_code >= 500:
+                    last_err = RuntimeError(f"HTTP {resp.status_code}")
+                    continue
+                if resp.status_code != 200:
+                    raise RuntimeError(f"HTTP {resp.status_code}")
+
+                text = resp.text.strip()
+                if not text:
+                    last_err = RuntimeError("empty response body")
+                    continue
+                if text.startswith("<"):
+                    raise RuntimeError("received HTML instead of JSON")
+
+                try:
+                    data = resp.json()
+                except ValueError:
+                    last_err = RuntimeError("invalid JSON in response")
+                    continue
+
+                if isinstance(data.get("error"), str) and data["error"].strip():
+                    raise RuntimeError(data["error"].strip())
+                if isinstance(data.get("detail"), str) and data["detail"].strip():
+                    raise RuntimeError(data["detail"].strip())
+                if data.get("success") is False:
+                    msg = data.get("message", "api returned success=false")
+                    raise RuntimeError(str(msg))
+
+                stream = _extract_stream_url_from_json(data)
+                if stream:
+                    return stream
+
+                last_err = RuntimeError("no download URL in response")
+
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                last_err = exc
+                if isinstance(exc, httpx.ConnectError) and "nodename nor servname" in str(exc):
+                    host = urlparse(api_base).netloc
+                    with _dns_failed_hosts_lock:
+                        _dns_failed_hosts.add(host)
+                    break
+                continue
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                last_err = exc
+                if not is_post:
+                    break
+                continue
+
+        raise last_err
+
+    async def _fetch_stream_url_parallel_async(
+            self,
+            client:        AsyncHttpClient,
+            apis:          list[str],
+            track_id:      int,
+            quality:       str,
+            timeout_s:     int = _API_TIMEOUT_S,
+            local_api_url: str | None = None,
+    ) -> tuple[str, str, str]:
+        if not apis:
+            raise SpotiflacError(ErrorKind.UNAVAILABLE, "no stream APIs configured", "qobuz")
+
+        start = time.time()
+        with _dns_failed_hosts_lock:
+            dead = frozenset(_dns_failed_hosts)
+        available_apis = [a for a in apis if urlparse(a).netloc not in dead]
+        if not available_apis:
+            available_apis = apis
+
+        tasks = {
+            asyncio.create_task(
+                self._fetch_stream_url_once_async(client, api, track_id, quality, timeout_s, local_api_url)
+            ): api for api in available_apis
+        }
+        errors: list[str] = []
+        deadline = time.time() + timeout_s + 2
+
+        try:
+            while tasks:
+                timeout = max(0.0, deadline - time.time())
+                if timeout <= 0:
+                    break
+
+                done, pending = await asyncio.wait(tasks.keys(), return_when=asyncio.FIRST_COMPLETED, timeout=timeout)
+                if not done:
+                    break
+
+                for task in done:
+                    api = tasks.pop(task)
+                    try:
+                        stream_url = task.result()
+                        short_api = _shorten_api_url(api)
+                        logger.debug("[qobuz] parallel: got URL from %s in %.2fs", short_api, time.time() - start)
+                        for pending_task in pending:
+                            pending_task.cancel()
+                        record_success("qobuz", api)
+                        print_source_banner("qobuz", "", quality)
+                        return api, stream_url, quality
+                    except Exception as exc:
+                        err_msg = str(exc)[:80]
+                        short_api = _shorten_api_url(api)
+                        errors.append(f"{short_api}: {err_msg}")
+                        record_failure("qobuz", api)
+                        print_api_failure("qobuz", api, err_msg)
+                        continue
+
+            raise FuturesTimeoutError
+        except FuturesTimeoutError:
+            errors.append("global timeout exceeded")
+        finally:
+            for task in tasks:
+                task.cancel()
+
+        logger.debug("[qobuz] All APIs failed details: %s", "; ".join(errors))
+        raise SpotiflacError(ErrorKind.UNAVAILABLE, "All stream APIs failed", "qobuz")
+
+    async def _search_by_isrc_async(self, isrc: str) -> dict | None:
+        try:
+            if isrc.startswith("qobuz_"):
+                track_id = isrc.removeprefix("qobuz_")
+                resp = await self._do_signed_get_async("track/get", {"track_id": track_id})
+                if resp.status_code != 200:
+                    self._raise_api_error(resp, "track/get")
+                return resp.json()
+
+            resp = await self._do_signed_get_async("track/search", {"query": isrc, "limit": "1"})
+            if resp.status_code != 200:
+                self._raise_api_error(resp, "track/search")
+
+            body = resp.text
+            if not body.strip():
+                raise ParseError(self.name, "empty response from track/search")
+            data = resp.json()
+            items = data.get("tracks", {}).get("items", [])
+            if not items:
+                raise TrackNotFoundError(self.name, isrc)
+            return items[0]
+        except Exception as exc:
+            logger.debug("[qobuz] async ISRC search failed: %s", exc)
+            return None
+
+    async def _search_by_text_async(self, title: str, artist: str) -> dict | None:
+        query = f"{title} {artist}".strip()
+        try:
+            resp = await self._do_signed_get_async("track/search", {"query": query, "limit": "10"})
+            if resp.status_code != 200:
+                return None
+
+            items = resp.json().get("tracks", {}).get("items", [])
+            if not items:
+                return None
+
+            best_match = None
+            best_score = 0
+            for item in items:
+                score = _score_track_candidate(query, item)
+                if score > best_score:
+                    best_score = score
+                    best_match = item
+
+            if not best_match or best_score < 400:
+                album_resp = await self._do_signed_get_async("album/search", {"query": query, "limit": "5"})
+                if album_resp.status_code == 200:
+                    albums = album_resp.json().get("albums", {}).get("items", [])
+                    for album in albums:
+                        album_id = album.get("id")
+                        if not album_id:
+                            continue
+                        track_resp = await self._do_signed_get_async("album/get", {"album_id": album_id})
+                        if track_resp.status_code != 200:
+                            continue
+                        album_data = track_resp.json()
+                        album_tracks = album_data.get("tracks", {}).get("items", [])
+                        for trk in album_tracks:
+                            trk["album"] = album_data
+                            score = _score_track_candidate(query, trk)
+                            if score > best_score:
+                                best_score = score
+                                best_match = trk
+
+            return best_match
+        except Exception as exc:
+            logger.debug("[qobuz] async text search failed: %s", exc)
+            return None
+
+    async def _search_by_text_with_duration_async(self, title: str, artist: str, target_duration_s: int) -> dict | None:
+        query = f"{title} {artist}".strip()
+        try:
+            resp = await self._do_signed_get_async("track/search", {"query": query, "limit": "20"})
+            if resp.status_code != 200:
+                return None
+            items = resp.json().get("tracks", {}).get("items", [])
+            if not items:
+                return None
+
+            best_match = None
+            best_score = float("inf")
+            for item in items:
+                qobuz_dur = item.get("duration", 0)
+                if qobuz_dur == 0:
+                    continue
+                diff = abs(qobuz_dur - target_duration_s)
+                if diff < best_score:
+                    best_score = diff
+                    best_match = item
+            if best_match and best_score <= 15:
+                return best_match
+            return None
+        except Exception as exc:
+            logger.debug("[qobuz] duration-aware async search failed: %s", exc)
+            return None
+
+    async def _get_stream_url_async(
+            self,
+            track_id: int,
+            quality: str,
+            allow_fallback: bool,
+            exclude_apis: set[str] | None = None,
+    ) -> tuple[str, str, str]:
+        all_apis = list(_STREAM_APIS) + list(_QOBUZ_DL_) + list(_POST_APIS) + list(_COMMUNITY_APIS) + list(_GDSTUDIO_APIS) + list(_WJHE_APIS) + list(_FLACDOWNLOADER_APIS)
+        ordered_apis = prioritize_providers("qobuz", all_apis)
+        if self._local_api_url:
+            cleaned_local_api = self._local_api_url.rstrip('/')
+            if cleaned_local_api in ordered_apis:
+                ordered_apis.remove(cleaned_local_api)
+            ordered_apis.insert(0, cleaned_local_api)
+        ordered_apis = [api for api in ordered_apis if api not in (exclude_apis or set())]
+        
+        return await self._fetch_stream_url_parallel_async(
+            self._async_http,
+            ordered_apis,
+            track_id,
+            quality,
+            timeout_s=_API_TIMEOUT_S,
+            local_api_url=self._local_api_url,
+        )
+
+    async def _get_audio_duration_seconds_async(self, file_path: str) -> int:
+        try:
+            rc, stdout, _ = await self._run_ffprobe(
+                "-v", "quiet", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", file_path,
+            )
+            return int(float(stdout.strip())) if stdout.strip() else 0
+        except Exception:
+            return 0
+
+    async def download_track(
+            self,
+            metadata:   TrackMetadata,
+            output_dir: str,
+            *,
+            filename_format:     str  = "{title} - {artist}",
+            position:            int  = 1,
+            include_track_num:   bool = False,
+            use_album_track_num: bool = False,
+            first_artist_only:   bool = False,
+            allow_fallback:      bool = True,
+            quality:             str  = "6",
+            embed_genre:         bool = True,
+            single_genre:        bool = True,
+            embed_lyrics:        bool            = False,
+            lyrics_providers:    list[str] | None = None,
+            enrich_metadata:     bool = False,
+            enrich_providers:    list[str] | None = None,
+            is_album:            bool = False,
+            **kwargs,
+    ) -> DownloadResult:
+
+        quality = _TIDAL_TO_QOBUZ_QUALITY.get(quality, quality)
+
+        try:
+            track = None
+            if metadata.isrc:
+                track = await self._search_by_isrc_async(metadata.isrc)
+
+            if not track:
+                logger.info("[qobuz] Trying textual search for: %s - %s", metadata.title, metadata.artists)
+                track = await self._search_by_text_async(metadata.title, metadata.artists)
+
+            if not track:
+                raise TrackNotFoundError(self.name, f"Track not found (ISRC: {metadata.isrc}, Title: {metadata.title})")
+
+            track_id = track.get("id")
+            if not track_id:
+                raise TrackNotFoundError(self.name, "Missing track ID in Qobuz response")
+
+            if metadata.duration_ms > 0:
+                qobuz_duration_s = track.get("duration", 0)
+                expected_s = metadata.duration_ms // 1000
+                if qobuz_duration_s > 0 and abs(qobuz_duration_s - expected_s) > 15:
+                    logger.warning(
+                        "[qobuz] track_id=%s has duration %ds, expected %ds — attempting duration-aware search",
+                        track_id, qobuz_duration_s, expected_s,
+                    )
+                    alt_track = await self._search_by_text_with_duration_async(
+                        metadata.title, metadata.artists, expected_s
+                    )
+                    if alt_track:
+                        alt_duration = alt_track.get("duration", 0)
+                        if abs(alt_duration - expected_s) < abs(qobuz_duration_s - expected_s):
+                            logger.info("[qobuz] found alternative version: track_id=%s duration=%ds", alt_track.get("id"), alt_duration)
+                            track = alt_track
+                            track_id = track.get("id")
+
+            album_data = track.get("album", {})
+            images = album_data.get("image", {})
+            qobuz_cover = images.get("large") or images.get("small")
+            if qobuz_cover:
+                metadata.cover_url = _IMAGE_SIZE_RE.sub("_max.jpg", qobuz_cover)
+
+            metadata.release_date = track.get("release_date_original") or album_data.get("release_date_original") or metadata.release_date
+            metadata.copyright = track.get("copyright") or album_data.get("copyright") or metadata.copyright
+
+            composer_obj = track.get("composer")
+            if composer_obj and composer_obj.get("name"):
+                metadata.composer = composer_obj["name"]
+
+            qobuz_extra_tags = {}
+            if album_data.get("genre") and album_data["genre"].get("name"):
+                qobuz_extra_tags["GENRE"] = album_data["genre"]["name"]
+            if album_data.get("label") and album_data["label"].get("name"):
+                qobuz_extra_tags["LABEL"] = album_data["label"]["name"]
+                qobuz_extra_tags["ORGANIZATION"] = album_data["label"]["name"]
+            if album_data.get("upc"):
+                qobuz_extra_tags["BARCODE"] = album_data["upc"]
+                qobuz_extra_tags["UPC"] = album_data["upc"]
+            if album_data.get("maximum_technical_specifications"):
+                qobuz_extra_tags["TECHNICAL_SPECIFICATIONS"] = album_data["maximum_technical_specifications"]
+            if track.get("performers"):
+                qobuz_extra_tags["COMMENT"] = track["performers"]
+            if track.get("parental_warning"):
+                qobuz_extra_tags["ITUNESADVISORY"] = "1"
+
+            qobuz_track_id = str(track.get("id", ""))
+            qobuz_album_id = str(album_data.get("qobuz_id", ""))
+            if qobuz_track_id:
+                qobuz_extra_tags["QOBUZ_TRACK_ID"] = qobuz_track_id
+            if qobuz_album_id:
+                qobuz_extra_tags["QOBUZ_ALBUM_ID"] = qobuz_album_id
+            if album_data.get("url"):
+                qobuz_extra_tags["URL"] = album_data["url"]
+            if track.get("isrc"):
+                metadata.isrc = track["isrc"]
+            if track.get("track_number"):
+                metadata.track_number = track["track_number"]
+            if album_data.get("tracks_count"):
+                metadata.total_tracks = album_data["tracks_count"]
+
+            dest = self._build_output_path(
+                metadata, output_dir, filename_format,
+                position, include_track_num, use_album_track_num, first_artist_only,
+            )
+            if self._file_exists(dest):
+                return DownloadResult.skipped_result(self.name, str(dest))
+
+            expected_s = metadata.duration_ms // 1000
+            excluded_apis = set()
+            valid = False
+            last_err = None
+
+            mb_tags: dict[str, str] = {}
+            if metadata.isrc:
+                mb_tags = mb_result_to_tags(await fetch_mb_metadata_async(metadata.isrc))
+
+            mb_tags.update(qobuz_extra_tags)
+            _print_mb_summary(mb_tags)
+
+            while not valid:
+                try:
+                    winner_api, stream_url, used_quality = await self._get_stream_url_async(
+                        track_id, quality, allow_fallback, exclude_apis=excluded_apis
+                    )
+                except SpotiflacError as exc:
+                    if last_err:
+                        raise SpotiflacError(
+                            ErrorKind.UNAVAILABLE,
+                            f"All APIs failed (errors or previews). Last reason: {last_err}",
+                            self.name,
+                        )
+                    raise exc
+
+                with _bad_stream_urls_lock:
+                    is_bad_url = stream_url in _bad_stream_urls
+                if is_bad_url:
+                    logger.warning("[qobuz] stream URL already known-bad, blacklisting API and skipping download")
+                    record_failure("qobuz", winner_api)
+                    excluded_apis.add(winner_api)
+                    last_err = "stream URL already known-bad"
+                    continue
+
+                await self._async_http.stream_to_file(
+                    stream_url,
+                    str(dest),
+                    self._progress_cb,
+                    extra_headers={
+                        "User-Agent":      _DEFAULT_UA,
+                        "Accept":          "audio/flac, audio/*, */*",
+                        "Accept-Encoding": "identity",
+                        "Referer":         "https://open.qobuz.com/",
+                        "Origin":          "https://open.qobuz.com",
+                    },
+                )
+
+                valid, err = await asyncio.to_thread(validate_downloaded_track, str(dest), expected_s)
+                if not valid:
+                    actual_duration = await self._get_audio_duration_seconds_async(str(dest))
+                    if actual_duration > 0 and actual_duration <= 35 and expected_s > 45:
+                        err = "Preview-length audio detected (30s limit)"
+
+                    logger.warning("[qobuz] stream API returned invalid file: %s. Blacklisting endpoint and retrying...", err)
+                    with _bad_stream_urls_lock:
+                        _bad_stream_urls.add(stream_url)
+                    record_failure("qobuz", winner_api)
+                    excluded_apis.add(winner_api)
+                    last_err = err
+
+                    if os.path.exists(dest):
+                        try:
+                            os.remove(dest)
+                            logger.debug("[qobuz] Cleaned up invalid file: %s", dest)
+                        except OSError as e:
+                            logger.error("[qobuz] Failed to remove invalid file: %s", e)
+                    continue
+
+                try:
+                    opts = EmbedOptions(
+                        first_artist_only       = first_artist_only,
+                        cover_url               = metadata.cover_url,
+                        extra_tags              = mb_tags,
+                        embed_lyrics            = embed_lyrics,
+                        lyrics_providers        = lyrics_providers or [],
+                        enrich                  = enrich_metadata,
+                        enrich_providers        = enrich_providers,
+                        enrich_qobuz_token      = self._qobuz_token or "",
+                        is_album                = is_album,
+                    )
+                    await embed_metadata_async(str(dest), metadata, opts, session=self._session)
+                except SpotiflacError as exc:
+                    message = str(exc).lower()
+                    if exc.kind == ErrorKind.FILE_IO and "not a valid flac file" in message:
+                        logger.warning(
+                            "[qobuz] stream API returned invalid FLAC file: %s. Blacklisting endpoint and retrying...",
+                            exc,
+                        )
+                        record_failure("qobuz", winner_api)
+                        excluded_apis.add(winner_api)
+                        last_err = exc
+                        if os.path.exists(dest):
+                            try:
+                                os.remove(dest)
+                            except OSError as e:
+                                logger.error("[qobuz] Failed to remove invalid file: %s", e)
+                        continue
+                    raise
+
+                break
+
+            return DownloadResult.ok(self.name, str(dest))
+
+        except SpotiflacError as exc:
+            logger.error("[qobuz] %s", exc)
+            return DownloadResult.fail(self.name, str(exc))
+        except Exception as exc:
+            logger.exception("[qobuz] unexpected error")
+            return DownloadResult.fail(self.name, f"unexpected: {exc}")
+
+    @staticmethod
     def _probe_credentials(self, creds: QobuzCredentials) -> bool:
         try:
             resp = self._do_signed_get("track/search", {"query": _PROBE_ISRC, "limit": "1"}, creds)
@@ -995,258 +1806,6 @@ class QobuzProvider(BaseProvider):
             logger.debug("[qobuz] duration-aware search failed: %s", exc)
             return None
 
-    def download_track(
-            self,
-            metadata:   TrackMetadata,
-            output_dir: str,
-            *,
-            filename_format:     str  = "{title} - {artist}",
-            position:            int  = 1,
-            include_track_num:   bool = False,
-            use_album_track_num: bool = False,
-            first_artist_only:   bool = False,
-            allow_fallback:      bool = True,
-            quality:             str  = "6",
-            embed_genre:         bool = True,
-            single_genre:        bool = True,
-            embed_lyrics:        bool = False,
-            lyrics_providers:    list[str] | None = None,
-            enrich_metadata:     bool = False,
-            enrich_providers:    list[str] | None = None,
-            is_album:            bool = False,
-            **kwargs,
-    ) -> DownloadResult:
-
-        quality = _TIDAL_TO_QOBUZ_QUALITY.get(quality, quality)
-
-        try:
-            mb_fetcher = None
-            if (enrich_metadata or embed_genre) and metadata.isrc:
-                mb_fetcher = AsyncMBFetch(metadata.isrc)
-
-            track = None
-            if metadata.isrc:
-                try:
-                    track = self._search_by_isrc(metadata.isrc)
-                except Exception as e:
-                    logger.debug("[qobuz] ISRC %s not found, trying textual fallback. Error: %s", metadata.isrc, e)
-
-            if not track:
-                logger.info("[qobuz] Trying textual search for: %s - %s", metadata.title, metadata.artists)
-                track = self._search_by_text(metadata.title, metadata.artists)
-
-            if not track:
-                raise TrackNotFoundError(self.name, f"Track not found (ISRC: {metadata.isrc}, Title: {metadata.title})")
-
-            track_id = track.get("id")
-            if not track_id:
-                raise TrackNotFoundError(self.name, "Missing track ID in Qobuz response")
-            
-            if metadata.duration_ms > 0:
-                qobuz_duration_s = track.get("duration", 0)
-                expected_s = metadata.duration_ms // 1000
-                if qobuz_duration_s > 0 and abs(qobuz_duration_s - expected_s) > 15:
-                    logger.warning(
-                        "[qobuz] track_id=%s has duration %ds, expected %ds — attempting duration-aware search",
-                        track_id, qobuz_duration_s, expected_s,
-                    )
-                    # Forza ricerca testuale con durata target
-                    alt_track = self._search_by_text_with_duration(
-                        metadata.title, metadata.artists, expected_s
-                    )
-                    if alt_track:
-                        alt_duration = alt_track.get("duration", 0)
-                        if abs(alt_duration - expected_s) < abs(qobuz_duration_s - expected_s):
-                            logger.info("[qobuz] found alternative version: track_id=%s duration=%ds", alt_track.get("id"), alt_duration)
-                            track = alt_track
-                            track_id = track.get("id")
-                
-            album_data = track.get("album", {})
-            images = album_data.get("image", {})
-            qobuz_cover = images.get("large") or images.get("small")
-            if qobuz_cover:
-                metadata.cover_url = _IMAGE_SIZE_RE.sub("_max.jpg", qobuz_cover)
-                
-            metadata.release_date = track.get("release_date_original") or album_data.get("release_date_original") or metadata.release_date
-            metadata.copyright = track.get("copyright") or album_data.get("copyright") or metadata.copyright
-            
-            composer_obj = track.get("composer")
-            if composer_obj and composer_obj.get("name"):
-                metadata.composer = composer_obj["name"]
-                
-            qobuz_extra_tags = {}
-            
-            # --- DATI BASE E GERARCHICI ---
-            if album_data.get("genre") and album_data["genre"].get("name"):
-                qobuz_extra_tags["GENRE"] = album_data["genre"]["name"]
-                
-            if album_data.get("label") and album_data["label"].get("name"):
-                qobuz_extra_tags["LABEL"] = album_data["label"]["name"]
-                qobuz_extra_tags["ORGANIZATION"] = album_data["label"]["name"]
-                
-            if album_data.get("upc"):
-                qobuz_extra_tags["BARCODE"] = album_data["upc"]
-                qobuz_extra_tags["UPC"] = album_data["upc"]
-
-            # --- DETTAGLI AUDIO E TECNICI ---
-            if album_data.get("maximum_technical_specifications"):
-                qobuz_extra_tags["TECHNICAL_SPECIFICATIONS"] = album_data["maximum_technical_specifications"]
-            
-            # ReplayGain
-            audio_info = track.get("audio_info", {})
-            if "replaygain_track_gain" in audio_info:
-                qobuz_extra_tags["REPLAYGAIN_TRACK_GAIN"] = f"{audio_info['replaygain_track_gain']} dB"
-            if "replaygain_track_peak" in audio_info:
-                qobuz_extra_tags["REPLAYGAIN_TRACK_PEAK"] = str(audio_info['replaygain_track_peak'])
-
-            # --- CREDITI E TESTI ---
-            if track.get("performers"):
-                qobuz_extra_tags["COMMENT"] = track["performers"]
-            if track.get("parental_warning"):
-                qobuz_extra_tags["ITUNESADVISORY"] = "1"
-
-            # --- ID E URL ---
-            qobuz_track_id = str(track.get("id", ""))
-            qobuz_album_id = str(album_data.get("qobuz_id", ""))
-            if qobuz_track_id: qobuz_extra_tags["QOBUZ_TRACK_ID"] = qobuz_track_id
-            if qobuz_album_id: qobuz_extra_tags["QOBUZ_ALBUM_ID"] = qobuz_album_id
-            if album_data.get("url"): qobuz_extra_tags["URL"] = album_data["url"]
-
-            # --- AWARDS ---
-            awards = album_data.get("awards", [])
-            if awards:
-                qobuz_extra_tags["AWARDS"] = ", ".join([a.get("name") for a in awards])
-                
-            if track.get("isrc"):
-                metadata.isrc = track["isrc"]
-                
-            if track.get("track_number"):
-                metadata.track_number = track["track_number"]
-                
-            if album_data.get("tracks_count"):
-                metadata.total_tracks = album_data["tracks_count"]
-                
-            dest = self._build_output_path(
-                metadata, output_dir, filename_format,
-                position, include_track_num, use_album_track_num, first_artist_only,
-            )
-            
-            if self._file_exists(dest):
-                return DownloadResult.skipped_result(self.name, str(dest))
-
-            expected_s = metadata.duration_ms // 1000
-            excluded_apis = set()
-            valid = False
-            last_err = None
-
-            mb_tags: dict[str, str] = {}
-            res: dict = {}
-            if mb_fetcher:
-                res = mb_fetcher.future.result()
-
-            mb_tags = mb_result_to_tags(res)
-            mb_tags.update(qobuz_extra_tags)
-            _print_mb_summary(mb_tags)
-            
-            while not valid:
-                try:
-                    winner_api, stream_url, used_quality = self._get_stream_url(
-                        track_id, quality, allow_fallback, exclude_apis=excluded_apis
-                    )
-                except SpotiflacError as exc:
-                    if last_err:
-                        raise SpotiflacError(
-                            ErrorKind.UNAVAILABLE, 
-                            f"All APIs failed (errors or previews). Last reason: {last_err}", 
-                            self.name
-                        )
-                    raise exc
-
-                # Skip immediato se URL già noto invalido
-                with _bad_stream_urls_lock:
-                    is_bad_url = stream_url in _bad_stream_urls
-                if is_bad_url:
-                    logger.warning("[qobuz] stream URL already known-bad, blacklisting API and skipping download")
-                    record_failure("qobuz", winner_api)
-                    excluded_apis.add(winner_api)
-                    last_err = "stream URL already known-bad"
-                    continue
-
-                self._http.stream_to_file(
-                    stream_url,
-                    str(dest),
-                    self._progress_cb,
-                    extra_headers={
-                        "User-Agent":      _DEFAULT_UA,
-                        "Accept":          "audio/flac, audio/*, */*",
-                        "Accept-Encoding": "identity",
-                        "Referer":         "https://open.qobuz.com/",
-                        "Origin":          "https://open.qobuz.com",
-                    },
-                )
-
-                valid, err = validate_downloaded_track(str(dest), expected_s)
-                if not valid:
-                    actual_duration = self._get_audio_duration_seconds(str(dest))
-                    if actual_duration > 0 and actual_duration <= 35 and expected_s > 45:
-                        err = "Preview-length audio detected (30s limit)"
-                        
-                    logger.warning("[qobuz] stream API returned invalid file: %s. Blacklisting endpoint and retrying...", err)
-                    with _bad_stream_urls_lock:
-                        _bad_stream_urls.add(stream_url)
-                    record_failure("qobuz", winner_api)
-                    excluded_apis.add(winner_api)
-                    last_err = err
-                    
-                    if os.path.exists(dest):
-                        try:
-                            os.remove(dest)
-                            logger.debug("[qobuz] Cleaned up invalid file: %s", dest)
-                        except OSError as e:
-                            logger.error("[qobuz] Failed to remove invalid file: %s", e)
-                    continue 
-                
-                try:
-                    opts = EmbedOptions(
-                        first_artist_only       = first_artist_only,
-                        cover_url               = metadata.cover_url,
-                        extra_tags              = mb_tags,
-                        embed_lyrics            = embed_lyrics,
-                        lyrics_providers        = lyrics_providers or [],
-                        enrich                  = enrich_metadata,
-                        enrich_providers        = enrich_providers,
-                        enrich_qobuz_token      = self._qobuz_token or "",
-                        is_album                = is_album,
-                    )
-                    embed_metadata(str(dest), metadata, opts, session=self._session)
-                except SpotiflacError as exc:
-                    message = str(exc).lower()
-                    if exc.kind == ErrorKind.FILE_IO and "not a valid flac file" in message:
-                        logger.warning(
-                            "[qobuz] stream API returned invalid FLAC file: %s. Blacklisting endpoint and retrying...",
-                            exc,
-                        )
-                        record_failure("qobuz", winner_api)
-                        excluded_apis.add(winner_api)
-                        last_err = exc
-                        if os.path.exists(dest):
-                            try:
-                                os.remove(dest)
-                            except OSError as e:
-                                logger.error("[qobuz] Failed to remove invalid file: %s", e)
-                        continue
-                    raise
-
-                break
-
-            return DownloadResult.ok(self.name, str(dest))
-
-        except SpotiflacError as exc:
-            logger.error("[qobuz] %s", exc)
-            return DownloadResult.fail(self.name, str(exc))
-        except Exception as exc:
-            logger.exception("[qobuz] unexpected error")
-            return DownloadResult.fail(self.name, f"unexpected: {exc}")
 
     @staticmethod
     def _raise_api_error(resp: httpx.Response, endpoint: str) -> None: 

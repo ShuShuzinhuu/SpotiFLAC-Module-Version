@@ -8,6 +8,8 @@ Changes compared to the original:
 """
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 import os
 import re
@@ -90,6 +92,121 @@ def _build_provider(name: str, opts: DownloadOptions) -> BaseProvider | None:
     return cls(**kwargs)
 
 
+async def _download_track_compat(
+        provider: BaseProvider,
+        metadata: TrackMetadata,
+        output_dir: str,
+        position: int,
+        include_track_num: bool,
+        use_album_track_num: bool,
+        first_artist_only: bool,
+        allow_fallback: bool,
+        embed_lyrics: bool,
+        lyrics_providers: list[str] | None,
+        enrich_metadata: bool,
+        enrich_providers: list[str] | None,
+        is_album: bool,
+        **kwargs,
+) -> DownloadResult:
+    return await provider.download_track_async(
+        metadata,
+        output_dir,
+        filename_format=kwargs.get("filename_format", "{title} - {artist}"),
+        position=position,
+        include_track_num=include_track_num,
+        use_album_track_num=use_album_track_num,
+        first_artist_only=first_artist_only,
+        allow_fallback=allow_fallback,
+        embed_lyrics=embed_lyrics,
+        lyrics_providers=lyrics_providers,
+        enrich_metadata=enrich_metadata,
+        enrich_providers=enrich_providers,
+        is_album=is_album,
+        **kwargs,
+    )
+
+async def download_one_async(
+        metadata:   TrackMetadata,
+        output_dir: str,
+        providers:  list[BaseProvider],
+        opts:       DownloadOptions,
+        position:   int = 1,
+        is_album:   bool = False,
+) -> DownloadResult:
+    import concurrent.futures as _cf
+
+    stop_event = threading.Event()
+    manager = DownloadManager()
+    errors: dict[str, str] = {}
+    started_at = time.monotonic()
+
+    for attempt in range(opts.track_max_retries + 1):
+        if stop_event.is_set() or (opts.timeout_s and time.monotonic() - started_at >= opts.timeout_s):
+            return DownloadResult.fail("none", f"Download timed out after {opts.timeout_s}s")
+
+        if attempt > 0:
+            wait = min(2 ** attempt, 30)
+            safe_tqdm_write(f"\n  ↺  Retry {attempt}/{opts.track_max_retries} in {wait}s…")
+            await asyncio.sleep(wait)
+            errors.clear()
+
+        for provider in providers:
+            logger.info("[%s] Trying: %s — %s", provider.name, metadata.artists, metadata.title)
+            cb = ProgressCallback(item_id=metadata.id, track_name=metadata.title)
+            provider.set_progress_callback(cb)
+            if hasattr(provider, "set_stop_event"):
+                try:
+                    provider.set_stop_event(stop_event)
+                except Exception:
+                    pass
+
+            result = await _download_track_compat(
+                provider,
+                metadata,
+                output_dir,
+                position=position,
+                include_track_num=opts.use_track_numbers,
+                use_album_track_num=opts.use_album_track_numbers,
+                first_artist_only=opts.first_artist_only,
+                allow_fallback=opts.allow_fallback,
+                embed_lyrics=opts.embed_lyrics,
+                lyrics_providers=opts.lyrics_providers,
+                enrich_metadata=opts.enrich_metadata,
+                enrich_providers=opts.enrich_providers,
+                is_album=is_album,
+                quality=normalize_quality(opts.quality),
+                qobuz_token=opts.qobuz_token,
+                filename_format=opts.filename_format,
+            )
+
+            if result.success:
+                if result.skipped:
+                    logger.info("[%s] ⏭ %s — %s", provider.name, metadata.artists, metadata.title)
+                    return result
+                if opts.output_path and result.file_path:
+                    import shutil
+                    _, ext = os.path.splitext(result.file_path)
+                    base_target, _ = os.path.splitext(opts.output_path)
+                    target = base_target + ext
+                    os.makedirs(os.path.dirname(os.path.abspath(target)) or ".", exist_ok=True)
+                    if os.path.abspath(result.file_path) != os.path.abspath(target):
+                        if os.path.exists(target):
+                            os.remove(target)
+                        shutil.move(result.file_path, target)
+                    result = DownloadResult.ok(result.provider, target, result.format or "flac")
+
+                logger.info("[%s] ✓ %s — %s", provider.name, metadata.artists, metadata.title)
+                return result
+
+            errors[provider.name] = result.error or "unknown error"
+            safe_tqdm_write(f"  ✗  {provider.name}  ·  {result.error}", file=sys.stderr)
+            logger.debug("[%s] ✗ %s", provider.name, result.error)
+
+    attempts_str = f"{opts.track_max_retries + 1} attempt(s)"
+    summary = "; ".join(f"{k}: {v}" for k, v in errors.items())
+    return DownloadResult.fail("none", f"All providers failed after {attempts_str} — {summary}")
+
+
 def download_one(
         metadata:   TrackMetadata,
         output_dir: str,
@@ -101,16 +218,16 @@ def download_one(
     """
     Attempts to download a single track across all providers in order,
     with per-track retry if track_max_retries > 0.
- 
+
     If opts.timeout_s is set the entire attempt (all providers + all retries)
     must complete within that many seconds; otherwise the download is
     cancelled and DownloadResult.fail() is returned.
- 
+
     Retry strategy: exponential backoff (2^attempt seconds, max 30s).
     Each retry starts over from the first provider in the list.
     """
     import concurrent.futures as _cf
- 
+
     stop_event = threading.Event()
 
     def _run() -> DownloadResult:
@@ -159,6 +276,14 @@ def download_one(
                     qobuz_token             = opts.qobuz_token,
                     is_album                = is_album,
                 )
+ 
+                if inspect.isawaitable(result):
+                    try:
+                        result = asyncio.run(result)
+                    except RuntimeError:
+                        # Fallback if an event loop is already running in this thread
+                        loop = asyncio.get_event_loop()
+                        result = loop.run_until_complete(result)
  
                 if result.success:
                     if result.skipped:
@@ -348,6 +473,79 @@ class DownloadWorker:
 
         return self._failed
 
+    async def _run_downloads_async(
+        self,
+        manager:  DownloadManager,
+        total:    int,
+        base_out: str,
+        start:    float,
+    ) -> list[tuple[str, str, str]]:
+        MAX_CONCURRENT_DOWNLOADS = 4
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+
+        async def worker_task(i: int, track: TrackMetadata):
+            position = i + 1
+            print_track_header(position, total, track.title, track.artists, track.album)
+            manager.start_download(track.id)
+
+            out_dir = self._track_output_dir(base_out, track)
+            result = await download_one_async(
+                track,
+                out_dir,
+                self._providers,
+                self._opts,
+                position,
+                self._is_album,
+            )
+            return track, result
+
+        async def limited_worker(i: int, track: TrackMetadata):
+            async with semaphore:
+                return await worker_task(i, track)
+
+        tasks = [asyncio.create_task(limited_worker(i, track)) for i, track in enumerate(self._tracks)]
+        for coro in asyncio.as_completed(tasks):
+            track, result = await coro
+            if result.success and result.skipped:
+                manager.skip_download(track.id)
+            elif result.success:
+                size_mb = (
+                    os.path.getsize(result.file_path) / (1024 * 1024)
+                    if result.file_path and os.path.exists(result.file_path)
+                    else 0.0
+                )
+                manager.complete_download(track.id, result.file_path or "", size_mb)
+            else:
+                err = result.error or "unknown"
+                self._failed.append((track.id, track.title, track.artists, err))
+                safe_tqdm_write(f"\n  ✗  Failed: {track.title} — {track.artists}: {err}", file=sys.stderr)
+                logger.debug("[worker] Failed: %s — %s: %s", track.title, track.artists, err)
+                manager.fail_download(track.id, err)
+                from .core.progress import ProgressCallback
+                ProgressCallback.clear_item(track.id)
+
+            ProgressManager.increment_master()
+
+        elapsed = time.perf_counter() - start
+        self._print_summary(elapsed)
+        self._execute_post_action(base_out)
+        return self._failed
+
+    def run_async(self) -> list[tuple[str, str, str]]:
+        manager   = DownloadManager()
+        manager.reset()
+        total     = len(self._tracks)
+        start     = time.perf_counter()
+        base_out  = self._resolve_output_dir()
+
+        install_console_interception()
+        ProgressManager.initialize_master_bar(total, description="Progress")
+        try:
+            return asyncio.run(self._run_downloads_async(manager, total, base_out, start))
+        finally:
+            ProgressManager.clear_all()
+            uninstall_console_interception()
+
     def _resolve_output_dir(self) -> str:
         if self._opts.output_path:
             out = os.path.normpath(
@@ -452,6 +650,28 @@ class SpotiflacDownloader:
             failed_tracks = None
             while True:
                 failed_tracks = self._run_once(url, target_tracks=failed_tracks)
+                if not loop_minutes or loop_minutes <= 0 or not failed_tracks:
+                    break
+                print(f"\n{len(failed_tracks)} tracks failed. "
+                      f"Next attempt in {loop_minutes} minutes…")
+                time.sleep(loop_minutes * 60)
+
+    def run_async(self, input_url: str | list[str], loop_minutes: int | None = None) -> None:
+        """
+        Starts downloading one or more URLs using the async worker pipeline.
+        This keeps the same public behavior while using async task orchestration.
+        """
+        urls = [input_url] if isinstance(input_url, str) else list(input_url)
+
+        for idx, url in enumerate(urls):
+            if len(urls) > 1:
+                print(f"\n{'═' * 55}")
+                print(f"  URL {idx + 1}/{len(urls)}: {url[:55]}")
+                print(f"{'═' * 55}")
+
+            failed_tracks = None
+            while True:
+                failed_tracks = self._run_once_async(url, target_tracks=failed_tracks)
                 if not loop_minutes or loop_minutes <= 0 or not failed_tracks:
                     break
                 print(f"\n{len(failed_tracks)} tracks failed. "
@@ -620,6 +840,38 @@ class SpotiflacDownloader:
         failed_ids = {f[0] for f in failed_tuples}
         return [t for t in updated_tracks if t.id in failed_ids]
 
+    def _run_worker_async(
+            self,
+            tracks:          list[TrackMetadata],
+            collection_name: str,
+            info:            dict,
+            is_album:        bool,
+            is_playlist:     bool,
+            opts:            DownloadOptions | None = None,
+    ) -> list[TrackMetadata]:
+        effective = opts if opts is not None else self._opts
+        manager = DownloadManager()
+        updated_tracks = []
+        for i, t in enumerate(tracks):
+            track_item_id = t.id or t.external_url or f"queue-{i}-{uuid.uuid4().hex}"
+            track_spotify_id = t.id or t.external_url or track_item_id
+            manager.add_to_queue(track_item_id, t.title, t.artists, t.album, track_spotify_id)
+            if not t.id:
+                t = t.model_copy(update={"id": track_item_id})
+            updated_tracks.append(t)
+
+        worker = DownloadWorker(
+            tracks          = updated_tracks,
+            opts            = effective,
+            collection_name = collection_name,
+            is_album        = is_album,
+            is_playlist     = is_playlist,
+        )
+
+        failed_tuples = worker.run_async()
+        failed_ids = {f[0] for f in failed_tuples}
+        return [t for t in updated_tracks if t.id in failed_ids]
+
     def _run_once(self, url: str, target_tracks=None) -> list:
         if target_tracks is not None:
             print(f"\nRetrying download for {len(target_tracks)} track(s)...")
@@ -678,6 +930,65 @@ class SpotiflacDownloader:
         except Exception as exc:
             logger.debug("[downloader] Failed operation: %s", exc)
         return self._run_worker(tracks, collection_name, info, is_album, is_playlist, opts=effective_opts)
+
+    def _run_once_async(self, url: str, target_tracks=None) -> list[TrackMetadata]:
+        if target_tracks is not None:
+            print(f"\nRetrying download for {len(target_tracks)} track(s)...")
+            tracks          = target_tracks
+            collection_name = "Retry Failed Tracks"
+            is_album        = self._opts.is_album
+            is_playlist     = len(tracks) > 1
+            return self._run_worker_async(tracks, collection_name, {}, is_album, is_playlist)
+
+        try:
+            collection_name, tracks, info = self._resolve_metadata(url)
+        except SpotiflacError as exc:
+            logger.error("Metadata fetch failed: %s", exc)
+            print(f"Error: {exc}")
+            return []
+
+        if not tracks:
+            print("No tracks found.")
+            return []
+
+        is_album       = info.get("type") == "album"
+        is_playlist    = info.get("type") == "playlist"
+        is_discography = info.get("type") in ("artist", "artist_discography")
+
+        effective_opts = self._opts
+        if self._opts.is_album != is_album:
+            from dataclasses import replace
+            effective_opts = replace(self._opts, is_album=is_album)
+
+        if (is_album or is_playlist or is_discography) and self._opts.output_path:
+            logger.warning(
+                "[downloader] --output-path ignored for %s: "
+                "files will be saved with standard renaming.",
+                info.get("type"),
+            )
+            from dataclasses import replace
+            effective_opts = replace(effective_opts, output_path=None)
+
+        is_soundcloud = "soundcloud.com" in url or "on.soundcloud.com" in url
+        is_pandora    = "pandora.com" in url or "pandora.app.link" in url
+
+        # Skip ISRC bulk resolution for providers that supply their own metadata
+        if not is_soundcloud and not is_pandora:
+            tracks = self._resolve_isrc_bulk(tracks)
+
+        # Update URL history with collection name and cover art
+        try:
+            from .core.session_memory import add_url_to_history
+            cover_url = tracks[0].cover_url if tracks and getattr(tracks[0], 'cover_url', '') else ''
+            _url_type = info.get("type", "")
+            if _url_type == "artist_discography":
+                _url_type = "artist"
+            _artist = tracks[0].artists if tracks and _url_type == 'track' else ''
+            add_url_to_history(url, label=collection_name, cover=cover_url,
+                               track_count=len(tracks), url_type=_url_type, artist=_artist)
+        except Exception as exc:
+            logger.debug("[downloader] Failed operation: %s", exc)
+        return self._run_worker_async(tracks, collection_name, info, is_album, is_playlist, opts=effective_opts)
 
     @staticmethod
     def _format_seconds(seconds: float) -> str:

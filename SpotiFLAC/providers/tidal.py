@@ -4,6 +4,7 @@ TidalProvider — implementazione migliorata, robusta e tipizzata.
 from __future__ import annotations
 
 import base64
+import asyncio
 import difflib
 import json
 import logging
@@ -23,18 +24,29 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
+try:
+    import aiofiles
+except ImportError:
+    aiofiles = None
+
 from .base import BaseProvider
 from ..core.console import print_api_failure, print_quality_fallback, print_source_banner
 from ..core.download_validation import validate_downloaded_track
 from ..core.errors import ErrorKind, ParseError, SpotiflacError, TrackNotFoundError
-from ..core.http import NetworkManager, RetryConfig
+from ..core.http import NetworkManager, RetryConfig, async_zarz_rate_limiter
 from ..core.link_resolver import LinkResolver
 from ..core.models import DownloadResult, TrackMetadata
-from ..core.musicbrainz import AsyncMBFetch, mb_result_to_tags
-from ..core.tagger import EmbedOptions, _print_mb_summary, embed_metadata
+from ..core.musicbrainz import fetch_mb_metadata_async, mb_result_to_tags
+from ..core.tagger import EmbedOptions, _print_mb_summary, embed_metadata, embed_metadata_async
 from ..core.endpoints import get_tidal_post_endpoints, get_community_url
 from ..core.quality import normalize_quality as _cq_normalize_quality, quality_fallback_chain as _cq_quality_fallback_chain
 from ..core.flac_validation import validate_and_repair_if_needed
+from .qobuz import (
+    _scrape_credentials_async,
+    _compute_signature,
+    _API_BASE as QOBUZ_API_BASE,
+    QobuzCredentials,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +77,9 @@ _TIDAL_USER_AGENT = (
 _POST_USER_AGENT = [
     "SpotiFLAC-Mobile/4.5.0"
 ]
+
+_TIDAL_PROXY_BASE = "https://tidal-proxy.monochrome.tf/api/v1"
+_TIDAL_PROXY_TOKEN = "Bearer eyJraWQiOiJ2OU1GbFhqWSIsImFsZyI6IkVTMjU2In0.eyJ0eXBlIjoibzJfYWNjZXNzIiwic2NvcGUiOiIiLCJnVmVyIjowLCJzVmVyIjowLCJjaWQiOjEzNTU3LCJhdCI6IklOVEVSTkFMIiwiZXhwIjoxNzgxOTA5MTYzLCJpc3MiOiJodHRwczovL2F1dGgudGlkYWwuY29tL3YxIn0.cm1Unalv7y6upOCqUyv1BdoP5FwZbWgsjJwyQhWGCqqO_We5d5xHhnMvoad0zmC-OtrU9wrZtcB-tmi3cblOIg"
 
 _TIDAL_API_GIST_URL   = "https://gist.githubusercontent.com/afkarxyz/2ce772b943321b9448b454f39403ce25/raw"
 _TIDAL_API_CACHE_FILE = "tidal-api-urls.json"
@@ -139,6 +154,71 @@ def _clear_api_rate_limit(api_url: str) -> None:
     with _api_cooldown_lock:
         _api_cooldown_until.pop(key, None)
 
+# ---------------------------------------------------------------------------
+# ISRC helper
+# ---------------------------------------------------------------------------
+
+async def _find_isrc_via_qobuz(title: str, artist: str, duration_ms: int = 0) -> str | None:
+    """Cerca l'ISRC su Qobuz con verifica fuzzy di titolo, artista e durata."""
+    try:
+        creds = await _scrape_credentials_async()
+        query = f"{title} {artist}".strip()
+        params = {"query": query, "limit": "5"}
+        timestamp = str(int(time.time()))
+        signature = _compute_signature("track/search", params, timestamp, creds.app_secret)
+        req_params = {
+            **params,
+            "app_id": creds.app_id,
+            "request_ts": timestamp,
+            "request_sig": signature,
+        }
+        url = f"{QOBUZ_API_BASE}/track/search"
+        headers = {"X-App-Id": creds.app_id}
+ 
+        client = await NetworkManager.get_async_client_safe()
+        resp = await client.get(url, params=req_params, headers=headers, timeout=8)
+        if resp.status_code != 200:
+            return None
+ 
+        items = resp.json().get("tracks", {}).get("items", [])
+        if not items:
+            return None
+ 
+        clean_title  = _clean_title(title)
+        clean_artist = artist.split(",")[0].strip().lower()
+ 
+        best_item:  dict | None = None
+        best_score: float       = 0.0
+ 
+        for item in items:
+            t_title  = _clean_title(item.get("title", ""))
+            performer = item.get("performer") or {}
+            t_artist  = performer.get("name", "").lower() if isinstance(performer, dict) else ""
+ 
+            score  = difflib.SequenceMatcher(None, clean_title,  t_title).ratio()  * 60
+            score += difflib.SequenceMatcher(None, clean_artist, t_artist).ratio() * 40
+ 
+            if duration_ms and item.get("duration", 0) > 0:
+                dur_diff = abs(item["duration"] * 1000 - duration_ms)
+                if dur_diff <= 3_000:
+                    score += 20
+                elif dur_diff > 10_000:
+                    score -= 30
+ 
+            if score > best_score:
+                best_score = score
+                best_item  = item
+ 
+        # soglia minima per evitare falsi positivi
+        if best_item and best_score >= 50:
+            return best_item.get("isrc")
+ 
+        logger.debug("[tidal] Qobuz ISRC: no confident match (best score %.1f)", best_score)
+        return None
+ 
+    except Exception as exc:
+        logger.debug("[tidal] Qobuz ISRC lookup failed: %s", exc)
+        return None
 # ---------------------------------------------------------------------------
 # Quality helpers
 # ---------------------------------------------------------------------------
@@ -401,7 +481,7 @@ def _parse_dash_manifest(text: str) -> ManifestResult:
 # Fetch singola API Tidal con retry + backoff esponenziale
 # ---------------------------------------------------------------------------
 
-def _fetch_tidal_url_once(
+async def _fetch_tidal_url_once_async(
         api:       str,
         track_id:  int,
         quality:   str,
@@ -414,8 +494,8 @@ def _fetch_tidal_url_once(
 
     delay     = _RETRY_DELAY_S
     last_err: Exception = RuntimeError("no attempts made")
-    
-    client = NetworkManager.get_sync_client()
+
+    client = await NetworkManager.get_async_client_safe()
 
     for attempt in range(_MAX_RETRIES + 1):
         if attempt > 0:
@@ -425,20 +505,16 @@ def _fetch_tidal_url_once(
                 "[tidal] retry %d/%d after %.2fs",
                 attempt, _MAX_RETRIES, actual_delay
             )
-            time.sleep(actual_delay)
+            await asyncio.sleep(actual_delay)
             delay *= 2
 
         try:
             if is_post_api and "zarz.moe" in api_cleaning:
-                try:
-                    from ..core.http import zarz_rate_limiter
-                    zarz_rate_limiter.wait_for_slot()
-                except ImportError:
-                    pass
+                await async_zarz_rate_limiter.wait_for_slot()
 
             if is_post_api:
                 if quality == "DOLBY_ATMOS":
-                    resp = client.post( 
+                    resp = await client.post(
                         api_cleaning,
                         json={"id": str(track_id), "endpoint": "manifests", "formats": ["EAC3_JOC"]},
                         headers=headers,
@@ -453,7 +529,7 @@ def _fetch_tidal_url_once(
                     if resp.status_code != 200:
                         err_text = resp.text[:100]
                         try: err_text = resp.json().get("message") or err_text
-                        except: pass
+                        except Exception: pass
                         last_err = RuntimeError(f"HTTP {resp.status_code}: {err_text}")
                         if _is_deterministic_error(str(last_err)): break
                         continue
@@ -463,19 +539,19 @@ def _fetch_tidal_url_once(
                         attributes = data["data"]["data"]["attributes"]
                     except (KeyError, TypeError) as exc:
                         last_err = RuntimeError(f"Atmos manifest payload missing attributes: {exc}")
-                        break # Deterministic
+                        break
 
                     formats = attributes.get("formats", [])
                     if "EAC3_JOC" not in [str(f).upper() for f in formats]:
                         last_err = RuntimeError("TIDAL API did not report EAC3_JOC for this track")
-                        break # Deterministic
+                        break
 
                     manifest_uri = attributes.get("uri", "").strip()
                     if not manifest_uri:
                         last_err = RuntimeError("Atmos manifest URI was empty")
-                        break # Deterministic
+                        break
 
-                    mpd_resp = client.get( 
+                    mpd_resp = await client.get(
                         manifest_uri,
                         headers={
                             "Accept": "application/dash+xml,text/xml,application/xml;q=0.9,*/*;q=0.8",
@@ -487,7 +563,7 @@ def _fetch_tidal_url_once(
                     _clear_api_rate_limit(api_cleaning)
                     return "MANIFEST:" + base64.b64encode(mpd_resp.content).decode()
 
-                resp = client.post( 
+                resp = await client.post(
                     api_cleaning,
                     json={"id": str(track_id), "quality": quality},
                     headers=headers,
@@ -495,7 +571,7 @@ def _fetch_tidal_url_once(
                 )
             else:
                 url = f"{api_cleaning}/track/?id={track_id}&quality={quality}"
-                resp = client.get(url, headers=headers, timeout=timeout_s) 
+                resp = await client.get(url, headers=headers, timeout=timeout_s)
 
             if resp.status_code == 429:
                 wait_s = float(resp.headers.get("Retry-After", _RATE_LIMIT_DEFAULT))
@@ -503,13 +579,14 @@ def _fetch_tidal_url_once(
                 delay  = max(delay, wait_s)
                 last_err = RuntimeError(f"HTTP 429 (rate limited, retry-after={wait_s:.0f}s)")
                 continue
-            
+
             if resp.status_code != 200:
                 err_text = resp.text[:100]
-                try: 
+                try:
                     p = resp.json()
                     err_text = p.get("message") or p.get("error") or err_text
-                except: pass
+                except Exception:
+                    pass
                 last_err = RuntimeError(f"HTTP {resp.status_code} - {err_text}")
                 if _is_deterministic_error(str(last_err)): break
                 continue
@@ -532,7 +609,7 @@ def _fetch_tidal_url_once(
                     asset = inner_data.get("assetPresentation", "") if isinstance(inner_data, dict) else ""
                     if asset == "PREVIEW":
                         last_err = RuntimeError("returned PREVIEW instead of FULL")
-                        break # Deterministic
+                        break
                     _clear_api_rate_limit(api_cleaning)
                     return "MANIFEST:" + manifest
 
@@ -545,7 +622,7 @@ def _fetch_tidal_url_once(
             last_err = RuntimeError("no download URL or manifest in response")
             if _is_deterministic_error(str(last_err)): break
 
-        except (httpx.TimeoutException, httpx.ConnectError) as exc: 
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
             last_err = exc
             continue
         except Exception as exc:
@@ -555,7 +632,7 @@ def _fetch_tidal_url_once(
 
     raise last_err
 
-def _fetch_tidal_url_parallel(
+async def _fetch_tidal_url_parallel_async(
         apis:      list[str],
         track_id:  int,
         quality:   str,
@@ -563,43 +640,57 @@ def _fetch_tidal_url_parallel(
 ) -> tuple[str, str]:
     if not apis:
         raise SpotiflacError(ErrorKind.UNAVAILABLE, "no Tidal APIs configured", "tidal")
-
+ 
     available = [a for a in apis if not _is_api_rate_limited(a)]
     if not available:
         logger.debug("[tidal] tutte le API sono in cooldown, uso la lista completa")
         available = apis
-
+ 
     start  = time.time()
     errors: list[str] = []
-
-    pool = ThreadPoolExecutor(max_workers=min(len(available), 8))
+    tasks  = {
+        asyncio.create_task(_fetch_tidal_url_once_async(api, track_id, quality, timeout_s)): api
+        for api in available
+    }
+ 
+    pending: set = set()
+ 
     try:
-        futures: dict[Future[str], str] = {
-            pool.submit(_fetch_tidal_url_once, api, track_id, quality, timeout_s): api
-            for api in available
-        }
-        for fut in as_completed(futures, timeout=timeout_s + 2):
-            api = futures[fut]
+        done, pending = await asyncio.wait(
+            tasks, return_when=asyncio.FIRST_COMPLETED, timeout=timeout_s + 2
+        )
+ 
+        if not done:
+            raise SpotiflacError(
+                ErrorKind.UNAVAILABLE,
+                f"All {len(available)} Tidal APIs timed out "
+                f"(of {len(apis)} total, {len(apis) - len(available)} in cooldown).",
+                "tidal",
+            )
+ 
+        for task in done:
+            api = tasks[task]
             try:
-                dl_url = fut.result()
-                logger.debug("[tidal] parallel: got URL in %.2fs", time.time() - start)
-                pool.shutdown(wait=False, cancel_futures=True)
+                dl_url = task.result()
+                logger.debug("[tidal] parallel async: got URL in %.2fs", time.time() - start)
+                for pending_task in pending:
+                    pending_task.cancel()
                 return api, dl_url
             except Exception as exc:
                 err_msg = str(exc)[:80]
-                errors.append(f"api: {err_msg}")
+                errors.append(f"{api.rstrip('/')}: {err_msg}")
                 print_api_failure("tidal", "", err_msg)
-    except (TimeoutError, FuturesTimeoutError):
-        errors.append("global timeout exceeded")
+ 
+        raise SpotiflacError(
+            ErrorKind.UNAVAILABLE,
+            f"All Tidal APIs failed "
+            f"(of {len(apis)} total, {len(apis) - len(available)} in cooldown)."
+            "tidal",
+        )
+ 
     finally:
-        pool.shutdown(wait=False, cancel_futures=True)
-
-    logger.debug("[tidal] All %d APIs failed", len(available))
-    raise SpotiflacError(
-        ErrorKind.UNAVAILABLE,
-        f"All {len(available)} Tidal APIs failed (of {len(apis)} total, {len(apis)-len(available)} in cooldown).",
-        "tidal",
-    )
+        for pending_task in pending:
+            pending_task.cancel()
 
 
 # ---------------------------------------------------------------------------
@@ -607,6 +698,8 @@ def _fetch_tidal_url_parallel(
 # ---------------------------------------------------------------------------
 
 class TidalProvider(BaseProvider):
+    name = "tidal"
+    _is_async = True
     def __init__(
             self,
             apis:            list[str] | None = None,
@@ -633,7 +726,7 @@ class TidalProvider(BaseProvider):
         self._apis = base_apis
         self._qobuz_token: str | None = qobuz_token or os.environ.get("QOBUZ_AUTH_TOKEN")
 
-    def resolve_spotify_to_tidal(
+    async def resolve_spotify_to_tidal_async(
             self,
             spotify_track_id: str,
             track_name:       str = "",
@@ -642,11 +735,35 @@ class TidalProvider(BaseProvider):
             duration_ms:      int = 0,
     ) -> str:
         if track_name and artist_name and track_name != "Unknown":
-            result = self._search_on_mirrors(track_name, artist_name, isrc)
+            result = await asyncio.to_thread(
+                self._search_on_mirrors, track_name, artist_name, isrc, duration_ms
+            )
             if result:
                 return result
         logger.info("[tidal] mirror search failed — trying Songlink")
-        return self._resolve_via_songlink(spotify_track_id)
+        return await self._resolve_via_songlink_async(spotify_track_id)
+    
+    async def _fetch_track_details_from_proxy(
+        self,
+        track_id: int,
+        country_code: str = "US"
+    ) -> dict:
+        client = await NetworkManager.get_async_client_safe()
+        url = f"{_TIDAL_PROXY_BASE}/tracks/{track_id}?countryCode={country_code}"
+        headers = {
+            "User-Agent": _TIDAL_USER_AGENT,
+            "Accept": "application/json",
+            "Authorization": _TIDAL_PROXY_TOKEN,
+        }
+        try:
+            resp = await client.get(url, headers=headers, timeout=8)
+            if resp.status_code == 200:
+                return resp.json()
+            else:
+                logger.debug("[tidal] proxy returned %s", resp.status_code)
+        except Exception as exc:
+            logger.debug("[tidal] proxy request failed: %s", exc)
+        return {}
 
     def _search_on_mirrors(
             self,
@@ -744,14 +861,17 @@ class TidalProvider(BaseProvider):
         return None
 
     def _resolve_via_songlink(self, spotify_track_id: str) -> str:
-        resolver = LinkResolver(self._http)
-        links = resolver.resolve_all(spotify_track_id)
+        resolver = LinkResolver(self._session)
+        links    = resolver.resolve_all(spotify_track_id)
         tidal_url = links.get("tidal")
         if tidal_url:
             return tidal_url
         raise TrackNotFoundError(self.name, spotify_track_id)
+    
+    async def _resolve_via_songlink_async(self, spotify_track_id: str) -> str:
+        return await asyncio.to_thread(self._resolve_via_songlink, spotify_track_id)
 
-    def _get_download_url(self, track_id: int, quality: str) -> str:
+    async def _get_download_url_async(self, track_id: int, quality: str) -> str:
         from ..core.provider_stats import prioritize_providers, record_success
 
         try:
@@ -765,19 +885,19 @@ class TidalProvider(BaseProvider):
         elif self._apis and ordered and self._apis[0] != ordered[0]:
             ordered = [self._apis[0]] + [a for a in ordered if a != self._apis[0]]
 
-        winner_api, dl_url = _fetch_tidal_url_parallel(ordered, track_id, quality, _API_TIMEOUT_S)
+        winner_api, dl_url = await _fetch_tidal_url_parallel_async(ordered, track_id, quality, _API_TIMEOUT_S)
         record_success("tidal", winner_api)
         remember_tidal_api_usage(winner_api)
         print_source_banner("tidal", "", quality)
         return dl_url
 
-    def _get_download_url_with_fallback(self, track_id: int, quality: str) -> str:
+    async def _get_download_url_with_fallback_async(self, track_id: int, quality: str) -> str:
         chain = _quality_fallback_chain(quality)
         last_exc: Exception = RuntimeError("no qualities attempted")
 
         for tier in chain:
             try:
-                url = self._get_download_url(track_id, tier)
+                url = await self._get_download_url_async(track_id, tier)
                 if tier != _normalize_quality(quality):
                     print_quality_fallback("tidal", _normalize_quality(quality), tier)
                     logger.warning("[tidal] quality downgraded from %s to %s", quality, tier)
@@ -789,13 +909,13 @@ class TidalProvider(BaseProvider):
 
         raise last_exc
 
-    def _download_file(self, url_or_manifest: str, dest: Path, quality: str) -> tuple[int, Path]:
+    async def _download_file_async(self, url_or_manifest: str, dest: Path, quality: str) -> tuple[int, Path]:
         if url_or_manifest.startswith("MANIFEST:"):
-            return self._download_from_manifest(url_or_manifest.removeprefix("MANIFEST:"), dest, quality)
+            return await self._download_from_manifest_async(url_or_manifest.removeprefix("MANIFEST:"), dest, quality)
         else:
             tmp = dest.with_suffix(".tmp")
-            self._http.stream_to_file(url_or_manifest, str(tmp), self._progress_cb)
-            final_dest = self._mux_audio(tmp, dest, quality)
+            await self._async_http.stream_to_file(url_or_manifest, str(tmp), self._progress_cb)
+            final_dest = await self._mux_audio_async(tmp, dest, quality)
             if tmp.exists():
                 try:
                     tmp.unlink()
@@ -803,78 +923,98 @@ class TidalProvider(BaseProvider):
                     pass
             return 0, final_dest
 
-    def _download_from_manifest(self, manifest_b64: str, dest: Path, quality: str) -> tuple[int, Path]:
+    async def _download_from_manifest_async(self, manifest_b64: str, dest: Path, quality: str) -> tuple[int, Path]:
         result = parse_manifest(manifest_b64)
         tmp = dest.with_suffix(".tmp")
         try:
             if result.direct_url:
-                self._http.stream_to_file(result.direct_url, str(tmp), self._progress_cb)
+                await self._async_http.stream_to_file(result.direct_url, str(tmp), self._progress_cb)
             else:
-                self._download_segments(result.init_url, result.media_urls, tmp)
-            
-            final_dest = self._mux_audio(tmp, dest, quality)
+                await self._download_segments_async(result.init_url, result.media_urls, tmp)
+
+            final_dest = await self._mux_audio_async(tmp, dest, quality)
         finally:
             if tmp.exists():
                 try:
                     tmp.unlink()
                 except OSError:
                     pass
-        
+
         return result.sample_rate, final_dest
 
-    def _download_segments(self, init_url: str, media_urls: list[str], dest: Path) -> None:
+    async def _download_segments_async(self, init_url: str, media_urls: list[str], dest: Path) -> None:
+        if aiofiles is None:
+            raise RuntimeError(
+                "aiofiles non installato — richiesto da TidalProvider._download_segments_async(). "
+                "Eseguire: pip install aiofiles"
+            )
+
         dest.parent.mkdir(parents=True, exist_ok=True)
-        headers  = {"User-Agent": _TIDAL_USER_AGENT}
-        
+        headers = {"User-Agent": _TIDAL_USER_AGENT}
+
         total_bytes = 0
         estimated_total = 0
+        evt = getattr(self, "_stop_event", None)
 
-        with open(dest, "wb") as f:
-            resp = self._session.get(init_url, timeout=15, headers=headers)
-            resp.raise_for_status()
-            chunk = resp.content
-            f.write(chunk)
-            total_bytes += len(chunk)
+        client = await NetworkManager.get_async_client_safe()
+        async with aiofiles.open(dest, "wb") as f:
+            async with client.stream("GET", init_url, headers=headers, timeout=15) as resp:
+                resp.raise_for_status()
+                async for chunk in resp.aiter_bytes():
+                    if evt is not None and evt.is_set():
+                        raise RuntimeError("Download cancelled by stop_event")
+                    if not chunk:
+                        continue
+                    await f.write(chunk)
+                    total_bytes += len(chunk)
 
             for i, url in enumerate(media_urls):
-                # Cooperative cancellation: check provider stop_event if set
-                evt = getattr(self, "_stop_event", None)
-                if evt is not None and getattr(evt, "is_set", lambda: False)():
+                if evt is not None and evt.is_set():
                     raise RuntimeError("Download cancelled by stop_event")
 
-                resp = self._session.get(url, timeout=15, headers=headers)
-                resp.raise_for_status()
-                chunk = resp.content
-                f.write(chunk)
-                total_bytes += len(chunk)
+                async with client.stream("GET", url, headers=headers, timeout=15) as resp:
+                    resp.raise_for_status()
+                    if estimated_total == 0:
+                        seg_len = int(resp.headers.get("Content-Length") or 0)
+                        if seg_len > 0:
+                            estimated_total = seg_len * len(media_urls)
+                    async for chunk in resp.aiter_bytes():
+                        if evt is not None and evt.is_set():
+                            raise RuntimeError("Download cancelled by stop_event")
+                        if not chunk:
+                            continue
+                        await f.write(chunk)
+                        total_bytes += len(chunk)
 
-                if estimated_total == 0 and len(chunk) > 0:
-                    estimated_total = total_bytes + (len(chunk) * (len(media_urls) - i))
+                        if hasattr(self, "_progress_cb") and self._progress_cb:
+                            try:
+                                self._progress_cb(total_bytes, estimated_total)
+                            except TypeError:
+                                try:
+                                    self._progress_cb(len(chunk))
+                                except Exception:
+                                    pass
 
-                if hasattr(self, "_progress_cb") and self._progress_cb:
-                    try:
-                        self._progress_cb(total_bytes, estimated_total)
-                    except TypeError:
-                        try:
-                            self._progress_cb(len(chunk))
-                        except Exception:
-                            pass
-
-    def _mux_audio(self, src: Path, dst: Path, quality: str) -> Path:
-        si = None
+    async def _mux_audio_async(self, src: Path, dst: Path, quality: str) -> Path:
+        codec = "flac"
 
         try:
-            cmd_probe = [
+            rc, stdout, stderr = await self._run_ffprobe(
                 "ffprobe", "-v", "quiet", "-select_streams", "a:0",
                 "-show_entries", "stream=codec_name",
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(src)
-            ]
-            codec = subprocess.check_output(cmd_probe, text=True).strip().lower()
+            )
+            if rc == 0:
+                codec = stdout.strip().lower() or "flac"
+            else:
+                logger.warning("[tidal] async ffprobe failed, falling back to quality guess: %s", stderr.strip())
         except Exception:
-            logger.warning("[tidal] ffprobe failed to detect codec, falling back to quality guess")
-            quality_norm = _normalize_quality(quality)
-            codec = "eac3" if quality_norm == "DOLBY_ATMOS" else "flac"
+            logger.warning("[tidal] async ffprobe failed to detect codec, falling back to quality guess")
+
+        quality_norm = _normalize_quality(quality)
+        if codec not in ("flac", "alac"):
+            codec = "eac3" if quality_norm == "DOLBY_ATMOS" else codec
 
         is_lossy = codec not in ("flac", "alac")
         final_dst = dst.with_suffix(".m4a") if is_lossy else dst.with_suffix(".flac")
@@ -883,64 +1023,63 @@ class TidalProvider(BaseProvider):
         cmd.extend(["-c:a", "copy"] if is_lossy else ["-c:a", "flac"])
         cmd.append(str(final_dst))
 
-        result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=si)
-        if result.returncode != 0:
+        rc, stdout, stderr = await self._run_ffmpeg(*cmd)
+        if rc != 0:
             failed_file = final_dst.with_suffix(".failed")
             src.rename(failed_file)
             raise SpotiflacError(
                 ErrorKind.FILE_IO,
-                f"ffmpeg failed (Stream saved as {failed_file.name}): {result.stderr}",
+                f"ffmpeg failed (Stream saved as {failed_file.name}): {stderr}",
                 "tidal",
             )
         return final_dst
 
-    def _get_audio_duration_seconds(self, file_path: Path) -> int:
+    async def _get_audio_duration_seconds_async(self, file_path: Path) -> int:
         try:
-            cmd = [
+            rc, stdout, stderr = await self._run_ffprobe(
                 "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
                 "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)
-            ]
-            return int(float(subprocess.check_output(cmd, text=True).strip()))
+            )
+            if rc == 0:
+                return int(float(stdout.strip()))
         except Exception:
-            return 0
+            pass
+        return 0
 
-    def download_track(
-            self,
-            metadata:   TrackMetadata,
-            output_dir: str,
-            *,
-            filename_format:     str  = "{title} - {artist}",
-            position:            int  = 1,
-            include_track_num:   bool = False,
-            use_album_track_num: bool = False,
-            first_artist_only:   bool = False,
-            allow_fallback:      bool = True,
-            quality:             str  = "LOSSLESS",
-            embed_lyrics:        bool = False,
-            lyrics_providers:    list[str] | None = None,
-            enrich_metadata:     bool = False,
-            enrich_providers:    list[str] | None = None,
-            is_album:            bool = False,
-            **kwargs:            Any,
+    async def download_track(
+        self,
+        metadata:   TrackMetadata,
+        output_dir: str,
+        *,
+        filename_format:      str  = "{title} - {artist}",
+        position:            int  = 1,
+        include_track_num:   bool = False,
+        use_album_track_num: bool = False,
+        first_artist_only:    bool = False,
+        allow_fallback:      bool = True,
+        quality:             str  = "LOSSLESS",
+        embed_lyrics:        bool = False,
+        lyrics_providers:    list[str] | None = None,
+        enrich_metadata:     bool = False,
+        enrich_providers:    list[str] | None = None,
+        is_album:            bool = False,
+        **kwargs:            Any,
     ) -> DownloadResult:
         try:
-            # Backwards compatibility: accept an int or str track id in place of a TrackMetadata object.
             from types import SimpleNamespace
             if isinstance(metadata, (int, str)):
-                # If numeric, treat as a direct tidal track id; otherwise keep string id (likely a Spotify id)
                 try:
                     numeric = int(metadata)
                     metadata = SimpleNamespace(id=f"tidal_{numeric}", title="", artists="", isrc="", duration_ms=0, cover_url=None)
                 except Exception:
                     metadata = SimpleNamespace(id=str(metadata), title="", artists="", isrc="", duration_ms=0, cover_url=None)
 
-            # Proceed using the normalized metadata object
             meta_id = getattr(metadata, "id", "")
             if meta_id and str(meta_id).startswith("tidal_"):
                 tidal_url = f"https://listen.tidal.com/track/{str(meta_id).removeprefix('tidal_')}"
                 logger.info("[tidal] Direct Tidal ID detected: %s", meta_id)
             else:
-                tidal_url = self.resolve_spotify_to_tidal(
+                tidal_url = await self.resolve_spotify_to_tidal_async(
                     getattr(metadata, "id", ""),
                     getattr(metadata, "title", ""),
                     getattr(metadata, "artists", ""),
@@ -949,11 +1088,52 @@ class TidalProvider(BaseProvider):
                 )
             track_id = self._parse_track_id(tidal_url)
 
-            mb_fetcher = None
-            if metadata.isrc:
-                mb_fetcher = AsyncMBFetch(metadata.isrc)
+            tidal_tags: dict[str, str] = {}
 
-            dest = self._build_output_path(
+            # Qobuz ha priorità su Spotify: sempre consultato,
+            # il suo ISRC sovrascrive quello originale se trovato.
+            qobuz_isrc = await _find_isrc_via_qobuz(
+                getattr(metadata, "title", ""),
+                getattr(metadata, "artists", ""),
+                getattr(metadata, "duration_ms", 0),
+            )
+            if qobuz_isrc:
+                metadata.isrc      = qobuz_isrc
+                tidal_tags["ISRC"] = qobuz_isrc
+                logger.info("[tidal] ISRC from Qobuz (preferred): %s", qobuz_isrc)
+            elif metadata.isrc:
+                tidal_tags["ISRC"] = metadata.isrc
+                logger.info("[tidal] ISRC from source metadata: %s", metadata.isrc)
+
+            # Proxy sempre chiamato per releaseDate; ISRC usato solo come ultima risorsa.
+            details = await self._fetch_track_details_from_proxy(track_id)
+            if details:
+                if not metadata.isrc:
+                    if isrc_from_proxy := details.get("isrc"):
+                        tidal_tags["ISRC"] = isrc_from_proxy
+                        metadata.isrc      = isrc_from_proxy
+                        logger.info("[tidal] ISRC from proxy (last resort): %s", isrc_from_proxy)
+
+                if rd := details.get("releaseDate"):
+                    if len(rd) >= 4:
+                        tidal_tags["ORIGINALDATE"] = rd
+                        tidal_tags["ORIGINALYEAR"] = rd[:4]
+
+            # ----------------------------------------------------------------
+            # MUSICBRAINZ
+            # ----------------------------------------------------------------
+            mb_tags: dict[str, str] = {}
+            if metadata.isrc:
+                mb_data = await fetch_mb_metadata_async(metadata.isrc)
+                mb_tags = mb_result_to_tags(mb_data)
+
+            # ----------------------------------------------------------------
+            # Merge finale dei tag (Tidal base, MusicBrainz priorità maggiore)
+            # ----------------------------------------------------------------
+            combined_tags = {**tidal_tags, **mb_tags}
+
+            dest = await asyncio.to_thread(
+                self._build_output_path,
                 metadata, output_dir, filename_format,
                 position, include_track_num, use_album_track_num, first_artist_only,
             )
@@ -961,37 +1141,34 @@ class TidalProvider(BaseProvider):
                 existing_path = dest if self._file_exists(dest) else dest.with_suffix(".m4a")
                 return DownloadResult.skipped_result(self.name, str(existing_path))
 
-            try:
-                dl_url = (
-                    self._get_download_url_with_fallback(track_id, quality)
-                    if allow_fallback
-                    else self._get_download_url(track_id, quality)
-                )
-            except Exception as e:
-                raise e 
+            dl_url = (
+                await self._get_download_url_with_fallback_async(track_id, quality)
+                if allow_fallback
+                else await self._get_download_url_async(track_id, quality)
+            )
 
-            sample_rate, final_dest = self._download_file(dl_url, dest, quality)
-            
+            sample_rate, final_dest = await self._download_file_async(dl_url, dest, quality)
+
             if sample_rate > 0:
                 logger.info("[tidal] Extracted true sample rate from manifest: %d Hz", sample_rate)
 
             expected_s = metadata.duration_ms // 1000
-            
-            valid, err_msg = validate_downloaded_track(str(final_dest), expected_s)
+
+            valid, err_msg = await asyncio.to_thread(validate_downloaded_track, str(final_dest), expected_s)
             if not valid:
                 raise SpotiflacError(ErrorKind.UNAVAILABLE, err_msg, self.name)
-            
+
             # Controllo Preview derivato dal Web JS
-            actual_s = self._get_audio_duration_seconds(final_dest)
+            actual_s = await self._get_audio_duration_seconds_async(final_dest)
             if actual_s <= 35 and expected_s > 45:
-                # E' probabile che sia stato sloaded un preview limitato
+                # E' probabile che sia stato scaricato un preview limitato
                 if final_dest.exists():
                     final_dest.unlink()
                 raise SpotiflacError(ErrorKind.UNAVAILABLE, f"Tidal returned a limited preview track ({actual_s}s).", self.name)
 
             # Validate and repair FLAC files if needed
             if str(final_dest).lower().endswith(".flac"):
-                success, repair_msg = validate_and_repair_if_needed(str(final_dest))
+                success, repair_msg = await asyncio.to_thread(validate_and_repair_if_needed, str(final_dest))
                 if not success:
                     logger.error("[tidal] FLAC file validation failed: %s", repair_msg)
                     if final_dest.exists():
@@ -1000,20 +1177,17 @@ class TidalProvider(BaseProvider):
                 if repair_msg:
                     logger.info("[tidal] FLAC file repair status: %s", repair_msg)
 
-            mb_tags: dict[str, str] = {}
-            if mb_fetcher:
-                res = mb_fetcher.future.result()
-                mb_tags = mb_result_to_tags(res)
-            
+            sample_rate_tag = {}
             if sample_rate > 0:
-                mb_tags["SAMPLERATE"] = str(sample_rate)
+                logger.info("✦ Tidal source sample rate: %d Hz", sample_rate)
+                sample_rate_tag["SAMPLERATE"] = str(sample_rate)
 
             _print_mb_summary(mb_tags)
 
             opts = EmbedOptions(
                 first_artist_only       = first_artist_only,
                 cover_url               = metadata.cover_url,
-                extra_tags              = mb_tags,
+                extra_tags              = {**combined_tags, **sample_rate_tag},
                 embed_lyrics            = embed_lyrics,
                 lyrics_providers        = lyrics_providers or [],
                 enrich                  = enrich_metadata,
@@ -1021,10 +1195,9 @@ class TidalProvider(BaseProvider):
                 enrich_qobuz_token      = self._qobuz_token or "",
                 is_album                = is_album,
             )
-            
-            embed_metadata(str(final_dest), metadata, opts, session=self._session)
-            return DownloadResult.ok(self.name, str(final_dest))
 
+            await embed_metadata_async(str(final_dest), metadata, opts, session=self._session)
+            return DownloadResult.ok(self.name, str(final_dest))
         except SpotiflacError as exc:
             logger.error("[tidal] %s", exc)
             return DownloadResult.fail(self.name, str(exc))

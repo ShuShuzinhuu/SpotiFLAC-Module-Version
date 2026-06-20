@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -133,15 +134,142 @@ class SoundCloudProvider(BaseProvider):
         res.raise_for_status()
         return res.json()
 
+    async def _fetch_client_id_async(self) -> str:
+        logger.info("[SC] Fetching SoundCloud client_id...")
+        headers = {"User-Agent": self.session.headers.get("User-Agent", "")}
+
+        try:
+            resp = await self._async_http.get(
+                "https://soundcloud.com/",
+                headers=headers,
+                timeout=15.0,
+            )
+        except Exception as exc:
+            raise ValueError(f"Network/HTTP error fetching soundcloud.com: {exc}") from exc
+
+        body = resp.text
+
+        version_match = self._REGEX_SC_VERSION.search(body)
+        if version_match:
+            new_version = version_match.group(1)
+            if new_version == self._sc_version and self.client_id:
+                logger.info("[SC] SoundCloud version unchanged, reusing client_id")
+                return self.client_id
+            self._sc_version = new_version
+
+        m = self._REGEX_CLIENT_ID.search(body)
+        if m:
+            return m.group(1)
+
+        script_urls = self._REGEX_JS_BUNDLE.findall(body)
+        for url in reversed(script_urls[-8:]):
+            try:
+                js_resp = await self._async_http.get(
+                    url,
+                    headers=headers,
+                    timeout=5.0,
+                )
+                if js_resp.status_code != 200:
+                    continue
+                js_body = js_resp.text
+                cm = self._REGEX_CLIENT_ID.search(js_body)
+                if not cm:
+                    cm = self._REGEX_CLIENT_ID_INLINE.search(js_body)
+                if not cm:
+                    idx = js_body.find("client_id=")
+                    if idx != -1:
+                        candidate = js_body[idx + 10: idx + 42]
+                        if len(candidate) == 32 and candidate.isalnum():
+                            return candidate
+                if cm:
+                    return cm.group(1)
+            except Exception as e:
+                logger.debug("[SC] Bundle fetch network failed for %s: %s", url, e)
+
+        raise ValueError("Could not find SoundCloud client_id")
+
+    async def _ensure_client_id_async(self) -> None:
+        if not self.client_id or time.time() >= self.client_id_expiry:
+            self.client_id = await self._fetch_client_id_async()
+            self.client_id_expiry = time.time() + self.CLIENT_ID_TTL
+
+    async def _api_get_async(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
+        await self._ensure_client_id_async()
+        params = dict(params or {})
+        params["client_id"] = self.client_id
+        url = f"{self.api_url}/{endpoint}"
+        headers = {"User-Agent": self.session.headers.get("User-Agent", "")}
+
+        resp = await self._async_http.get(url, params=params, headers=headers, timeout=15.0)
+        if resp.status_code == 401:
+            logger.info("[SC] Got 401, refreshing client_id...")
+            self.client_id = None
+            await self._ensure_client_id_async()
+            params["client_id"] = self.client_id
+            resp = await self._async_http.get(url, params=params, headers=headers, timeout=15.0)
+
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_download_url_async(
+        self,
+        track_id: str | None,
+        track_permalink: str | None = None,
+        audio_format: str = "mp3",
+    ) -> str | None:
+        track_data: dict[str, Any] = {}
+
+        if track_id is not None:
+            try:
+                track_data = await self._api_get_async(f"tracks/{track_id}")
+                transcodings = track_data.get("media", {}).get("transcodings", [])
+                track_auth = track_data.get("track_authorization", "")
+
+                if transcodings and track_auth:
+                    if best := self._pick_best_transcoding(transcodings, audio_format):
+                        try:
+                            resp = await self._async_http.get(
+                                best["url"],
+                                params={"client_id": self.client_id, "track_authorization": track_auth},
+                                headers={"User-Agent": self.session.headers.get("User-Agent", "")},
+                                timeout=15.0,
+                            )
+                            if resp.status_code == 200:
+                                return resp.json().get("url")
+                        except Exception as e:
+                            logger.warning("[SC] Direct stream fetch network failed: %s", e)
+            except Exception as e:
+                logger.warning("[SC] Track API lookup network failed: %s", e)
+
+        url_to_fetch = track_permalink or track_data.get("permalink_url")
+        if url_to_fetch:
+            try:
+                payload = {
+                    "url":           url_to_fetch,
+                    "audioFormat":   audio_format,
+                    "downloadMode":  "audio",
+                    "filenameStyle": "basic",
+                }
+                resp = await self._async_http.post(
+                    self.cobalt_api,
+                    json=payload,
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": self.session.headers.get("User-Agent", "SpotiFLAC-Mobile/4.5.0"),
+                    },
+                    timeout=15.0,
+                )
+                if resp.status_code == 200:
+                    cobalt_data = resp.json()
+                    if cobalt_data.get("status") in ("tunnel", "redirect"):
+                        return cobalt_data.get("url")
+            except Exception as e:
+                logger.debug("[SC] Cobalt fallback network failed: %s", e)
+
+        return None
+
     # ==========================================
     # FORMATTING UTILS
-    # ==========================================
-
-    def _get_hires_artwork(self, url: str | None) -> str:
-        """Update l'URL copertina alla massima risoluzione disponibile."""
-        if not url:
-            return ""
-        return url.replace("-large.", "-t500x500.") if "-large." in url else url
 
     def _format_track(self, data: dict[str, Any]) -> dict[str, Any] | None:
         if not data or not data.get("id"):
@@ -611,6 +739,116 @@ class SoundCloudProvider(BaseProvider):
                 is_album             = is_album,
             )
             embed_metadata(str(dest), metadata, opts, session=self.session)
+        except Exception as exc:
+            logger.warning("[SC] embed_metadata failed (file saved senza tag): %s", exc)
+
+        logger.info("[SC] Completed: %s", dest.name)
+        return DownloadResult.ok(self.name, str(dest), fmt="mp3")
+
+    async def download_track_async(
+            self,
+            metadata:    TrackMetadata,
+            output_dir:  str,
+            *,
+            filename_format:          str             = "{title} - {artist}",
+            position:                 int             = 1,
+            include_track_num:        bool            = False,
+            use_album_track_num:      bool            = False,
+            first_artist_only:        bool            = False,
+            allow_fallback:           bool            = True,
+            quality:                  str             = "LOSSLESS",
+            embed_lyrics:             bool            = False,
+            lyrics_providers:         list[str] | None = None,
+            enrich_metadata:          bool            = False,
+            enrich_providers:         list[str] | None = None,
+            is_album:                 bool            = False,
+            **kwargs,
+    ) -> DownloadResult:
+        logger.info("[SC] Resolving link for: %s", metadata.title)
+
+        is_native = (
+                metadata.extra_info.get("provider") == "soundcloud"
+                or metadata.extra_info.get("exclusive")
+                or (metadata.external_url and "soundcloud.com" in metadata.external_url)
+        )
+        audio_format = "mp3"
+        dl_url = None
+
+        if is_native:
+            dl_url = await self.get_download_url_async(
+                track_id        = metadata.id,
+                track_permalink = metadata.external_url or None,
+                audio_format     = audio_format,
+            )
+        else:
+            try:
+                def resolve_links() -> dict[str, str]:
+                    resolver = LinkResolver(HttpClient("odesli"))
+                    return resolver.resolve_all(metadata.id)
+
+                links = await asyncio.to_thread(resolve_links)
+                if sc_url := links.get("soundcloud"):
+                    dl_url = await self.get_download_url_async(
+                        track_id=None,
+                        track_permalink=sc_url,
+                        audio_format=audio_format,
+                    )
+            except Exception as e:
+                logger.warning("[SC] Odesli resolution error: %s", e)
+
+            if not dl_url:
+                search_query = f"{metadata.title} {metadata.artists}".strip()
+                logger.info("[SC] Odesli failed. Native search for: '%s'", search_query)
+                try:
+                    search_results = await asyncio.to_thread(self.search, search_query, limit=5)
+                    if best_track := self._find_best_match(search_results, metadata.title, metadata.artists, metadata.duration_ms):
+                        logger.info("[SC] Found fallback via search: %s (ID: %s)", best_track.get("name"), best_track.get("id"))
+                        dl_url = await self.get_download_url_async(
+                            track_id=best_track.get("id"),
+                            track_permalink=best_track.get("permalink_url"),
+                            audio_format=audio_format,
+                        )
+                    else:
+                        logger.warning("[SC] No suitable fallback track found matching criteria.")
+                except Exception as e:
+                    logger.warning("[SC] Fallback search failed: %s", e)
+
+        if not dl_url:
+            return DownloadResult.fail(self.name, "Stream non disponibile")
+
+        dest = self._build_output_path(
+            metadata, output_dir, filename_format,
+            position, include_track_num, use_album_track_num, first_artist_only,
+            extension=".mp3",
+        )
+        if self._file_exists(dest):
+            return DownloadResult.skipped_result(self.name, str(dest), fmt="mp3")
+
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+            logger.info("[SC] Downloading: %s", dest.name)
+            await self._async_http.stream_to_file(dl_url, str(dest), self._progress_cb)
+        except Exception as e:
+            logger.error("[SC] Download failed: %s", e)
+            if dest.exists():
+                dest.unlink(missing_ok=True)
+            return DownloadResult.fail(self.name, str(e))
+
+        try:
+            qobuz_token = kwargs.get("qobuz_token", "") or os.environ.get("QOBUZ_AUTH_TOKEN", "")
+            effective_providers = [p for p in (lyrics_providers or []) if p != "spotify"]
+
+            opts = EmbedOptions(
+                first_artist_only    = first_artist_only,
+                cover_url            = metadata.cover_url,
+                embed_lyrics         = embed_lyrics,
+                lyrics_providers     = effective_providers,
+                enrich               = enrich_metadata,
+                enrich_providers     = enrich_providers,
+                enrich_qobuz_token   = qobuz_token or "",
+                is_album             = is_album,
+            )
+            await asyncio.to_thread(embed_metadata, str(dest), metadata, opts, session=self.session)
         except Exception as exc:
             logger.warning("[SC] embed_metadata failed (file saved senza tag): %s", exc)
 

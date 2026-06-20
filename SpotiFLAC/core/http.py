@@ -157,7 +157,7 @@ class NetworkManager:
                         loop.run_until_complete(cls._async_client.aclose())
                 except Exception:
                     try:
-                        cls._async_client.aclose()
+                        asyncio.run(cls._async_client.aclose())
                     except Exception:
                         pass
                 cls._async_client = None
@@ -421,13 +421,18 @@ class AsyncHttpClient:
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         headers = {**self._headers, **kwargs.pop("headers", {})}
+        
+        # safely extract 'timeout' from kwargs, falling back to the instance default
+        req_timeout = kwargs.pop("timeout", self._timeout) 
+        
         if self._limiter:
             await self._limiter.wait_for_slot()
+            
         client = await self._client()
         resp = await client.request(
             method, url,
             headers=headers,
-            timeout=self._timeout,
+            timeout=req_timeout,
             **kwargs,
         )
         self._raise_for_status(resp)
