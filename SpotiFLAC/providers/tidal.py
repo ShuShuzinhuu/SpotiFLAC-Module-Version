@@ -11,16 +11,13 @@ import logging
 import os
 import random
 import re
-import subprocess
 import threading
 import time
 import unicodedata
 import xml.etree.ElementTree as ET
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Any, NamedTuple
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 import httpx
 
@@ -37,15 +34,14 @@ from ..core.http import NetworkManager, RetryConfig, async_zarz_rate_limiter
 from ..core.link_resolver import LinkResolver
 from ..core.models import DownloadResult, TrackMetadata
 from ..core.musicbrainz import fetch_mb_metadata_async, mb_result_to_tags
-from ..core.tagger import EmbedOptions, _print_mb_summary, embed_metadata, embed_metadata_async
-from ..core.endpoints import get_tidal_post_endpoints, get_community_url
+from ..core.tagger import EmbedOptions, _print_mb_summary, embed_metadata_async
+from ..core.endpoints import get_tidal_post_endpoints, get_community_url, get_monochrome_token
 from ..core.quality import normalize_quality as _cq_normalize_quality, quality_fallback_chain as _cq_quality_fallback_chain
 from ..core.flac_validation import validate_and_repair_if_needed
 from .qobuz import (
     _scrape_credentials_async,
     _compute_signature,
     _API_BASE as QOBUZ_API_BASE,
-    QobuzCredentials,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,8 +75,6 @@ _POST_USER_AGENT = [
 ]
 
 _TIDAL_PROXY_BASE = "https://tidal-proxy.monochrome.tf/api/v1"
-_TIDAL_PROXY_TOKEN = "Bearer eyJraWQiOiJ2OU1GbFhqWSIsImFsZyI6IkVTMjU2In0.eyJ0eXBlIjoibzJfYWNjZXNzIiwic2NvcGUiOiIiLCJnVmVyIjowLCJzVmVyIjowLCJjaWQiOjEzNTU3LCJhdCI6IklOVEVSTkFMIiwiZXhwIjoxNzgxOTA5MTYzLCJpc3MiOiJodHRwczovL2F1dGgudGlkYWwuY29tL3YxIn0.cm1Unalv7y6upOCqUyv1BdoP5FwZbWgsjJwyQhWGCqqO_We5d5xHhnMvoad0zmC-OtrU9wrZtcB-tmi3cblOIg"
-
 _TIDAL_API_GIST_URL   = "https://gist.githubusercontent.com/afkarxyz/2ce772b943321b9448b454f39403ce25/raw"
 _TIDAL_API_CACHE_FILE = "tidal-api-urls.json"
 
@@ -684,7 +678,7 @@ async def _fetch_tidal_url_parallel_async(
         raise SpotiflacError(
             ErrorKind.UNAVAILABLE,
             f"All Tidal APIs failed "
-            f"(of {len(apis)} total, {len(apis) - len(available)} in cooldown)."
+            f"(of {len(apis)} total, {len(apis) - len(available)} in cooldown).",
             "tidal",
         )
  
@@ -700,6 +694,7 @@ async def _fetch_tidal_url_parallel_async(
 class TidalProvider(BaseProvider):
     name = "tidal"
     _is_async = True
+
     def __init__(
             self,
             apis:            list[str] | None = None,
@@ -707,6 +702,13 @@ class TidalProvider(BaseProvider):
             qobuz_token:     str | None       = None,
             custom_api_url:  str | None       = None,
     ) -> None:
+        """
+        NOTA SU PERFORMANCE ASYNC: questo costruttore esegue prime_tidal_api_list(),
+        che può effettuare una richiesta HTTP sincrona bloccante (refresh della
+        lista API da gist) se la cache locale è vuota o va aggiornata. Se si sta
+        istanziando il provider da dentro un event loop già in esecuzione, usare
+        invece TidalProvider.create_async(...) per evitare di bloccare il loop.
+        """
         super().__init__(timeout_s=timeout_s, retry=RetryConfig(max_attempts=2))
         self._session = NetworkManager.get_sync_client()
         self._session.headers.update({"User-Agent": self._random_ua()})
@@ -726,6 +728,30 @@ class TidalProvider(BaseProvider):
         self._apis = base_apis
         self._qobuz_token: str | None = qobuz_token or os.environ.get("QOBUZ_AUTH_TOKEN")
 
+    @classmethod
+    async def create_async(
+            cls,
+            apis:            list[str] | None = None,
+            timeout_s:       int              = 15,
+            qobuz_token:     str | None       = None,
+            custom_api_url:  str | None       = None,
+    ) -> "TidalProvider":
+        """
+        Factory asincrona equivalente a __init__, ma che esegue il refresh
+        della lista API (potenzialmente I/O-bound e bloccante) in un thread
+        separato tramite asyncio.to_thread, per non bloccare l'event loop
+        del chiamante. Preferire questa rispetto al costruttore diretto
+        quando si opera già dentro codice async.
+        """
+        def _build() -> "TidalProvider":
+            return cls(
+                apis=apis,
+                timeout_s=timeout_s,
+                qobuz_token=qobuz_token,
+                custom_api_url=custom_api_url,
+            )
+        return await asyncio.to_thread(_build)
+
     async def resolve_spotify_to_tidal_async(
             self,
             spotify_track_id: str,
@@ -735,8 +761,8 @@ class TidalProvider(BaseProvider):
             duration_ms:      int = 0,
     ) -> str:
         if track_name and artist_name and track_name != "Unknown":
-            result = await asyncio.to_thread(
-                self._search_on_mirrors, track_name, artist_name, isrc, duration_ms
+            result = await self._search_on_mirrors_async(
+                track_name, artist_name, isrc, duration_ms
             )
             if result:
                 return result
@@ -753,17 +779,60 @@ class TidalProvider(BaseProvider):
         headers = {
             "User-Agent": _TIDAL_USER_AGENT,
             "Accept": "application/json",
-            "Authorization": _TIDAL_PROXY_TOKEN,
+            "Authorization": get_monochrome_token(),
         }
         try:
             resp = await client.get(url, headers=headers, timeout=8)
             if resp.status_code == 200:
                 return resp.json()
             else:
-                logger.debug("[tidal] proxy returned %s", resp.status_code)
+                print("[tidal] proxy returned %s", resp.status_code)
         except Exception as exc:
-            logger.debug("[tidal] proxy request failed: %s", exc)
+            print("[tidal] proxy request failed: %s", exc)
         return {}
+
+    async def _search_on_mirrors_async(
+            self,
+            track_name:  str,
+            artist_name: str,
+            isrc:        str = "",
+            duration_ms: int = 0,
+    ) -> str | None:
+        """
+        Variante nativamente async di _search_on_mirrors: usa il client HTTP
+        asincrono condiviso invece di self._session (sync), evitando di
+        occupare un worker del thread pool di asyncio.to_thread per tutta
+        la durata della ricerca sui mirror Tidal.
+        """
+        clean_track  = _clean_title(track_name)
+        clean_artist = artist_name.split(",")[0].strip()
+        query        = quote(f"{clean_artist} {clean_track}")
+
+        client = await NetworkManager.get_async_client_safe()
+
+        for api in self._apis:
+            base = api.rstrip("/")
+            for endpoint in [
+                f"{base}/search/?s={query}&limit=5",
+                f"{base}/search?s={query}&limit=5",
+                f"{base}/search/track/?s={query}&limit=5",
+            ]:
+                try:
+                    resp = await client.get(endpoint, timeout=7)
+                    if resp.status_code == 429:
+                        wait_s = float(resp.headers.get("Retry-After", _RATE_LIMIT_DEFAULT))
+                        _mark_api_rate_limited(base, wait_s)
+                        logger.debug("[tidal] search rate-limited, skip (cooldown %.0fs)", wait_s)
+                        break
+                    if resp.status_code != 200:
+                        continue
+                    t_id = self._extract_best_track_id(resp.json(), track_name, clean_artist, isrc, duration_ms)
+                    if t_id:
+                        _clear_api_rate_limit(base)
+                        return f"https://listen.tidal.com/track/{t_id}"
+                except Exception:
+                    continue
+        return None
 
     def _search_on_mirrors(
             self,
@@ -772,6 +841,11 @@ class TidalProvider(BaseProvider):
             isrc:        str = "",
             duration_ms: int = 0,
     ) -> str | None:
+        """
+        Variante sincrona, mantenuta per retrocompatibilità con eventuali
+        chiamanti sync esterni. Il path async (download_track_async) usa
+        invece _search_on_mirrors_async, che non blocca l'event loop.
+        """
         clean_track  = _clean_title(track_name)
         clean_artist = artist_name.split(",")[0].strip()
         query        = quote(f"{clean_artist} {clean_track}")
@@ -1046,7 +1120,7 @@ class TidalProvider(BaseProvider):
             pass
         return 0
 
-    async def download_track(
+    async def download_track_async(
         self,
         metadata:   TrackMetadata,
         output_dir: str,
@@ -1090,13 +1164,33 @@ class TidalProvider(BaseProvider):
 
             tidal_tags: dict[str, str] = {}
 
+            # Qobuz (per ISRC) e il proxy Tidal (per releaseDate, e ISRC come
+            # ultima risorsa) sono richieste di rete indipendenti tra loro:
+            # le eseguiamo in parallelo con asyncio.gather invece di awaitarle
+            # in sequenza, per ridurre la latenza totale di questa fase.
+            qobuz_isrc, details = await asyncio.gather(
+                _find_isrc_via_qobuz(
+                    getattr(metadata, "title", ""),
+                    getattr(metadata, "artists", ""),
+                    getattr(metadata, "duration_ms", 0),
+                ),
+                self._fetch_track_details_from_proxy(track_id),
+                return_exceptions=True,
+            )
+
+            # asyncio.gather con return_exceptions=True non propaga le
+            # eccezioni: le normalizziamo qui a "nessun risultato", così
+            # un fallimento di una delle due chiamate non comporta la perdita
+            # dell'altra (comportamento equivalente a due try/except separati).
+            if isinstance(qobuz_isrc, BaseException):
+                logger.debug("[tidal] Qobuz ISRC lookup raised: %s", qobuz_isrc)
+                qobuz_isrc = None
+            if isinstance(details, BaseException):
+                logger.debug("[tidal] proxy track-details lookup raised: %s", details)
+                details = {}
+
             # Qobuz ha priorità su Spotify: sempre consultato,
             # il suo ISRC sovrascrive quello originale se trovato.
-            qobuz_isrc = await _find_isrc_via_qobuz(
-                getattr(metadata, "title", ""),
-                getattr(metadata, "artists", ""),
-                getattr(metadata, "duration_ms", 0),
-            )
             if qobuz_isrc:
                 metadata.isrc      = qobuz_isrc
                 tidal_tags["ISRC"] = qobuz_isrc
@@ -1105,8 +1199,7 @@ class TidalProvider(BaseProvider):
                 tidal_tags["ISRC"] = metadata.isrc
                 logger.info("[tidal] ISRC from source metadata: %s", metadata.isrc)
 
-            # Proxy sempre chiamato per releaseDate; ISRC usato solo come ultima risorsa.
-            details = await self._fetch_track_details_from_proxy(track_id)
+            # Proxy usato per releaseDate; il suo ISRC è solo l'ultima risorsa.
             if details:
                 if not metadata.isrc:
                     if isrc_from_proxy := details.get("isrc"):
