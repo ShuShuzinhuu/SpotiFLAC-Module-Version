@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 from unittest.mock import Mock
 
 from SpotiFLAC.core.link_resolver import LinkResolver
@@ -32,7 +33,7 @@ class LinkResolverTests(unittest.TestCase):
         ]
         self.http.get.return_value = Mock(text="")
 
-        links = self.resolver.resolve_all("spotify_ABCDEFGHIJKLMN", isrc="USRC17607839")
+        links = asyncio.run(self.resolver.resolve_all_async("spotify_ABCDEFGHIJKLMN", isrc="USRC17607839"))
 
         self.assertEqual(links["amazonMusic"], "https://music.amazon.com/tracks/B123456789?musicTerritory=US")
 

@@ -282,9 +282,6 @@ class HttpClient:
     def post(self, url: str, **kwargs: Any) -> httpx.Response:
         return self._request("POST", url, **kwargs)
 
-    def get_json(self, url: str, **kwargs: Any) -> dict:
-        return self._parse_json(self.get(url, **kwargs))
-
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         headers = self._headers.copy()
         if "headers" in kwargs:
@@ -412,7 +409,7 @@ class AsyncHttpClient:
     async def post(self, url: str, **kwargs: Any) -> httpx.Response:
         return await self._request("POST", url, **kwargs)
 
-    async def get_json(self, url: str, **kwargs: Any) -> dict:
+    async def get_json_async(self, url: str, **kwargs: Any) -> dict:
         resp = await self.get(url, **kwargs)
         try:
             return resp.json()

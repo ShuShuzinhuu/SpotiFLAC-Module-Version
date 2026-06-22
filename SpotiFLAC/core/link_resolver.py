@@ -24,6 +24,42 @@ class LinkResolver:
         self.http = http_client
         self._deezer_async_cache = {}
 
+    async def _safe_get_json(self, url: str, params: Optional[dict] = None) -> dict:
+        """Helper robusto che aggiunge User-Agent e Accept per evitare il blocco 406 di Varnish/WAF."""
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache"
+        }
+        if hasattr(self.http, "get_json_async"):
+            try:
+                return await self.http.get_json_async(url, params=params, headers=headers)
+            except TypeError:
+                return await self.http.get_json_async(url, params=params)
+        
+        # Fallback per httpx.AsyncClient nativo con spoofing dei metadati di navigazione
+        resp = await self.http.get(url, params=params, headers=headers)
+        return resp.json()
+
+    async def _safe_get_html(self, url: str):
+        """Helper robusto che emula un browser desktop per le richieste di scraping HTML."""
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/ *;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Upgrade-Insecure-Requests": "1"
+        }
+        if hasattr(self.http, "get_async"):
+            try:
+                return await self.http.get_async(url, headers=headers)
+            except TypeError:
+                return await self.http.get_async(url)
+        
+        # Fallback per httpx.AsyncClient nativo
+        return await self.http.get(url, headers=headers)
+
     def identify_provider(self, url: str) -> str:
         url = url.lower()
         if "soundcloud.com" in url or "on.soundcloud.com" in url: return "soundcloud"
@@ -117,7 +153,7 @@ class LinkResolver:
         if not track_id: return ""
         try:
             url = self.DEEZER_TRACK_API.format(track_id)
-            data = await self.http.get_json_async(url)
+            data = await self._safe_get_json(url)
             isrc = data.get("isrc", "")
             if isrc: return isrc.upper().strip()
         except Exception as e:
@@ -131,7 +167,7 @@ class LinkResolver:
             
         try:
             url = self.DEEZER_ISRC_API.format(isrc_clean)
-            data = await self.http.get_json_async(url)
+            data = await self._safe_get_json(url)
             
             res = ""
             if "link" in data and data["link"]: res = self._normalize_deezer_url(data["link"])
@@ -146,7 +182,7 @@ class LinkResolver:
     async def _get_songlink_links_async(self, params: dict[str, str]) -> dict[str, str]:
         try:
             await asyncio.to_thread(songlink_rate_limiter.wait_for_slot)
-            data = await self.http.get_json_async(self.SONGLINK_API_URL, params=params)
+            data = await self._safe_get_json(self.SONGLINK_API_URL, params=params)
             return self._process_songlink_response(data)
         except Exception as e:
             logger.debug(f"[link_resolver] Songlink lookup async failed: {e}")
@@ -163,7 +199,7 @@ class LinkResolver:
         try:
             await asyncio.to_thread(songlink_rate_limiter.wait_for_slot)
             url = f"https://song.link/s/{urllib.parse.quote(raw_id, safe='')}?userCountry=US"
-            resp = await self.http.get_async(url)
+            resp = await self._safe_get_html(url)
             html = resp.text
 
             deezer_match = re.search(r"https?://www\.deezer\.com/track/[0-9]+", html)
@@ -182,7 +218,7 @@ class LinkResolver:
         try:
             await asyncio.to_thread(songlink_rate_limiter.wait_for_slot)
             params = {"isrc": isrc.upper().strip(), "userCountry": "US"}
-            data = await self.http.get_json_async(self.SONGLINK_API_URL, params=params)
+            data = await self._safe_get_json(self.SONGLINK_API_URL, params=params)
             return self._process_songlink_response(data)
         except Exception as e:
             logger.debug(f"[link_resolver] Songlink ISRC lookup async failed: {e}")
@@ -191,7 +227,7 @@ class LinkResolver:
     async def _get_songstats_links_async(self, identifier: str) -> Dict[str, str]:
         try:
             url = f"https://songstats.com/{urllib.parse.quote(identifier)}?ref=ISRCFinder"
-            resp = await self.http.get_async(url)
+            resp = await self._safe_get_html(url)
             return self._process_songstats_links(resp.text)
         except Exception as e:
             logger.debug(f"[link_resolver] Songstats lookup async failed: {e}")

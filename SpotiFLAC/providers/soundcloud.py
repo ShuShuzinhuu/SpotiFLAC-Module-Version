@@ -640,111 +640,6 @@ class SoundCloudProvider(BaseProvider):
                 
         return best
 
-    # ==========================================
-    # DOWNLOAD TRACK
-    # ==========================================
-
-    def download_track(
-            self,
-            metadata:    TrackMetadata,
-            output_dir:  str,
-            *,
-            filename_format:          str             = "{title} - {artist}",
-            position:                 int             = 1,
-            include_track_num:        bool            = False,
-            use_album_track_num:      bool            = False,
-            first_artist_only:        bool            = False,
-            allow_fallback:           bool            = True,
-            quality:                  str             = "LOSSLESS",
-            embed_lyrics:             bool            = False,
-            lyrics_providers:         list[str] | None = None,
-            enrich_metadata:          bool            = False,
-            enrich_providers:         list[str] | None = None,
-            is_album:                 bool            = False,
-            **kwargs,
-    ) -> DownloadResult:
-        logger.info("[SC] Resolving link for: %s", metadata.title)
-
-        is_native = (
-                metadata.extra_info.get("provider") == "soundcloud"
-                or metadata.extra_info.get("exclusive")
-                or (metadata.external_url and "soundcloud.com" in metadata.external_url)
-        )
-        q_norm = normalize_quality(quality)
-        # SoundCloud only provides lossy formats; prefer mp3/progressive. Keep mp3 for compatibility.
-        audio_format = "mp3"
-        dl_url = None
-
-        if is_native:
-            dl_url = self.get_download_url(
-                track_id        = metadata.id,
-                track_permalink = metadata.external_url or None,
-                audio_format     = audio_format,
-            )
-        else:
-            try:
-                resolver = LinkResolver(HttpClient("odesli"))
-                links    = resolver.resolve_all(metadata.id)
-                if sc_url := links.get("soundcloud"):
-                    dl_url = self.get_download_url(track_id=None, track_permalink=sc_url, audio_format=audio_format)
-            except Exception as e:
-                logger.warning("[SC] Odesli resolution error: %s", e)
-                
-            if not dl_url:
-                search_query = f"{metadata.title} {metadata.artists}".strip()
-                logger.info("[SC] Odesli failed. Native search for: '%s'", search_query)
-                try:
-                    search_results = self.search(search_query, limit=5)
-                    if best_track := self._find_best_match(search_results, metadata.title, metadata.artists, metadata.duration_ms):
-                        logger.info("[SC] Found fallback via search: %s (ID: %s)", best_track.get("name"), best_track.get("id"))
-                        dl_url = self.get_download_url(track_id=best_track.get("id"), track_permalink=best_track.get("permalink_url"), audio_format=audio_format)
-                    else:
-                        logger.warning("[SC] No suitable fallback track found matching criteria.")
-                except Exception as e:
-                    logger.warning("[SC] Fallback search failed: %s", e)
-
-        if not dl_url:
-            return DownloadResult.fail(self.name, "Stream non disponibile")
-
-        dest = self._build_output_path(
-            metadata, output_dir, filename_format,
-            position, include_track_num, use_album_track_num, first_artist_only,
-            extension=".mp3",
-        )
-        if self._file_exists(dest):
-            return DownloadResult.skipped_result(self.name, str(dest), fmt="mp3")
-
-        try:
-            os.makedirs(output_dir, exist_ok=True)
-            logger.info("[SC] Downloading: %s", dest.name)
-            self._http.stream_to_file(dl_url, str(dest), self._progress_cb)
-        except Exception as e:
-            logger.error("[SC] Download failed: %s", e)
-            if dest.exists():
-                dest.unlink(missing_ok=True)
-            return DownloadResult.fail(self.name, str(e))
-
-        try:
-            qobuz_token = kwargs.get("qobuz_token", "") or os.environ.get("QOBUZ_AUTH_TOKEN", "")
-            effective_providers = [p for p in (lyrics_providers or []) if p != "spotify"]
-
-            opts = EmbedOptions(
-                first_artist_only    = first_artist_only,
-                cover_url            = metadata.cover_url,
-                embed_lyrics         = embed_lyrics,
-                lyrics_providers     = effective_providers,
-                enrich               = enrich_metadata,
-                enrich_providers     = enrich_providers,
-                enrich_qobuz_token   = qobuz_token or "",
-                is_album             = is_album,
-            )
-            embed_metadata(str(dest), metadata, opts, session=self.session)
-        except Exception as exc:
-            logger.warning("[SC] embed_metadata failed (file saved senza tag): %s", exc)
-
-        logger.info("[SC] Completed: %s", dest.name)
-        return DownloadResult.ok(self.name, str(dest), fmt="mp3")
-
     async def download_track_async(
             self,
             metadata:    TrackMetadata,
@@ -782,9 +677,9 @@ class SoundCloudProvider(BaseProvider):
             )
         else:
             try:
-                def resolve_links() -> dict[str, str]:
+                async def resolve_links() -> dict[str, str]:
                     resolver = LinkResolver(HttpClient("odesli"))
-                    return resolver.resolve_all(metadata.id)
+                    return await resolver.resolve_all_async(metadata.id)
 
                 links = await asyncio.to_thread(resolve_links)
                 if sc_url := links.get("soundcloud"):

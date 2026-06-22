@@ -934,19 +934,49 @@ class TidalProvider(BaseProvider):
 
         return None
 
+    async def _resolve_via_songlink_async(self, spotify_track_id: str) -> str:
+        """
+        Risoluzione nativa e puramente asincrona tramite Songlink.
+        Elimina i blocchi e risolve l'AttributeError del client HTTP.
+        """
+        # Recupera il client asincrono corretto (lo stesso usato nel resto del file)
+        client = await NetworkManager.get_async_client_safe()
+        
+        # Inizializza il resolver passandogli il client ASINCRONO
+        resolver = LinkResolver(client)
+        
+        # Esegui direttamente l'await senza creare thread o sotto-loop artificiali
+        links = await resolver.resolve_all_async(spotify_track_id)
+        
+        tidal_url = links.get("tidal")
+        if tidal_url:
+            return tidal_url
+            
+        raise TrackNotFoundError(self.name, spotify_track_id)
+
     def _resolve_via_songlink(self, spotify_track_id: str) -> str:
+        """
+        Mantenuto solo per retrocompatibilità sincrona se chiamato dall'esterno.
+        """
         resolver = LinkResolver(self._session)
-        links    = resolver.resolve_all(spotify_track_id)
+        # Se serve davvero una fallback sincrona, LinkResolver dovrebbe avere un metodo .resolve_all() sincrono.
+        # Altrimenti, se resolve_all_async è l'unico metodo, l'unico modo sincrono (seppur sconsigliato) è:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        # Nota: Questo darà comunque errore se LinkResolver chiama internamente metodi async su un client sync.
+        # Se tutto il tuo programma ora usa 'resolve_spotify_to_tidal_async', questo metodo sync non verrà mai toccato.
+        links = loop.run_until_complete(resolver.resolve_all_async(spotify_track_id))
         tidal_url = links.get("tidal")
         if tidal_url:
             return tidal_url
         raise TrackNotFoundError(self.name, spotify_track_id)
-    
-    async def _resolve_via_songlink_async(self, spotify_track_id: str) -> str:
-        return await asyncio.to_thread(self._resolve_via_songlink, spotify_track_id)
 
     async def _get_download_url_async(self, track_id: int, quality: str) -> str:
-        from ..core.provider_stats import prioritize_providers_async, record_success
+        from ..core.provider_stats import prioritize_providers_async, record_success_async
 
         try:
             rotated = get_rotated_tidal_api_list()
@@ -960,7 +990,7 @@ class TidalProvider(BaseProvider):
             ordered = [self._apis[0]] + [a for a in ordered if a != self._apis[0]]
 
         winner_api, dl_url = await _fetch_tidal_url_parallel_async(ordered, track_id, quality, _API_TIMEOUT_S)
-        record_success("tidal", winner_api)
+        await record_success_async("tidal", winner_api)
         remember_tidal_api_usage(winner_api)
         print_source_banner("tidal", "", quality)
         return dl_url

@@ -1381,7 +1381,80 @@ class QobuzProvider(BaseProvider):
         except Exception:
             return 0
 
-    async def download_track(
+    def download_track(
+            self,
+            metadata:   TrackMetadata,
+            output_dir: str,
+            *,
+            filename_format:     str  = "{title} - {artist}",
+            position:            int  = 1,
+            include_track_num:   bool = False,
+            use_album_track_num: bool = False,
+            first_artist_only:   bool = False,
+            allow_fallback:      bool = True,
+            quality:             str  = "6",
+            embed_genre:         bool = True,
+            single_genre:        bool = True,
+            embed_lyrics:        bool            = False,
+            lyrics_providers:    list[str] | None = None,
+            enrich_metadata:     bool = False,
+            enrich_providers:    list[str] | None = None,
+            is_album:            bool = False,
+            **kwargs,
+    ) -> DownloadResult:
+        """Synchronous wrapper exposed to the framework orchestration interface."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    asyncio.run,
+                    self._download_track_async(
+                        metadata, output_dir,
+                        filename_format=filename_format,
+                        position=position,
+                        include_track_num=include_track_num,
+                        use_album_track_num=use_album_track_num,
+                        first_artist_only=first_artist_only,
+                        allow_fallback=allow_fallback,
+                        quality=quality,
+                        embed_genre=embed_genre,
+                        single_genre=single_genre,
+                        embed_lyrics=embed_lyrics,
+                        lyrics_providers=lyrics_providers,
+                        enrich_metadata=enrich_metadata,
+                        enrich_providers=enrich_providers,
+                        is_album=is_album,
+                        **kwargs
+                    )
+                )
+                return future.result()
+        else:
+            return asyncio.run(
+                self._download_track_async(
+                    metadata, output_dir,
+                    filename_format=filename_format,
+                    position=position,
+                    include_track_num=include_track_num,
+                    use_album_track_num=use_album_track_num,
+                    first_artist_only=first_artist_only,
+                    allow_fallback=allow_fallback,
+                    quality=quality,
+                    embed_genre=embed_genre,
+                    single_genre=single_genre,
+                    embed_lyrics=embed_lyrics,
+                    lyrics_providers=lyrics_providers,
+                    enrich_metadata=enrich_metadata,
+                    enrich_providers=enrich_providers,
+                    is_album=is_album,
+                    **kwargs
+                )
+            )
+
+    async def _download_track_async(
             self,
             metadata:   TrackMetadata,
             output_dir: str,

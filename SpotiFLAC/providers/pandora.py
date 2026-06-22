@@ -333,23 +333,6 @@ class PandoraProvider(BaseProvider):
     # HTTP helpers
     # ------------------------------------------------------------------
 
-    def _get_json(self, url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
-        merged = {
-            "Accept":     "application/json",
-            "User-Agent": _ua_for_url(url),
-        }
-        if headers:
-            merged.update(headers)
-            
-        try:
-            resp = self._session.get(url, headers=merged, timeout=15)
-            resp.raise_for_status()
-            return resp.json()
-        except httpx.HTTPStatusError as e:
-            raise RuntimeError(f"HTTP {e.response.status_code} for {url}") from e
-        except (httpx.RequestError, ValueError) as e:
-            raise RuntimeError(f"Request failed for {url}: {e}") from e
-
     async def _get_json_async(self, url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
         merged = {
             "Accept":     "application/json",
