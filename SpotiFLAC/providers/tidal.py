@@ -884,46 +884,6 @@ class TidalProvider(BaseProvider):
                     continue
         return None
 
-    def _search_on_mirrors(
-            self,
-            track_name:  str,
-            artist_name: str,
-            isrc:        str = "",
-            duration_ms: int = 0,
-    ) -> str | None:
-        """
-        Variante sincrona, mantenuta per retrocompatibilità con eventuali
-        chiamanti sync esterni. Il path async (download_track_async) usa
-        invece _search_on_mirrors_async, che non blocca l'event loop.
-        """
-        clean_track  = _clean_title(track_name)
-        clean_artist = artist_name.split(",")[0].strip()
-        query        = quote(f"{clean_artist} {clean_track}")
-
-        for api in self._apis:
-            base = api.rstrip("/")
-            for endpoint in [
-                f"{base}/search/?s={query}&limit=5",
-                f"{base}/search?s={query}&limit=5",
-                f"{base}/search/track/?s={query}&limit=5",
-            ]:
-                try:
-                    resp = self._session.get(endpoint, timeout=7)
-                    if resp.status_code == 429:
-                        wait_s = float(resp.headers.get("Retry-After", _RATE_LIMIT_DEFAULT))
-                        _mark_api_rate_limited(base, wait_s)
-                        logger.debug("[tidal] search rate-limited, skip (cooldown %.0fs)", wait_s)
-                        break
-                    if resp.status_code != 200:
-                        continue
-                    t_id = self._extract_best_track_id(resp.json(), track_name, clean_artist, isrc, duration_ms)
-                    if t_id:
-                        _clear_api_rate_limit(base)
-                        return f"https://listen.tidal.com/track/{t_id}"
-                except Exception:
-                    continue
-        return None
-
     @staticmethod
     def _extract_best_track_id(data: Any, track_name: str, artist_name: str, isrc: str = "", duration_ms: int = 0) -> str | None:
         def _iter_items(d: Any) -> Any:
@@ -1002,27 +962,6 @@ class TidalProvider(BaseProvider):
         if tidal_url:
             return tidal_url
             
-        raise TrackNotFoundError(self.name, spotify_track_id)
-
-    def _resolve_via_songlink(self, spotify_track_id: str) -> str:
-        """
-        Mantenuto solo per retrocompatibilità sincrona se chiamato dall'esterno.
-        """
-        resolver = LinkResolver(self._session)
-        # Se serve davvero una fallback sincrona, LinkResolver dovrebbe avere un metodo .resolve_all() sincrono.
-        # Altrimenti, se resolve_all_async è l'unico metodo, l'unico modo sincrono (seppur sconsigliato) è:
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-        # Nota: Questo darà comunque errore se LinkResolver chiama internamente metodi async su un client sync.
-        # Se tutto il tuo programma ora usa 'resolve_spotify_to_tidal_async', questo metodo sync non verrà mai toccato.
-        links = loop.run_until_complete(resolver.resolve_all_async(spotify_track_id))
-        tidal_url = links.get("tidal")
-        if tidal_url:
-            return tidal_url
         raise TrackNotFoundError(self.name, spotify_track_id)
 
     async def _get_download_url_async(self, track_id: int, quality: str) -> str:

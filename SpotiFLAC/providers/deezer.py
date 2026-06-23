@@ -17,6 +17,7 @@ import httpx
 from ..core.tagger import embed_metadata_async, EmbedOptions
 from ..core.models import TrackMetadata, DownloadResult
 from ..core.errors import SpotiflacError, ErrorKind
+from ..core.http import NetworkManager
 from .base import BaseProvider
 from ..core.musicbrainz import mb_result_to_tags, fetch_mb_metadata_async
 from ..core.endpoints import get_deezer_endpoint, get_youtube_endpoints
