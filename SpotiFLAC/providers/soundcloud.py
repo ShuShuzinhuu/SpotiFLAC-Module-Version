@@ -194,6 +194,13 @@ class SoundCloudProvider(BaseProvider):
 
     # ==========================================
     # FORMATTING UTILS
+    # ==========================================
+
+    def _get_hires_artwork(self, url: str | None) -> str:
+        """Returns the high resolution artwork url."""
+        if not url:
+            return ""
+        return url.replace("-large", "-t500x500")
 
     def _format_track(self, data: dict[str, Any]) -> dict[str, Any] | None:
         if not data or not data.get("id"):
@@ -601,11 +608,9 @@ class SoundCloudProvider(BaseProvider):
             )
         else:
             try:
-                async def resolve_links() -> dict[str, str]:
-                    resolver = LinkResolver(AsyncHttpClient("odesli"))
-                    return await resolver.resolve_all_async(metadata.id)
+                resolver = LinkResolver(AsyncHttpClient("odesli"))
+                links = await resolver.resolve_all_async(metadata.id)
 
-                links = await asyncio.to_thread(resolve_links)
                 if sc_url := links.get("soundcloud"):
                     dl_url = await self.get_download_url_async(
                         track_id=None,
