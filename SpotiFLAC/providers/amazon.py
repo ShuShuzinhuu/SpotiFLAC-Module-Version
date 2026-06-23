@@ -413,34 +413,104 @@ class AmazonProvider(BaseProvider):
         parsed = urlparse(_squid_ep) if _squid_ep else None
         origin = f"{parsed.scheme}://{parsed.netloc}" if parsed and parsed.scheme and parsed.netloc else ""
         referer = f"{origin}/" if origin else ""
-        _h = {
-            "accept":       "*/*",
-            "content-type": "application/json",
-            "origin":       origin,
-            "referer":      referer,
-            "user-agent":   _SQUID_UA,
+        
+        headers_nav = {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "accept-language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+            "sec-ch-ua": '"Not(A:Brand";v="99", "Google Chrome";v="149", "Chromium";v="149"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"macOS"',
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "none",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": _SQUID_UA
         }
+
+        headers_api = {
+            "accept": "*/*",
+            "accept-language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+            "content-type": "application/json",
+            "origin": origin,
+            "referer": referer,
+            "sec-ch-ua": '"Not(A:Brand";v="99", "Google Chrome";v="149", "Chromium";v="149"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"macOS"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+            "user-agent": _SQUID_UA
+        }
+        
         try:
-            _squid_ep = get_amazon_endpoint("squid")
             if not _squid_ep:
                 raise RuntimeError("[amazon] Squid endpoint not configured")
             
-            resp_challenge = await self._session.get(f"{_squid_ep}/captcha/challenge", headers=_h, timeout=15)
+            # Step 1: Navighiamo sulla root per estrarre il token di sessione (webNonce) HTML
+            target_home = origin or "https://amz.squid.wtf"
+            resp_home = await self._session.get(target_home, headers=headers_nav, timeout=15)
+            resp_home.raise_for_status()
+
+            web_nonce = None
+            match = re.search(r'window\.__AMZ_WEB\s*=\s*(\{.*?\});', resp_home.text)
+            if match:
+                try:
+                    amz_web_data = json.loads(match.group(1))
+                    web_nonce = amz_web_data.get("n")
+                except json.JSONDecodeError:
+                    pass
+            
+            if not web_nonce:
+                match_fallback = re.search(r'"n"\s*:\s*"(b1\.[^"]+)"', resp_home.text)
+                if match_fallback:
+                    web_nonce = match_fallback.group(1)
+            
+            if not web_nonce:
+                raise RuntimeError("Missing webNonce in HTML")
+            
+            # Step 2: GET Challenge API (Senza Content-Type)
+            h_challenge = headers_api.copy()
+            h_challenge.pop("content-type", None)
+            
+            resp_challenge = await self._session.get(f"{_squid_ep}/captcha/challenge", headers=h_challenge, timeout=15)
+            resp_challenge.raise_for_status()
             challenge = resp_challenge.json()
+            
+            # Step 3: Calcolo PoW
             solution  = await self._solve_pow(challenge)
             encoded   = base64.b64encode(
                 json.dumps({"challenge": challenge, "solution": solution},
                            separators=(",", ":")).encode()
             ).decode()
+            
+            # Step 4: POST Verify
+            verify_payload = {
+                "payload": encoded,
+                "webNonce": web_nonce
+            }
+            
+            # Usiamo l'attributo content di httpx convertito rigorosamente a bytes 
+            # per disinnescare totalmente gli spazi aggiuntivi che innescano il WAF.
+            payload_bytes = json.dumps(verify_payload, separators=(",", ":")).encode("utf-8")
+            
             resp = await self._session.post(
                 f"{_squid_ep}/captcha/verify",
-                json={"payload": encoded}, headers=_h, timeout=15,
+                content=payload_bytes, 
+                headers=headers_api, 
+                timeout=15,
             )
+            resp.raise_for_status()
+            
             self._squid_token = resp.json()["token"]
             logger.info(
                 "[amazon] Squid captcha OK — counter=%d, pow=%.0fms",
                 solution["counter"], solution["time"],
             )
+            
+            # Ritardo artificiale per simulare un umano
+            await asyncio.sleep(1.5)
+            
             return self._squid_token
         except Exception as exc:
             raise RuntimeError(f"[amazon] Squid captcha failed: {exc}") from exc
@@ -468,13 +538,21 @@ class AmazonProvider(BaseProvider):
         parsed = urlparse(_squid_ep) if _squid_ep else None
         origin = f"{parsed.scheme}://{parsed.netloc}" if parsed and parsed.scheme and parsed.netloc else ""
         referer = f"{origin}/" if origin else ""
-        _h = {
-            "accept":       "*/*",
-            "content-type": "application/json",
-            "origin":       origin,
-            "referer":      referer,
-            "user-agent":   _SQUID_UA,
+        
+        headers_api = {
+            "accept": "*/*",
+            "accept-language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+            "origin": origin,
+            "referer": referer,
+            "sec-ch-ua": '"Not(A:Brand";v="99", "Google Chrome";v="149", "Chromium";v="149"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"macOS"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+            "user-agent": _SQUID_UA
         }
+        
         if not _squid_ep:
             logger.warning("[amazon] Squid endpoint not configured; skipping Squid fallback.")
             return None
@@ -501,13 +579,16 @@ class AmazonProvider(BaseProvider):
                 if not token:
                     logger.warning("[amazon] No squid token obtained; skipping attempt.")
                     return None
-                _h["x-captcha-token"] = token
+                
+                h_stream = headers_api.copy()
+                h_stream["x-captcha-token"] = token
+                h_stream.pop("content-type", None)
 
                 async with self._session.stream(
                     "GET",
                     f"{_squid_ep}/stream",
                     params=params,
-                    headers=_h,
+                    headers=h_stream,
                     timeout=120,
                 ) as resp:
 
