@@ -5,7 +5,7 @@ import re
 import asyncio
 from typing import Dict, Optional
 
-from .http import HttpClient, songlink_rate_limiter
+from .http import AsyncHttpClient, async_songlink_rate_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +20,8 @@ class LinkResolver:
         "deezer", "amazonMusic", "tidal", "appleMusic", "spotify", "soundcloud"
     )
 
-    def __init__(self, http_client: HttpClient):
-        self.http = http_client
+    def __init__(self, http_client: AsyncHttpClient | None = None):
+        self.http = http_client or AsyncHttpClient("songlink", rate_limiter=async_songlink_rate_limiter)
         self._deezer_async_cache = {}
 
     async def _safe_get_json(self, url: str, params: Optional[dict] = None) -> dict:
@@ -181,7 +181,6 @@ class LinkResolver:
 
     async def _get_songlink_links_async(self, params: dict[str, str]) -> dict[str, str]:
         try:
-            await asyncio.to_thread(songlink_rate_limiter.wait_for_slot)
             data = await self._safe_get_json(self.SONGLINK_API_URL, params=params)
             return self._process_songlink_response(data)
         except Exception as e:
@@ -197,7 +196,6 @@ class LinkResolver:
     async def _get_songlink_html_links_async(self, raw_id: str) -> Dict[str, str]:
         links: dict[str, str] = {}
         try:
-            await asyncio.to_thread(songlink_rate_limiter.wait_for_slot)
             url = f"https://song.link/s/{urllib.parse.quote(raw_id, safe='')}?userCountry=US"
             resp = await self._safe_get_html(url)
             html = resp.text
@@ -216,7 +214,6 @@ class LinkResolver:
 
     async def _get_songlink_isrc_links_async(self, isrc: str) -> Dict[str, str]:
         try:
-            await asyncio.to_thread(songlink_rate_limiter.wait_for_slot)
             params = {"isrc": isrc.upper().strip(), "userCountry": "US"}
             data = await self._safe_get_json(self.SONGLINK_API_URL, params=params)
             return self._process_songlink_response(data)

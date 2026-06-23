@@ -1298,7 +1298,7 @@ class AmazonProvider(BaseProvider):
     # BaseProvider interface
     # ------------------------------------------------------------------
 
-    async def download_track(
+    async def download_track_async(
             self,
             metadata:            TrackMetadata,
             output_dir:          str,

@@ -5,15 +5,14 @@ Implementa il pattern Protocol/Interface di Go.
 from __future__ import annotations
 import asyncio
 import asyncio.subprocess as _subproc
-import inspect
 import logging
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Callable
 
 from ..core.models import TrackMetadata, DownloadResult, build_filename
-from ..core.http import AsyncHttpClient, AsyncRateLimiter, HttpClient, RetryConfig
+from ..core.http import AsyncHttpClient, AsyncRateLimiter, RetryConfig
 from ..core.errors import SpotiflacError
 
 logger = logging.getLogger(__name__)
@@ -26,7 +25,7 @@ class BaseProvider(ABC):
     la duplicazione presente nei file originali.
     """
     name: str = "base"
-    _is_async: bool = False
+    _is_async: bool = True
 
     def __init__(
             self,
@@ -35,12 +34,6 @@ class BaseProvider(ABC):
             headers:    dict[str, str] | None = None,
             rate_limiter: AsyncRateLimiter | None = None,
     ) -> None:
-        self._http = HttpClient(
-            provider  = self.name,
-            timeout_s = timeout_s,
-            retry     = retry,
-            headers   = headers,
-        )
         self._async_http = AsyncHttpClient(
             provider    = self.name,
             timeout_s   = timeout_s,
@@ -56,9 +49,8 @@ class BaseProvider(ABC):
         """Attach a threading.Event used to signal cancellation to the provider and its HttpClient."""
         try:
             self._stop_event = ev
-            # also propagate to the underlying HttpClient when present
-            if hasattr(self, "_http") and self._http is not None:
-                setattr(self._http, "_stop_event", ev)
+            if hasattr(self, "_async_http") and self._async_http is not None:
+                setattr(self._async_http, "_stop_event", ev)
         except Exception:
             pass
 
@@ -66,67 +58,7 @@ class BaseProvider(ABC):
     # Interface methods — subclasses must implement
     # ------------------------------------------------------------------
 
-    def download_track(
-            self,
-            metadata:   TrackMetadata,
-            output_dir: str,
-            *,
-            filename_format:      str  = "{title} - {artist}",
-            position:             int  = 1,
-            include_track_num:    bool = False,
-            use_album_track_num:  bool = False,
-            first_artist_only:    bool = False,
-            allow_fallback:       bool = True,
-            embed_lyrics:         bool = False,
-            lyrics_providers:     list[str] | None = None,
-            enrich_metadata:      bool = False,
-            enrich_providers:     list[str] | None = None,
-            is_album:             bool = False,
-            **kwargs,
-    ) -> DownloadResult | Awaitable[DownloadResult]:
-        own_async_is_overridden = (
-            type(self).download_track_async is not BaseProvider.download_track_async
-        )
-
-        if not own_async_is_overridden:
-            raise NotImplementedError(
-                f"{type(self).__name__} non implementa né download_track (sync) "
-                f"né download_track_async: deve sovrascrivere almeno uno dei due."
-            )
-
-        coro = self.download_track_async(
-            metadata,
-            output_dir,
-            filename_format=filename_format,
-            position=position,
-            include_track_num=include_track_num,
-            use_album_track_num=use_album_track_num,
-            first_artist_only=first_artist_only,
-            allow_fallback=allow_fallback,
-            embed_lyrics=embed_lyrics,
-            lyrics_providers=lyrics_providers,
-            enrich_metadata=enrich_metadata,
-            enrich_providers=enrich_providers,
-            is_album=is_album,
-            **kwargs,
-        )
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # Nessun event loop attivo nel thread corrente: possiamo usare asyncio.run.
-            return asyncio.run(coro)
-        else:
-            # Già dentro un event loop: non possiamo bloccare con asyncio.run.
-            # Eseguiamo la coroutine in un nuovo loop su un thread separato.
-            import concurrent.futures
-
-            def _run_in_new_loop():
-                return asyncio.run(coro)
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(_run_in_new_loop).result()
-
+    @abstractmethod
     async def download_track_async(
             self,
             metadata:   TrackMetadata,
@@ -145,35 +77,7 @@ class BaseProvider(ABC):
             is_album:             bool = False,
             **kwargs,
     ) -> DownloadResult:
-        own_sync_is_overridden = (
-            type(self).download_track is not BaseProvider.download_track
-        )
-
-        if own_sync_is_overridden:
-            return await asyncio.to_thread(
-                self.download_track,
-                metadata,
-                output_dir,
-                filename_format=filename_format,
-                position=position,
-                include_track_num=include_track_num,
-                use_album_track_num=use_album_track_num,
-                first_artist_only=first_artist_only,
-                allow_fallback=allow_fallback,
-                embed_lyrics=embed_lyrics,
-                lyrics_providers=lyrics_providers,
-                enrich_metadata=enrich_metadata,
-                enrich_providers=enrich_providers,
-                is_album=is_album,
-                **kwargs,
-            )
-
-        # Né download_track né download_track_async sono stati sovrascritti
-        # dalla sottoclasse: configurazione non valida del provider.
-        raise NotImplementedError(
-            f"{type(self).__name__} non implementa download_track_async "
-            f"né download_track: deve sovrascrivere almeno uno dei due."
-        )
+        raise NotImplementedError
 
     # ------------------------------------------------------------------
     # Shared helpers

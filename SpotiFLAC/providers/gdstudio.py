@@ -254,7 +254,7 @@ class GDStudioProvider(BaseProvider):
         tracks = [self._item_to_metadata(it, i+1) for i, it in enumerate(items)]
         return f"Search: {query}", tracks
 
-    async def download_track(self, metadata: TrackMetadata, output_dir: str, **kwargs: Any) -> DownloadResult:
+    async def download_track_async(self, metadata: TrackMetadata, output_dir: str, **kwargs: Any) -> DownloadResult:
         try:
             extra = metadata.extra_info or {}
             raw_track_id = extra.get("raw_track_id", "")
