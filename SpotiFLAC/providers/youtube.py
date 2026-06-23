@@ -12,9 +12,9 @@ from urllib.parse import quote, urlparse, parse_qs
 import httpx
 import yt_dlp
 
-from ..core.http import NetworkManager
+from ..core.http import AsyncHttpClient
 from ..core.models import TrackMetadata, DownloadResult
-from ..core.errors import SpotiflacError
+from ..core.errors import SpotiflacError, ErrorKind
 from .base import BaseProvider
 from ..core.tagger import embed_metadata_async, EmbedOptions
 from ..core.musicbrainz import mb_result_to_tags
@@ -40,11 +40,10 @@ INNERTUBE_CLIENT_VERSION = "1.20240801.01.00"
 
 class YouTubeProvider(BaseProvider):
     name = "youtube"
+    _is_async = True
 
     def __init__(self, timeout_s: int = 120) -> None:
-        super().__init__(timeout_s=timeout_s)
-        self._session = NetworkManager.get_async_client()
-        self._session.headers.update({"User-Agent": _DEFAULT_UA})
+        super().__init__(timeout_s=timeout_s, headers={"User-Agent": _DEFAULT_UA})
         self._enrichment_cache: dict[str, dict] = {}
 
     def set_progress_callback(self, cb: Callable[[int, int], None]) -> None:
@@ -80,7 +79,7 @@ class YouTubeProvider(BaseProvider):
             "videoId": video_id
         }
         
-        resp = await self._session.post(url, json=payload, timeout=10)
+        resp = await self._async_http.post(url, json=payload, timeout=10)
         resp.raise_for_status()
         data = resp.json()
 
@@ -106,7 +105,7 @@ class YouTubeProvider(BaseProvider):
             "browseId": browse_id
         }
 
-        resp = await self._session.post(url, json=payload, timeout=15)
+        resp = await self._async_http.post(url, json=payload, timeout=15)
         resp.raise_for_status()
         data = resp.json()
 
@@ -177,7 +176,7 @@ class YouTubeProvider(BaseProvider):
     async def _fetch_continuation_async(self, token: str) -> dict | None:
         url = f"https://music.youtube.com/youtubei/v1/browse?alt=json&ctoken={quote(token)}&continuation={quote(token)}"
         try:
-            resp = await self._session.post(
+            resp = await self._async_http.post(
                 url, json={"context": {"client": {"clientName": "WEB_REMIX", "clientVersion": INNERTUBE_CLIENT_VERSION}}}, timeout=10
             )
             return resp.json() if resp.is_success else None
@@ -196,7 +195,7 @@ class YouTubeProvider(BaseProvider):
     async def _enrich_metadata_with_odesli_async(self, metadata: TrackMetadata, platform_url: str) -> str | None:
         api_url = f"https://api.song.link/v1-alpha.1/links?url={quote(platform_url)}"
         try:
-            resp = await self._session.get(api_url, timeout=10)
+            resp = await self._async_http.get(api_url, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 links = data.get("linksByPlatform", {})
@@ -213,7 +212,7 @@ class YouTubeProvider(BaseProvider):
                     if match:
                         deezer_id = match.group(1)
                         try:
-                            dz_resp = await self._session.get(f"https://api.deezer.com/track/{deezer_id}", timeout=10)
+                            dz_resp = await self._async_http.get(f"https://api.deezer.com/track/{deezer_id}", timeout=10)
                             if dz_resp.status_code == 200:
                                 dz_data = dz_resp.json()
                                 if dz_data.get("isrc"): metadata.isrc = dz_data["isrc"]
@@ -252,7 +251,7 @@ class YouTubeProvider(BaseProvider):
         }
 
         try:
-            resp = await self._session.post(url, json=payload, headers={"User-Agent": _DEFAULT_UA}, timeout=10)
+            resp = await self._async_http.post(url, json=payload, headers={"User-Agent": _DEFAULT_UA}, timeout=10)
             resp.raise_for_status()
 
             data = resp.json()
@@ -269,8 +268,6 @@ class YouTubeProvider(BaseProvider):
         match = re.search(r'(?:v=|/v/|youtu\.be/|/embed/)([a-zA-Z0-9_-]{11})', url)
         return match.group(1) if match else None
 
-    # L'unico metodo lasciato sync perché yt-dlp blocca il sub-process. 
-    # Verrà chiamato tramite asyncio.to_thread!
     def _download_direct_innertube(self, video_id: str, dest_path: str) -> bool:
         def _yt_dlp_progress(d: dict) -> None:
             if d.get('status') == 'downloading':
@@ -304,6 +301,10 @@ class YouTubeProvider(BaseProvider):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl: ydl.download([url])
             if os.path.exists(dest_path): return True
         except Exception as e:
+            # L'eccezione DownloadSuccessfullyStarted salirà fin qui dal thread
+            # Lasciamo che propaghi al blocco superiore se è la nostra!
+            if "DownloadSuccessfullyStarted" in str(e):
+                raise e
             logger.warning(f"[youtube] yt-dlp error: {e}")
 
         return False
@@ -320,12 +321,12 @@ class YouTubeProvider(BaseProvider):
                 zarz_data = get_youtube_endpoints("zarz_clean")
                 api_url = (zarz_data[0] if zarz_data else base_url) if isinstance(zarz_data, list) else (zarz_data or base_url)
                 
-                resp = await self._session.post(api_url, json=payload_v10, headers=headers, timeout=10)
+                resp = await self._async_http.post(api_url, json=payload_v10, headers=headers, timeout=10)
 
                 if resp.status_code == 404:
                     payload_v7 = {"url": video_url, "isAudioOnly": True, "aFormat": "mp3"}
                     api_url = f"{base_url.rstrip('/')}/api/json"
-                    resp = await self._session.post(api_url, json=payload_v7, headers=headers, timeout=10)
+                    resp = await self._async_http.post(api_url, json=payload_v7, headers=headers, timeout=10)
 
                 if resp.status_code in (200, 202):
                     data = resp.json()
@@ -338,14 +339,14 @@ class YouTubeProvider(BaseProvider):
 
     async def _request_yt1d_async(self, video_url: str) -> str | None:
         try:
-            res_config = await self._session.get("https://yt1d.io/results/", headers={"User-Agent": _DEFAULT_UA}, timeout=10)
+            res_config = await self._async_http.get("https://yt1d.io/results/", headers={"User-Agent": _DEFAULT_UA}, timeout=10)
             nonce_match = re.search(r'"nonce"\s*:\s*"([^"]+)"', res_config.text)
             if not nonce_match: return None
 
             payload = {"action": "process_youtube_audio_download", "video_url": video_url, "quality": "m4a", "nonce": nonce_match.group(1)}
             headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "Origin": "https://yt1d.io", "Referer": "https://yt1d.io/results/", "User-Agent": _DEFAULT_UA}
             
-            res_audio = await self._session.post("https://yt1d.io/wp-admin/admin-ajax.php", data=payload, headers=headers, timeout=15)
+            res_audio = await self._async_http.post("https://yt1d.io/wp-admin/admin-ajax.php", data=payload, headers=headers, timeout=15)
             if res_audio.status_code == 200:
                 data = res_audio.json()
                 dl_url = data.get("downloadUrl") or data.get("downloadURL") or data.get("url")
@@ -383,20 +384,30 @@ class YouTubeProvider(BaseProvider):
 
             download_success = False
 
-            if await asyncio.to_thread(self._download_direct_innertube, video_id, str(dest)):
-                download_success = True
-            else:
+            try:
+                if await asyncio.to_thread(self._download_direct_innertube, video_id, str(dest)):
+                    download_success = True
+            except Exception as e:
+                if "DownloadSuccessfullyStarted" in str(e):
+                    # Ripropaghiamo l'errore fittizio allo script di test esterno!
+                    raise e
+                logger.warning(f"[youtube] yt-dlp fallito in thread: {e}")
+
+            if not download_success:
                 download_sources = [("Cobalt", self._request_cobalt_async), ("YT1D", self._request_yt1d_async)]
                 for source_name, get_url_func in download_sources:
-                    dl_url = await get_url_func(yt_url) # <-- CORRETTO
+                    dl_url = await get_url_func(yt_url) 
                     if not dl_url: continue
 
                     logger.info(f"[youtube] Attempting download via {source_name}...")
                     try:
-                        await self._http.stream_to_file_async(dl_url, str(dest), self._progress_cb, extra_headers={"User-Agent": _DEFAULT_UA})
+                        await self._async_http.stream_to_file(dl_url, str(dest), self._progress_cb, extra_headers={"User-Agent": _DEFAULT_UA})
                         download_success = True
                         break
                     except Exception as e:
+                        # Se è la nostra eccezione la rilanciamo fuori
+                        if "DownloadSuccessfullyStarted" in str(e):
+                            raise e
                         logger.warning(f"[youtube] Download via {source_name} failed: {e}")
                         if os.path.exists(str(dest)):
                             try: os.remove(str(dest))
@@ -411,36 +422,39 @@ class YouTubeProvider(BaseProvider):
 
             mb_tags = {}
             if mb_fetcher:
-                res = await asyncio.wrap_future(mb_fetcher.future) if hasattr(mb_fetcher.future, 'add_done_callback') else mb_fetcher.future.result()
-                mb_tags = mb_result_to_tags(res)
-                if res:
-                    mapping = {
-                        "mbid_track":       "MUSICBRAINZ_TRACKID",
-                        "mbid_album":       "MUSICBRAINZ_ALBUMID",
-                        "mbid_artist":      "MUSICBRAINZ_ARTISTID",
-                        "mbid_relgroup":    "MUSICBRAINZ_RELEASEGROUPID",
-                        "mbid_albumartist": "MUSICBRAINZ_ALBUMARTISTID",
-                        "barcode":          "BARCODE",
-                        "label":            "LABEL",
-                        "organization":     "ORGANIZATION",
-                        "country":          "RELEASECOUNTRY",
-                        "script":           "SCRIPT",
-                        "status":           "RELEASESTATUS",
-                        "media":            "MEDIA",
-                        "type":             "RELEASETYPE",
-                        "artist_sort":      "ARTISTSORT",
-                        "albumartist_sort": "ALBUMARTISTSORT",
-                        "catalognumber":    "CATALOGNUMBER",
-                    }
-                    for mb_key, tag_name in mapping.items():
-                        val = res.get(mb_key)
-                        if val:
-                            mb_tags[tag_name] = str(val)
-                    if res.get("original_date"):
-                        mb_tags["ORIGINALDATE"] = res["original_date"]
-                        mb_tags["ORIGINALYEAR"] = res["original_date"][:4]
-                    if res.get("catalognumber"):
-                        mb_tags["CATALOGNUMBER"] = res["catalognumber"]
+                try:
+                    res = await asyncio.to_thread(mb_fetcher.future.result)
+                    mb_tags = mb_result_to_tags(res)
+                    if res:
+                        mapping = {
+                            "mbid_track":       "MUSICBRAINZ_TRACKID",
+                            "mbid_album":       "MUSICBRAINZ_ALBUMID",
+                            "mbid_artist":      "MUSICBRAINZ_ARTISTID",
+                            "mbid_relgroup":    "MUSICBRAINZ_RELEASEGROUPID",
+                            "mbid_albumartist": "MUSICBRAINZ_ALBUMARTISTID",
+                            "barcode":          "BARCODE",
+                            "label":            "LABEL",
+                            "organization":     "ORGANIZATION",
+                            "country":          "RELEASECOUNTRY",
+                            "script":           "SCRIPT",
+                            "status":           "RELEASESTATUS",
+                            "media":            "MEDIA",
+                            "type":             "RELEASETYPE",
+                            "artist_sort":      "ARTISTSORT",
+                            "albumartist_sort": "ALBUMARTISTSORT",
+                            "catalognumber":    "CATALOGNUMBER",
+                        }
+                        for mb_key, tag_name in mapping.items():
+                            val = res.get(mb_key)
+                            if val:
+                                mb_tags[tag_name] = str(val)
+                        if res.get("original_date"):
+                            mb_tags["ORIGINALDATE"] = res["original_date"]
+                            mb_tags["ORIGINALYEAR"] = res["original_date"][:4]
+                        if res.get("catalognumber"):
+                            mb_tags["CATALOGNUMBER"] = res["catalognumber"]
+                except Exception as e:
+                    logger.debug(f"[youtube] Fallimento MusicBrainz in background: {e}")
 
             opts = EmbedOptions(
                 first_artist_only=first_artist_only,
@@ -453,7 +467,7 @@ class YouTubeProvider(BaseProvider):
                 enrich_qobuz_token=qobuz_token or "",
                 is_album=is_album,
             )
-            await embed_metadata_async(str(dest), metadata, opts, session=self._session)
+            await embed_metadata_async(str(dest), metadata, opts)
 
             return DownloadResult.ok(self.name, str(dest), fmt="m4a")
 
@@ -461,5 +475,7 @@ class YouTubeProvider(BaseProvider):
             logger.error(f"[youtube] {exc}")
             return DownloadResult.fail(self.name, str(exc))
         except Exception as exc:
+            if "DownloadSuccessfullyStarted" in str(exc):
+                raise exc
             logger.exception("[youtube] Unexpected error")
             return DownloadResult.fail(self.name, f"Unexpected: {exc}")
