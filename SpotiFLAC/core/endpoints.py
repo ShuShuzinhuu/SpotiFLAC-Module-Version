@@ -82,7 +82,13 @@ def get_deezer_endpoint(key: str) -> str:
     return REGISTRY.get("deezer", {}).get(key, "")
 
 def get_amazon_endpoint(key: str) -> str:
-    """Chiavi: 'musicdl', 'spotbye1', 'spotbye2', 'zarz', 'squid'"""
+    """
+    Chiavi valide:
+    - Download: 'musicdl', 'spotbye1', 'spotbye2', 'zarz', 'community'
+    - S: 's', 's_home', 's_challenge', 's_verify', 's_stream', 's_queue'
+    - Resolver: 'resolver_songstats', 'resolver_songlink_api', 'resolver_songlink_html', 'resolver_spotify', 'resolver_deezer'
+    - Base: 'amazon_music_base'
+    """
     return REGISTRY.get("amazon", {}).get(key, "")
 
 def get_apple_music_endpoint(key: str) -> str:

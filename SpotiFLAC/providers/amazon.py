@@ -25,9 +25,9 @@ from ..core.console import print_source_banner
 from ..core.errors import SpotiflacError, ErrorKind
 from ..core.models import TrackMetadata, DownloadResult
 from ..core.musicbrainz import mb_result_to_tags
-from ..core.tagger import EmbedOptions
+from ..core.tagger import EmbedOptions, embed_metadata_async
 from ..core.endpoints import get_amazon_endpoint
-from ..core.quality import get_squid_tier, to_zarz_codec
+from ..core.quality import to_zarz_codec
 from ..core.flac_validation import validate_and_repair_if_needed
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ _DEFAULT_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/131.0.0.0 Safari/537.36"
 )
-_SQUID_UA   = (
+_S_UA   = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/149.0.0.0 Safari/537.36"
@@ -135,7 +135,7 @@ class AmazonProvider(BaseProvider):
         super().__init__(timeout_s=timeout_s)
         self._session = NetworkManager.get_async_client()
         self._session.headers.update({"User-Agent": _DEFAULT_UA})
-        self._squid_token: str | None = None
+        self._s_token: str | None = None
 
     def set_progress_callback(self, cb: Callable[[int, int], None]) -> None:
         super().set_progress_callback(cb)
@@ -357,7 +357,7 @@ class AmazonProvider(BaseProvider):
         raise RuntimeError(f"Could not resolve Amazon URL for {track_id} via any method.")
 
     # ------------------------------------------------------------------
-    # Squid PoW Captcha + Direct FLAC Download
+    # s PoW Captcha + Direct FLAC Download
     # ------------------------------------------------------------------
 
     async def _solve_pow(self, challenge: dict) -> dict:
@@ -404,13 +404,21 @@ class AmazonProvider(BaseProvider):
             "time":       round((time.time() - t0) * 1000, 1),
         }
 
-    async def _get_squid_token(self, force_refresh: bool = False) -> str:
-        if self._squid_token and not force_refresh:
+    async def _get_s_token(self, force_refresh: bool = False) -> str:
+        if self._s_token and not force_refresh:
             self._start_prefetch_if_needed()
-            return self._squid_token
+            return self._s_token
 
-        _squid_ep = get_amazon_endpoint("squid")
-        parsed = urlparse(_squid_ep) if _squid_ep else None
+        # Recuperiamo gli endpoint esatti dal registro cifrato
+        s_home_url = get_amazon_endpoint("s_home")
+        s_challenge_url = get_amazon_endpoint("s_challenge")
+        s_verify_url = get_amazon_endpoint("s_verify")
+        
+        if not all([s_home_url, s_challenge_url, s_verify_url]):
+            raise RuntimeError("[amazon] s endpoints not fully configured in registry")
+
+        # Ricaviamo origin e referer dinamicamente dall'URL della home
+        parsed = urlparse(s_home_url)
         origin = f"{parsed.scheme}://{parsed.netloc}" if parsed and parsed.scheme and parsed.netloc else ""
         referer = f"{origin}/" if origin else ""
         
@@ -425,7 +433,7 @@ class AmazonProvider(BaseProvider):
             "sec-fetch-site": "none",
             "sec-fetch-user": "?1",
             "upgrade-insecure-requests": "1",
-            "user-agent": _SQUID_UA
+            "user-agent": _S_UA
         }
 
         headers_api = {
@@ -440,16 +448,12 @@ class AmazonProvider(BaseProvider):
             "sec-fetch-dest": "empty",
             "sec-fetch-mode": "cors",
             "sec-fetch-site": "same-origin",
-            "user-agent": _SQUID_UA
+            "user-agent": _S_UA
         }
         
         try:
-            if not _squid_ep:
-                raise RuntimeError("[amazon] Squid endpoint not configured")
-            
             # Step 1: Navighiamo sulla root per estrarre il token di sessione (webNonce) HTML
-            target_home = origin or "https://amz.squid.wtf"
-            resp_home = await self._session.get(target_home, headers=headers_nav, timeout=15)
+            resp_home = await self._session.get(s_home_url, headers=headers_nav, timeout=15)
             resp_home.raise_for_status()
 
             web_nonce = None
@@ -473,7 +477,7 @@ class AmazonProvider(BaseProvider):
             h_challenge = headers_api.copy()
             h_challenge.pop("content-type", None)
             
-            resp_challenge = await self._session.get(f"{_squid_ep}/captcha/challenge", headers=h_challenge, timeout=15)
+            resp_challenge = await self._session.get(s_challenge_url, headers=h_challenge, timeout=15)
             resp_challenge.raise_for_status()
             challenge = resp_challenge.json()
             
@@ -490,52 +494,50 @@ class AmazonProvider(BaseProvider):
                 "webNonce": web_nonce
             }
             
-            # Usiamo l'attributo content di httpx convertito rigorosamente a bytes 
-            # per disinnescare totalmente gli spazi aggiuntivi che innescano il WAF.
             payload_bytes = json.dumps(verify_payload, separators=(",", ":")).encode("utf-8")
             
             resp = await self._session.post(
-                f"{_squid_ep}/captcha/verify",
+                s_verify_url,
                 content=payload_bytes, 
                 headers=headers_api, 
                 timeout=15,
             )
             resp.raise_for_status()
             
-            self._squid_token = resp.json()["token"]
+            self._s_token = resp.json()["token"]
             logger.info(
-                "[amazon] Squid captcha OK — counter=%d, pow=%.0fms",
+                "[amazon] s captcha OK — counter=%d, pow=%.0fms",
                 solution["counter"], solution["time"],
             )
             
-            # Ritardo artificiale per simulare un umano
             await asyncio.sleep(1.5)
             
-            return self._squid_token
+            return self._s_token
         except Exception as exc:
-            raise RuntimeError(f"[amazon] Squid captcha failed: {exc}") from exc
-
-    async def _prefetch_squid_token(self) -> None:
+            raise RuntimeError(f"[amazon] s captcha failed: {exc}") from exc
+    async def _prefetch_s_token(self) -> None:
         try:
-            self._squid_token = None
-            await self._get_squid_token()
+            self._s_token = None
+            await self._get_s_token()
         except Exception as exc:
-            logger.debug("[amazon] Squid pre-fetch failed (non-blocking): %s", exc)
+            logger.debug("[amazon] s pre-fetch failed (non-blocking): %s", exc)
 
     def _start_prefetch_if_needed(self) -> None:
         t = self.__class__._prefetch_task
         if t is None or t.done():
-            self.__class__._prefetch_task = asyncio.create_task(self._prefetch_squid_token())
+            self.__class__._prefetch_task = asyncio.create_task(self._prefetch_s_token())
 
-    async def _download_from_squid_api(self, asin: str, output_dir: str, requested_quality: str) -> tuple[str, dict] | None:
-        """
-        Download a track directly from a Squid API via GET /api/stream.
-        Handles both native FLAC responses and M4A containers with FLAC stream inside.
-        """
-        logger.info("[amazon] Trying Squid API (ASIN: %s)", asin)
+    async def _download_from_s_api(self, asin: str, output_dir: str, requested_quality: str) -> tuple[str, dict] | None:
+        logger.info("[amazon] Trying s API (ASIN: %s)", asin)
  
-        _squid_ep = get_amazon_endpoint("squid")
-        parsed = urlparse(_squid_ep) if _squid_ep else None
+        # Recuperiamo l'endpoint per lo streaming dal registro
+        s_stream_url = get_amazon_endpoint("s_stream")
+        if not s_stream_url:
+            logger.warning("[amazon] s stream endpoint not configured; skipping s fallback.")
+            return None
+
+        # Deriviamo dinamicamente origin/referer
+        parsed = urlparse(s_stream_url)
         origin = f"{parsed.scheme}://{parsed.netloc}" if parsed and parsed.scheme and parsed.netloc else ""
         referer = f"{origin}/" if origin else ""
         
@@ -550,18 +552,14 @@ class AmazonProvider(BaseProvider):
             "sec-fetch-dest": "empty",
             "sec-fetch-mode": "cors",
             "sec-fetch-site": "same-origin",
-            "user-agent": _SQUID_UA
+            "user-agent": _S_UA
         }
-        
-        if not _squid_ep:
-            logger.warning("[amazon] Squid endpoint not configured; skipping Squid fallback.")
-            return None
 
         q_str = str(requested_quality).lower().strip()
         tier  = "best" if q_str in ["hi_res", "hires", "hi-res", "hi-res-lossless"] else "hd"
 
         params    = {"asin": asin, "country": "US", "tier": tier}
-        temp_file = os.path.join(output_dir, f"{asin}_squid.tmp")
+        temp_file = os.path.join(output_dir, f"{asin}_s.tmp")
 
         def _cleanup() -> None:
             if os.path.exists(temp_file):
@@ -575,9 +573,9 @@ class AmazonProvider(BaseProvider):
 
         for attempt in range(max_attempts):
             try:
-                token = await self._get_squid_token(force_refresh=(attempt > 0))
+                token = await self._get_s_token(force_refresh=(attempt > 0))
                 if not token:
-                    logger.warning("[amazon] No squid token obtained; skipping attempt.")
+                    logger.warning("[amazon] No s token obtained; skipping attempt.")
                     return None
                 
                 h_stream = headers_api.copy()
@@ -586,28 +584,28 @@ class AmazonProvider(BaseProvider):
 
                 async with self._session.stream(
                     "GET",
-                    f"{_squid_ep}/stream",
+                    s_stream_url,
                     params=params,
                     headers=h_stream,
                     timeout=120,
                 ) as resp:
 
                     if resp.status_code in (401, 403) and attempt < max_attempts - 1:
-                        logger.info("[amazon] Squid token rejected, refreshing…")
-                        self._squid_token = None
+                        logger.info("[amazon] s token rejected, refreshing…")
+                        self._s_token = None
                         await asyncio.sleep(base_delay_s)
                         continue
 
                     if resp.status_code in (502, 503, 504) and attempt < max_attempts - 1:
                         logger.warning(
-                            "[amazon] Squid API returned HTTP %d, retrying after backoff…",
+                            "[amazon] s API returned HTTP %d, retrying after backoff…",
                             resp.status_code,
                         )
                         await asyncio.sleep(base_delay_s * (attempt + 1))
                         continue
 
                     if resp.status_code != 200:
-                        logger.warning("[amazon] Squid API returned HTTP %d", resp.status_code)
+                        logger.warning("[amazon] s API returned HTTP %d", resp.status_code)
                         return None
 
                     total        = int(resp.headers.get("content-length", 0))
@@ -622,10 +620,10 @@ class AmazonProvider(BaseProvider):
                                     detected_ext = ".flac"
                                 elif len(chunk) >= 8 and chunk[4:8] == b"ftyp":
                                     detected_ext = ".m4a"
-                                    logger.info("[amazon] Squid stream is M4A container (will demux if FLAC inside)")
+                                    logger.info("[amazon] s stream is M4A container (will demux if FLAC inside)")
                                 else:
                                     logger.warning(
-                                        "[amazon] Squid response is unrecognized format (magic=%s)",
+                                        "[amazon] s response is unrecognized format (magic=%s)",
                                         chunk[:min(8, len(chunk))].hex(),
                                     )
                                     format_error = True
@@ -639,7 +637,7 @@ class AmazonProvider(BaseProvider):
                         _cleanup()
                         return None
 
-                final_file = os.path.join(output_dir, f"{asin}_squid{detected_ext}")
+                final_file = os.path.join(output_dir, f"{asin}_s{detected_ext}")
                 if os.path.exists(final_file):
                     os.remove(final_file)
                 os.rename(temp_file, final_file)
@@ -647,7 +645,7 @@ class AmazonProvider(BaseProvider):
                 if detected_ext == ".m4a":
                     inner_codec = await self._get_codec(final_file)
                     if inner_codec == "flac":
-                        flac_out = os.path.join(output_dir, f"{asin}_squid.flac")
+                        flac_out = os.path.join(output_dir, f"{asin}_s.flac")
                         proc = await asyncio.create_subprocess_exec(
                             _ffmpeg_path(), "-y", "-i", final_file, "-c", "copy", flac_out,
                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -656,11 +654,11 @@ class AmazonProvider(BaseProvider):
                         if proc.returncode == 0 and os.path.exists(flac_out):
                             os.remove(final_file)
                             final_file = flac_out
-                            logger.info("[amazon] Squid: demuxed FLAC stream from M4A container")
+                            logger.info("[amazon] s: demuxed FLAC stream from M4A container")
                         else:
-                            logger.warning("[amazon] Squid: FLAC demux failed, keeping M4A")
+                            logger.warning("[amazon] s: FLAC demux failed, keeping M4A")
 
-                logger.info("[amazon] Squid download complete — %.1f MB (%s)",
+                logger.info("[amazon] s download complete — %.1f MB (%s)",
                             written / 1024 / 1024, os.path.splitext(final_file)[1])
                 
                 if final_file.lower().endswith(".flac"):
@@ -675,14 +673,13 @@ class AmazonProvider(BaseProvider):
                 return final_file, {}
 
             except Exception as exc:
-                logger.warning("[amazon] Squid error (attempt %d/%d): %s", attempt + 1, max_attempts, exc)
+                logger.warning("[amazon] s error (attempt %d/%d): %s", attempt + 1, max_attempts, exc)
                 _cleanup()
                 if attempt < max_attempts - 1:
                     await asyncio.sleep(base_delay_s * (attempt + 1))
                     continue
 
         return None
-
     # ------------------------------------------------------------------
     # Download + Decrypt
     # ------------------------------------------------------------------
@@ -1201,11 +1198,11 @@ class AmazonProvider(BaseProvider):
         fallback_quality = str(quality).upper()
  
         _zarz_ep = get_amazon_endpoint("zarz")
-        _squid_ep = get_amazon_endpoint("squid")
+        _s_ep = get_amazon_endpoint("s")
         _spotbye1_ep = get_amazon_endpoint("spotbye1")
         _spotbye2_ep = get_amazon_endpoint("spotbye2")
         _musicdl_ep = get_amazon_endpoint("musicdl")
-        if not any([_zarz_ep, _squid_ep, _spotbye1_ep, _spotbye2_ep, _musicdl_ep]):
+        if not any([_zarz_ep, _s_ep, _spotbye1_ep, _spotbye2_ep, _musicdl_ep]):
             raise SpotiflacError(
                 ErrorKind.UNAVAILABLE,
                 "No Amazon endpoints configured in registry",
@@ -1221,18 +1218,18 @@ class AmazonProvider(BaseProvider):
         if zarz_result and os.path.exists(zarz_result[0]):
             return zarz_result
 
-        logger.info("[amazon] Zarz failed. Trying Squid API…")
+        logger.info("[amazon] Zarz failed. Trying s API…")
 
-        # 2. SQUID API (Fallback 1)
+        # 2. s API (Fallback 1)
         print_source_banner("amazon", "", fallback_quality)
         try:
-            squid_result = await self._download_from_squid_api(asin, output_dir, quality)
-            if squid_result and os.path.exists(squid_result[0]):
-                return squid_result
+            s_result = await self._download_from_s_api(asin, output_dir, quality)
+            if s_result and os.path.exists(s_result[0]):
+                return s_result
         except Exception as exc:
-            logger.warning("[amazon] Squid failed: %s", exc)
+            logger.warning("[amazon] s failed: %s", exc)
 
-        logger.info("[amazon] Squid failed. Trying Spotbye1…")
+        logger.info("[amazon] s failed. Trying Spotbye1…")
 
         # 3. SPOTBYE 1 (Fallback 2)
         print_source_banner("amazon", "", fallback_quality)
@@ -1449,7 +1446,7 @@ class AmazonProvider(BaseProvider):
                     is_album          = is_album,
                     extra_tags        = mb_tags,
                 )
-                await asyncio.to_thread(embed_metadata, dest_ext, metadata, opts)
+                await asyncio.to_thread(embed_metadata_async, dest_ext, metadata, opts)
             else:
                 track_num    = position
                 if use_album_track_num and _safe_int(metadata.track_number) > 0:
