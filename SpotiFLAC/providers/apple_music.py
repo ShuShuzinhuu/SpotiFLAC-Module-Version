@@ -7,9 +7,7 @@ import time
 from collections import OrderedDict
 from typing import Any
 
-import httpx
-
-from ..core.http import NetworkManager, RetryConfig
+from ..core.http import RetryConfig
 from .base import BaseProvider
 from ..core.console import print_source_banner, print_quality_fallback
 from ..core.download_validation import validate_downloaded_track_async
@@ -31,15 +29,6 @@ class AppleMusicProvider(BaseProvider):
     MAX_POLLING_WAIT_S = 3600
 
     def __init__(self, timeout_s: int = 30, proxy_api_key: str = "") -> None:
-        super().__init__(timeout_s=timeout_s, retry=RetryConfig(max_attempts=2))
-        
-        # Inizializziamo il client come 100% Async
-        self._session = NetworkManager.get_async_client()
-
-        # Cache per gli URL di ricerca
-        self._url_cache: OrderedDict[str, str] = OrderedDict()
-        self._cache_limit = 200
-
         headers = {
             "User-Agent": _DEFAULT_UA,
             "Accept": "application/json"
@@ -48,7 +37,11 @@ class AppleMusicProvider(BaseProvider):
             headers["Authorization"] = f"Bearer {proxy_api_key}"
             headers["X-API-Key"] = proxy_api_key
 
-        self._session.headers.update(headers)
+        super().__init__(timeout_s=timeout_s, retry=RetryConfig(max_attempts=2), headers=headers)
+
+        # Cache per gli URL di ricerca
+        self._url_cache: OrderedDict[str, str] = OrderedDict()
+        self._cache_limit = 200
 
     def _normalize_codec(self, quality: str) -> str:
         q = quality.lower()
@@ -61,12 +54,11 @@ class AppleMusicProvider(BaseProvider):
     async def _resolve_track_url_async(self, isrc: str) -> str | None:
         """Uses l'API pubblica di iTunes per trovare l'URL della track delegando l'encoding all'AsyncClient httpx."""
         try:
-            resp = await self._session.get(
+            resp = await self._async_http.get(
                 "https://itunes.apple.com/lookup",
                 params={"isrc": isrc},
                 timeout=15
             )
-            resp.raise_for_status()
             data = resp.json()
             if data.get("resultCount", 0) > 0:
                 return data["results"][0].get("trackViewUrl")
@@ -85,7 +77,7 @@ class AppleMusicProvider(BaseProvider):
                 self._url_cache.move_to_end(cache_key)
                 return self._url_cache[cache_key]
 
-            resp = await self._session.get(
+            resp = await self._async_http.get(
                 "https://itunes.apple.com/search",
                 params={"term": query, "entity": "song", "limit": 10},
                 timeout=15
@@ -147,7 +139,7 @@ class AppleMusicProvider(BaseProvider):
         # 1. Tentativo Diretto (App2)
         proxy_direct = get_apple_music_endpoint("proxy_direct")
         try:
-            resp = await self._session.post(
+            resp = await self._async_http.post(
                 proxy_direct,
                 json={"url": track_url, "codec": codec},
                 headers=req_headers,
@@ -157,15 +149,13 @@ class AppleMusicProvider(BaseProvider):
             if resp.headers.get("cf-mitigated", "").lower() == "challenge":
                 raise SpotiflacError(ErrorKind.NETWORK_ERROR, "Proxy bloccato da Cloudflare challenge", self.name)
 
-            resp.raise_for_status()
             data = resp.json()
             if data.get("success") and data.get("stream_url"):
                 await record_success_async(self.name, proxy_direct)
                 return proxy_direct, data["stream_url"]
 
-        except httpx.HTTPStatusError as e:
-            err_msg = e.response.json().get("error") if e.response.text else str(e)
-            logger.debug("[apple-music] app2 rifiutato per %s: %s", codec, err_msg)
+        except SpotiflacError as e:
+            logger.debug("[apple-music] app2 rifiutato per %s: %s", codec, e)
             await record_failure_async(self.name, proxy_direct)
         except Exception as e:
             logger.debug("[apple-music] Fallback ad app2 fallito: %s", e)
@@ -175,7 +165,7 @@ class AppleMusicProvider(BaseProvider):
         _proxy_queued = get_apple_music_endpoint("proxy_queued")
         download_endpoint = f"{_proxy_queued}/download"
         try:
-            resp = await self._session.post(
+            resp = await self._async_http.post(
                 download_endpoint,
                 json={"url": track_url, "codec": codec},
                 headers=req_headers,
@@ -185,7 +175,6 @@ class AppleMusicProvider(BaseProvider):
             if resp.headers.get("cf-mitigated", "").lower() == "challenge":
                 return None, None
 
-            resp.raise_for_status()
             job_data = resp.json()
             job_id = job_data.get("job_id")
 
@@ -205,8 +194,7 @@ class AppleMusicProvider(BaseProvider):
                     elapsed = int(time.time() - start_time)
                     print(f"  ⏳ Apple Music: in attesa del job {job_id[:8]}... ({elapsed}s trascorsi)")
 
-                st_resp = await self._session.get(f"{_proxy_queued}/status/{job_id}", timeout=15)
-                st_resp.raise_for_status()
+                st_resp = await self._async_http.get(f"{_proxy_queued}/status/{job_id}", timeout=15)
                 st_data = st_resp.json()
                 status = st_data.get("status", "").lower()
 
@@ -345,7 +333,7 @@ class AppleMusicProvider(BaseProvider):
             print_source_banner("Apple Music", "", used_codec.upper())
 
             # Download su disco via Async Client
-            await self._http.stream_to_file_async(stream_url, str(dest), self._progress_cb)
+            await self._async_http.stream_to_file(stream_url, str(dest), self._progress_cb)
 
             # Validazione Track Async (Controllo File Corrotto/Tronco)
             expected_s = metadata.duration_ms // 1000
@@ -377,7 +365,7 @@ class AppleMusicProvider(BaseProvider):
             )
             
             # Embed Asyncrono
-            await embed_metadata_async(str(dest), metadata, opts, session=self._session)
+            await embed_metadata_async(str(dest), metadata, opts, session=await self._async_http._client())
 
             return DownloadResult.ok(self.name, str(dest), fmt="m4a")
 
