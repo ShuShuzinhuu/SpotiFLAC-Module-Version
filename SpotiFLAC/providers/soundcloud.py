@@ -16,7 +16,6 @@ from ..core.link_resolver import LinkResolver
 from ..core.models import DownloadResult, TrackMetadata
 from ..core.tagger import embed_metadata_async, EmbedOptions
 from ..core.endpoints import get_soundcloud_cobalt
-from ..core.quality import normalize_quality
 
 logger = logging.getLogger(__name__)
 
@@ -58,80 +57,6 @@ class SoundCloudProvider(BaseProvider):
     # ==========================================
     # CLIENT ID
     # ==========================================
-
-    def _fetch_client_id(self) -> str:
-        logger.info("[SC] Fetching SoundCloud client_id...")
-        try:
-            res = self.session.get("https://soundcloud.com/")
-            res.raise_for_status()
-        except httpx.HTTPError as e:
-            raise ValueError(f"Network/HTTP error fetching soundcloud.com: {e}")
-            
-        body = res.text
-
-        # Check se la versione SC è cambiata — evita fetch inutili
-        version_match = self._REGEX_SC_VERSION.search(body)
-        if version_match:
-            new_version = version_match.group(1)
-            if new_version == self._sc_version and self.client_id:
-                logger.info("[SC] SoundCloud version unchanged, reusing client_id")
-                return self.client_id
-            self._sc_version = new_version
-
-        # Strategia 1: client_id diretto nell'HTML
-        m = self._REGEX_CLIENT_ID.search(body)
-        if m:
-            return m.group(1)
-
-        # Strategia 2: JS bundles (ultimi 8, dall'ultimo al primo)
-        script_urls = self._REGEX_JS_BUNDLE.findall(body)
-        for url in reversed(script_urls[-8:]):
-            try:
-                js = self.session.get(url, timeout=5)
-                if js.status_code != 200:
-                    continue
-                js_body = js.text
-                
-                # Pattern 1: client_id:"XXXX" o client_id='XXXX'
-                cm = self._REGEX_CLIENT_ID.search(js_body)
-                if not cm:
-                    # Pattern 2: ("client_id=XXXX")
-                    cm = self._REGEX_CLIENT_ID_INLINE.search(js_body)
-                if not cm:
-                    # Pattern 3: client_id=XXXX inline str extract
-                    idx = js_body.find("client_id=")
-                    if idx != -1:
-                        candidate = js_body[idx + 10: idx + 42]
-                        if len(candidate) == 32 and candidate.isalnum():
-                            return candidate
-                if cm:
-                    return cm.group(1)
-            except httpx.HTTPError as e:
-                logger.debug("[SC] Bundle fetch network failed for %s: %s", url, e)
-
-        raise ValueError("Could not find SoundCloud client_id")
-
-    def _ensure_client_id(self) -> None:
-        if not self.client_id or time.time() >= self.client_id_expiry:
-            self.client_id = self._fetch_client_id()
-            self.client_id_expiry = time.time() + self.CLIENT_ID_TTL
-
-    def _api_get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
-        self._ensure_client_id()
-        params = dict(params or {})
-        params["client_id"] = self.client_id
-        url = f"{self.api_url}/{endpoint}"
-        
-        res = self.session.get(url, params=params)
-        if res.status_code == 401:
-            logger.info("[SC] Got 401, refreshing client_id...")
-            self.client_id = None
-            self._ensure_client_id()
-            params["client_id"] = self.client_id
-            res = self.session.get(url, params=params)
-            
-        res.raise_for_status()
-        return res.json()
 
     async def _fetch_client_id_async(self) -> str:
         logger.info("[SC] Fetching SoundCloud client_id...")
@@ -375,17 +300,6 @@ class SoundCloudProvider(BaseProvider):
             "tracks":   tracks,
             "cover_url": self._get_hires_artwork(data.get("artwork_url")),
         }
-
-    def search(self, query: str, search_type: str = "tracks", limit: int = 20) -> list[dict[str, Any]]:
-        data = self._api_get(
-            f"search/{search_type}", {"q": query, "limit": limit, "access": "playable"}
-        )
-        results = []
-        for item in data.get("collection", []):
-            if search_type == "tracks":
-                if formatted := self._format_track(item):
-                    results.append(formatted)
-        return results
 
     async def search_async(self, query: str, search_type: str = "tracks", limit: int = 20) -> list[dict[str, Any]]:
         data = await self._api_get_async(
