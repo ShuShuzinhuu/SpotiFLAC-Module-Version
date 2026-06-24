@@ -236,32 +236,6 @@ def _save_cached_credentials(creds: QobuzCredentials) -> None:
     except Exception as exc:
         logger.warning("Failed to write Qobuz credentials cache: %s", exc)
 
-def _scrape_credentials(session: httpx.Client) -> QobuzCredentials: 
-    headers = {"User-Agent": _DEFAULT_UA}
-    resp    = session.get(f"{_OPEN_URL}1", headers=headers, timeout=15)
-    resp.raise_for_status()
-
-    m = _BUNDLE_RE.search(resp.text)
-    if not m:
-        raise RuntimeError("Qobuz bundle URL not found in HTML")
-
-    bundle_url = m.group(1)
-    if bundle_url.startswith("/"):
-        bundle_url = "https://open.qobuz.com" + bundle_url
-
-    bundle = session.get(bundle_url, headers=headers, timeout=30)
-    bundle.raise_for_status()
-
-    cm = _API_CONFIG_RE.search(bundle.text)
-    if not cm:
-        raise RuntimeError("app_id/app_secret not found in Qobuz bundle")
-
-    return QobuzCredentials(
-        app_id     = cm.group("app_id"),
-        app_secret = cm.group("app_secret"),
-        source     = bundle_url,
-    )
-
 async def _load_cached_credentials_async() -> QobuzCredentials | None:
     try:
         return await asyncio.to_thread(_load_cached_credentials)

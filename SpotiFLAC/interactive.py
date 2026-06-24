@@ -801,6 +801,7 @@ async def run_interactive() -> dict:
 
     # ── 11. Optional Qobuz Local API ───────────────────────────────────────────────
     _section("11 · Optional Qobuz Local API")
+    print(f"  {DIM('Self-host your own qobuz-api instance for guaranteed availability.')}")
     print(f"  {DIM('For a self-hosted Qobuz API, visit: https://github.com/BartolomeoRusso9/qobuz-api')}")
     cfg["qobuz_local_api_url"] = _ask(
         "Qobuz local API URL (leave blank to skip)",

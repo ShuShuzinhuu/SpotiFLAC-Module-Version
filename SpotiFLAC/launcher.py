@@ -14,6 +14,7 @@ import logging
 import sys
 import json
 import os
+import asyncio
 
 from .check_update import check_for_updates_async
 from . import SpotiFLAC
@@ -230,7 +231,7 @@ def main() -> None:
     # Interactive mode (explicit --interactive flag)
     if "--interactive" in sys.argv:
         print_ffmpeg_warning()
-        cfg = run_interactive()
+        cfg = asyncio.run(run_interactive())
 
         log_level = logging.WARNING
         logging.basicConfig(level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")

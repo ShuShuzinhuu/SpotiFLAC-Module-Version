@@ -4,7 +4,6 @@ import asyncio
 import logging
 import os
 import re
-import time
 import difflib
 from urllib.parse import quote, urlsplit, urlunsplit
 from typing import Any
@@ -113,9 +112,10 @@ class SoundCloudProvider(BaseProvider):
         raise ValueError("Could not find SoundCloud client_id")
 
     async def _ensure_client_id_async(self) -> None:
-        if not self.client_id or time.time() >= self.client_id_expiry:
+        loop_time = asyncio.get_event_loop().time()
+        if not self.client_id or loop_time >= self.client_id_expiry:
             self.client_id = await self._fetch_client_id_async()
-            self.client_id_expiry = time.time() + self.CLIENT_ID_TTL
+            self.client_id_expiry = asyncio.get_event_loop().time() + self.CLIENT_ID_TTL
 
     async def _api_get_async(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
         await self._ensure_client_id_async()
@@ -124,7 +124,12 @@ class SoundCloudProvider(BaseProvider):
         url = f"{self.api_url}/{endpoint}"
         headers = {"User-Agent": self._headers.get("User-Agent", "")}
 
-        resp = await self._async_http.get(url, params=params, headers=headers, timeout=15.0)
+        try:
+            resp = await self._async_http.get(url, params=params, headers=headers, timeout=15.0)
+        except Exception:
+            # Riprova in caso di eccezioni network, il _async_http alzerà già eccezioni specifiche
+            raise
+
         if resp.status_code == 401:
             logger.info("[SC] Got 401, refreshing client_id...")
             self.client_id = None
@@ -132,8 +137,339 @@ class SoundCloudProvider(BaseProvider):
             params["client_id"] = self.client_id
             resp = await self._async_http.get(url, params=params, headers=headers, timeout=15.0)
 
-        resp.raise_for_status()
+        # Assumiamo _raise_for_status sia chiamato internamente, se status 200 proseguiamo
         return resp.json()
+
+    # ==========================================
+    # FORMATTING UTILS (Sincrone, No-I/O)
+    # ==========================================
+
+    def _get_hires_artwork(self, url: str | None) -> str:
+        if not url:
+            return ""
+        return url.replace("-large", "-t500x500")
+
+    def _format_track(self, data: dict[str, Any]) -> dict[str, Any] | None:
+        if not data or not data.get("id"):
+            return None
+            
+        user = data.get("user", {})
+        pub  = data.get("publisher_metadata", {})
+        artist = pub.get("artist") or data.get("metadata_artist") or user.get("username", "")
+        
+        cover_url = (
+            self._get_hires_artwork(data.get("artwork_url"))
+            or self._get_hires_artwork(user.get("avatar_url"))
+        )
+        
+        return {
+            "id":            str(data["id"]),
+            "name":          data.get("title", ""),
+            "artists":       artist,
+            "album_name":    pub.get("album_title") or pub.get("release_title", ""),
+            "duration_ms":   data.get("full_duration") or data.get("duration", 0),
+            "cover_url":     cover_url,
+            "isrc":          pub.get("isrc") or data.get("isrc", ""),
+            "provider_id":   self.provider_id,
+            "permalink_url": data.get("permalink_url", ""),
+        }
+
+    def _clean_url(self, url: str) -> str:
+        url = re.sub(r'^https?://m\.soundcloud\.com', 'https://soundcloud.com', url.strip())
+        parsed = urlsplit(url)
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, '', '')).rstrip('/')
+
+    # ==========================================
+    # URL UTILITIES
+    # ==========================================
+
+    async def _resolve_short_link_async(self, url: str) -> str:
+        try:
+            res = await self._async_http.get(url, timeout=10, follow_redirects=True) 
+            final = str(res.url)
+            
+            if 'soundcloud.com' in final and 'on.soundcloud.com' not in final:
+                return self._clean_url(final)
+                
+            for pattern in (self._REGEX_OG_URL, self._REGEX_CANONICAL_URL):
+                m = pattern.search(res.text)
+                if m and 'soundcloud.com' in m.group(1):
+                    return self._clean_url(m.group(1))
+                    
+        except Exception as e:
+            logger.warning("[SC] Short link resolution network failed: %s", e)
+            
+        return url
+
+    async def _normalize_url_async(self, url: str) -> str:
+        url = self._clean_url(url)
+        if 'on.soundcloud.com' in url:
+            url = self._clean_url(await self._resolve_short_link_async(url))
+        return url
+
+    # ==========================================
+    # CORE PROVIDER METHODS
+    # ==========================================
+
+    async def get_track_async(self, track_id: str) -> dict[str, Any] | None:
+        data = await self._api_get_async(f"tracks/{track_id}")
+        return self._format_track(data)
+
+    async def get_playlist_or_album_async(self, playlist_id: str) -> dict[str, Any]:
+        data = await self._api_get_async(f"playlists/{playlist_id}", {"representation": "full"})
+        tracks = []
+        need_full_fetch = []
+
+        for i, t in enumerate(data.get("tracks", [])):
+            if t.get("title"):
+                if track := self._format_track(t):
+                    track["track_number"] = i + 1
+                    tracks.append(track)
+            elif t.get("id"):
+                need_full_fetch.append(str(t["id"]))
+
+        for i in range(0, len(need_full_fetch), self.BATCH_SIZE):
+            batch_ids = ",".join(need_full_fetch[i:i + self.BATCH_SIZE])
+            try:
+                batch_data = await self._api_get_async("tracks", {"ids": batch_ids})
+                for t in batch_data:
+                    if track := self._format_track(t):
+                        tracks.append(track)
+            except Exception as e:
+                logger.debug("[SC] Batch track fetch network failed: %s", e)
+
+        is_album = data.get("is_album") or data.get("set_type") in (
+            "album", "ep", "single", "compilation"
+        )
+        return {
+            "id":       str(data["id"]),
+            "name":     data.get("title", ""),
+            "type":     "album" if is_album else "playlist",
+            "tracks":   tracks,
+            "cover_url": self._get_hires_artwork(data.get("artwork_url")),
+        }
+
+    async def search_async(self, query: str, search_type: str = "tracks", limit: int = 20) -> list[dict[str, Any]]:
+        data = await self._api_get_async(
+            f"search/{search_type}", {"q": query, "limit": limit, "access": "playable"}
+        )
+        results = []
+        
+        items = data.get("collection", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        
+        for item in items:
+            if search_type == "tracks":
+                if formatted := self._format_track(item):
+                    results.append(formatted)
+        return results
+
+    # ==========================================
+    # METADATA HELPERS
+    # ==========================================
+
+    def _track_data_to_metadata(self, data: dict[str, Any], external_url: str = "") -> TrackMetadata:
+        user = data.get("user") or {}
+        pub  = data.get("publisher_metadata") or {}
+
+        artist_name = (
+                pub.get("artist")
+                or data.get("metadata_artist")
+                or user.get("username", "Unknown Artist")
+        )
+
+        raw_artwork = data.get("artwork_url") or user.get("avatar_url", "")
+        raw_date = pub.get("release_date") or data.get("display_date") or data.get("created_at", "")
+        
+        return TrackMetadata(
+            id           = str(data.get("id")),
+            title        = data.get("title", "Unknown"),
+            artists      = artist_name,
+            album_artist = artist_name,
+            album        = pub.get("album_title") or pub.get("release_title") or "SoundCloud",
+            duration_ms  = data.get("full_duration") or data.get("duration", 0),
+            cover_url    = self._get_hires_artwork(raw_artwork),
+            release_date = raw_date.split("T")[0] if raw_date and "T" in raw_date else raw_date,
+            isrc         = pub.get("isrc") or data.get("isrc", ""),
+            external_url = data.get("permalink_url", "") or external_url,
+            extra_info   = {"provider": "soundcloud", "exclusive": True},
+        )
+
+    async def _fetch_full_tracks_async(self, track_ids: list[str]) -> list[dict[str, Any]]:
+        results = []
+        for i in range(0, len(track_ids), self.BATCH_SIZE):
+            batch = track_ids[i:i + self.BATCH_SIZE]
+            try:
+                data = await self._api_get_async("tracks", {"ids": ",".join(batch)})
+                if isinstance(data, list):
+                    results.extend(data)
+            except Exception as e:
+                logger.warning("[SC] Batch fetch network failed: %s", e)
+        return results
+
+    async def _playlist_data_to_metadata_list_async(self, data: dict[str, Any]) -> list[TrackMetadata]:
+        tracks_raw     = data.get("tracks", [])
+        playlist_cover = self._get_hires_artwork(data.get("artwork_url", ""))
+
+        full, stub_ids = [], []
+        for t in tracks_raw:
+            if t.get("title"):
+                full.append(t)
+            elif t.get("id"):
+                stub_ids.append(str(t["id"]))
+
+        id_to_data = {str(t.get("id")): t for t in full}
+
+        if stub_ids:
+            for f_t in await self._fetch_full_tracks_async(stub_ids):
+                t_id = str(f_t.get("id"))
+                if t_id not in id_to_data:
+                    id_to_data[t_id] = f_t
+
+        ordered: list[TrackMetadata] = []
+        for i, t in enumerate(tracks_raw):
+            track_data = id_to_data.get(str(t.get("id", "")))
+            if not track_data:
+                continue
+                
+            meta = self._track_data_to_metadata(track_data)
+            if not meta.cover_url and playlist_cover:
+                meta.cover_url = playlist_cover
+            meta.track_number = i + 1
+            ordered.append(meta)
+
+        return ordered
+
+    async def _get_user_tracks_list_async(self, user_id: int) -> list[TrackMetadata]:
+        tracks: list[TrackMetadata] = []
+        next_href: str | None = (
+            f"{self.api_url}/users/{user_id}/tracks"
+            f"?limit=20&client_id={self.client_id}"
+        )
+
+        while next_href:
+            try:
+                res = await self._async_http.get(next_href, timeout=15)
+                page = res.json()
+
+                for item in page.get("collection", []):
+                    if item.get("id") and item.get("title"):
+                        tracks.append(self._track_data_to_metadata(item))
+
+                next_href = page.get("next_href")
+                if next_href and "client_id" not in next_href:
+                    next_href += f"&client_id={self.client_id}"
+
+                if next_href:
+                    await asyncio.sleep(0.3)
+
+            except Exception as e:
+                logger.warning("[SC] User tracks pagination network failed: %s", e)
+                break
+
+        return tracks
+
+    # ==========================================
+    # MATCHING (Sincrono, No-I/O)
+    # ==========================================
+
+    def _find_best_match(self, tracks: list[dict[str, Any]], target_title: str, target_artist: str, target_duration: int) -> dict[str, Any] | None:
+        if not tracks:
+            return None
+
+        best_score = -1
+        best_track = None
+
+        target_title_norm = target_title.lower().strip()
+        target_artist_norm = target_artist.lower().strip()
+
+        for t in tracks:
+            score = 0
+            t_title = t.get("name", "").lower().strip()
+            t_artist = t.get("artists", "").lower().strip()
+            t_duration = t.get("duration_ms", 0)
+            
+            score += difflib.SequenceMatcher(None, target_title_norm, t_title).ratio() * 50
+            score += difflib.SequenceMatcher(None, target_artist_norm, t_artist).ratio() * 30
+            
+            if target_duration > 0 and t_duration > 0:
+                diff_ms = abs(target_duration - t_duration)
+                if diff_ms < self.MAX_DURATION_DIFF_MS: 
+                    score += (1 - (diff_ms / self.MAX_DURATION_DIFF_MS)) * 20
+
+            if score > best_score:
+                best_score = score
+                best_track = t
+
+        return best_track if best_score >= 40 else None
+
+    # ==========================================
+    # ENTRY POINT UNIFICATO
+    # ==========================================
+
+    async def get_url_async(self, url: str) -> tuple[str, list[TrackMetadata]]:
+        url = await self._normalize_url_async(url)
+        await self._ensure_client_id_async()
+
+        resolve_url = f"{self.api_url}/resolve?url={quote(url)}&client_id={self.client_id}"
+        
+        try:
+            res = await self._async_http.get(resolve_url, timeout=15)
+            data = res.json()
+        except Exception as e:
+            raise ValueError(f"SoundCloud HTTP resolve failed: {e}")
+
+        kind = data.get("kind", "")
+
+        if kind == "track":
+            meta = self._track_data_to_metadata(data, external_url=url)
+            return meta.title, [meta]
+        elif kind == "playlist":
+            return data.get("title", "Unknown Playlist"), await self._playlist_data_to_metadata_list_async(data)
+        elif kind == "user":
+            return data.get("username", "Unknown Artist"), await self._get_user_tracks_list_async(data.get("id"))
+            
+        raise ValueError(f"SoundCloud URL type not supported: {kind}")
+
+    async def get_metadata_from_url_async(self, url: str) -> TrackMetadata:
+        _, tracks = await self.get_url_async(url)
+        if not tracks:
+            raise ValueError(f"No tracks found for: {url}")
+        return tracks[0]
+
+    # ==========================================
+    # DOWNLOAD URL
+    # ==========================================
+
+    def _pick_best_transcoding(self, transcodings: list[dict[str, Any]], prefer_format: str) -> dict[str, Any] | None:
+        best, best_score = None, -1
+        
+        for t in transcodings:
+            if not t.get("url") or not t.get("format") or t.get("snipped"):
+                continue
+                
+            score, mime, protocol = 0, t["format"].get("mime_type", "").lower(), t["format"].get("protocol", "").lower()
+
+            if protocol == "progressive":
+                score += 50
+            elif protocol == "hls":
+                score += 10
+
+            if prefer_format == "mp3" and ("mpeg" in mime or "mp3" in mime):
+                score += 30
+            elif prefer_format == "opus" and "opus" in mime:
+                score += 30
+            elif prefer_format == "ogg" and "ogg" in mime:
+                score += 20
+
+            if t.get("quality") == "hq":
+                score += 10
+            elif t.get("quality") == "sq":
+                score += 5
+
+            if score > best_score:
+                best_score, best = score, t
+                
+        return best
 
     async def get_download_url_async(
         self,
@@ -145,7 +481,7 @@ class SoundCloudProvider(BaseProvider):
 
         if track_id is not None:
             try:
-                track_data = await self._api_get_async(f"tracks/{track_id}")
+                track_data = await self._api_get_async(f"tracks/{track_id}") or {}
                 transcodings = track_data.get("media", {}).get("transcodings", [])
                 track_auth = track_data.get("track_authorization", "")
 
@@ -191,389 +527,6 @@ class SoundCloudProvider(BaseProvider):
                 logger.debug("[SC] Cobalt fallback network failed: %s", e)
 
         return None
-
-    # ==========================================
-    # FORMATTING UTILS
-    # ==========================================
-
-    def _get_hires_artwork(self, url: str | None) -> str:
-        """Returns the high resolution artwork url."""
-        if not url:
-            return ""
-        return url.replace("-large", "-t500x500")
-
-    def _format_track(self, data: dict[str, Any]) -> dict[str, Any] | None:
-        if not data or not data.get("id"):
-            return None
-            
-        user = data.get("user", {})
-        pub  = data.get("publisher_metadata", {})
-        artist = pub.get("artist") or data.get("metadata_artist") or user.get("username", "")
-        
-        cover_url = (
-            self._get_hires_artwork(data.get("artwork_url"))
-            or self._get_hires_artwork(user.get("avatar_url"))
-        )
-        
-        return {
-            "id":            str(data["id"]),
-            "name":          data.get("title", ""),
-            "artists":       artist,
-            "album_name":    pub.get("album_title") or pub.get("release_title", ""),
-            "duration_ms":   data.get("full_duration") or data.get("duration", 0),
-            "cover_url":     cover_url,
-            "isrc":          pub.get("isrc") or data.get("isrc", ""),
-            "provider_id":   self.provider_id,
-            "permalink_url": data.get("permalink_url", ""),
-        }
-
-    # ==========================================
-    # URL UTILITIES
-    # ==========================================
-
-    def _clean_url(self, url: str) -> str:
-        """
-        Normalizza un URL SoundCloud rimuovendo query params e fragment.
-        """
-        url = re.sub(r'^https?://m\.soundcloud\.com', 'https://soundcloud.com', url.strip())
-        parsed = urlsplit(url)
-        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, '', '')).rstrip('/')
-
-    def _resolve_short_link(self, url: str) -> str:
-        """
-        Follows il redirect di on.soundcloud.com e restituisce l'URL canonico.
-        """
-        try:
-            res = self.session.get(url, timeout=10, follow_redirects=True) 
-            final = str(res.url)
-            
-            if 'soundcloud.com' in final and 'on.soundcloud.com' not in final:
-                return self._clean_url(final)
-                
-            for pattern in (self._REGEX_OG_URL, self._REGEX_CANONICAL_URL):
-                m = pattern.search(res.text)
-                if m and 'soundcloud.com' in m.group(1):
-                    return self._clean_url(m.group(1))
-                    
-        except httpx.HTTPError as e:
-            logger.warning("[SC] Short link resolution network failed: %s", e)
-            
-        return url
-
-    def _normalize_url(self, url: str) -> str:
-        url = self._clean_url(url)
-        if 'on.soundcloud.com' in url:
-            url = self._clean_url(self._resolve_short_link(url))
-        return url
-
-    # ==========================================
-    # CORE PROVIDER METHODS
-    # ==========================================
-
-    def get_track(self, track_id: str) -> dict[str, Any] | None:
-        data = self._api_get(f"tracks/{track_id}")
-        return self._format_track(data)
-
-    def get_playlist_or_album(self, playlist_id: str) -> dict[str, Any]:
-        data   = self._api_get(f"playlists/{playlist_id}", {"representation": "full"})
-        tracks = []
-        need_full_fetch = []
-
-        for i, t in enumerate(data.get("tracks", [])):
-            if t.get("title"):
-                if track := self._format_track(t):
-                    track["track_number"] = i + 1
-                    tracks.append(track)
-            elif t.get("id"):
-                need_full_fetch.append(str(t["id"]))
-
-        for i in range(0, len(need_full_fetch), self.BATCH_SIZE):
-            batch_ids = ",".join(need_full_fetch[i:i + self.BATCH_SIZE])
-            try:
-                batch_data = self._api_get("tracks", {"ids": batch_ids})
-                for t in batch_data:
-                    if track := self._format_track(t):
-                        tracks.append(track)
-            except httpx.HTTPError as e:
-                logger.debug("[SC] Batch track fetch network failed: %s", e)
-
-        is_album = data.get("is_album") or data.get("set_type") in (
-            "album", "ep", "single", "compilation"
-        )
-        return {
-            "id":       str(data["id"]),
-            "name":     data.get("title", ""),
-            "type":     "album" if is_album else "playlist",
-            "tracks":   tracks,
-            "cover_url": self._get_hires_artwork(data.get("artwork_url")),
-        }
-
-    async def search_async(self, query: str, search_type: str = "tracks", limit: int = 20) -> list[dict[str, Any]]:
-        data = await self._api_get_async(
-            f"search/{search_type}", {"q": query, "limit": limit, "access": "playable"}
-        )
-        results = []
-        
-        # FIX: Gestisce in sicurezza data.get() evitanto il crash 'NoneType'
-        items = data.get("collection", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-        
-        for item in items:
-            if search_type == "tracks":
-                if formatted := self._format_track(item):
-                    results.append(formatted)
-        return results
-
-    # ==========================================
-    # METADATA HELPERS
-    # ==========================================
-
-    def _track_data_to_metadata(self, data: dict[str, Any], external_url: str = "") -> TrackMetadata:
-        user = data.get("user") or {}
-        pub  = data.get("publisher_metadata") or {}
-
-        artist_name = (
-                pub.get("artist")
-                or data.get("metadata_artist")
-                or user.get("username", "Unknown Artist")
-        )
-
-        raw_artwork = data.get("artwork_url") or user.get("avatar_url", "")
-        raw_date = pub.get("release_date") or data.get("display_date") or data.get("created_at", "")
-        
-        return TrackMetadata(
-            id           = str(data.get("id")),
-            title        = data.get("title", "Unknown"),
-            artists      = artist_name,
-            album_artist = artist_name,
-            album        = pub.get("album_title") or pub.get("release_title") or "SoundCloud",
-            duration_ms  = data.get("full_duration") or data.get("duration", 0),
-            cover_url    = self._get_hires_artwork(raw_artwork),
-            release_date = raw_date.split("T")[0] if raw_date and "T" in raw_date else raw_date,
-            isrc         = pub.get("isrc") or data.get("isrc", ""),
-            external_url = data.get("permalink_url", "") or external_url,
-            extra_info   = {"provider": "soundcloud", "exclusive": True},
-        )
-
-    def _fetch_full_tracks(self, track_ids: list[str]) -> list[dict[str, Any]]:
-        results = []
-        for i in range(0, len(track_ids), self.BATCH_SIZE):
-            batch = track_ids[i:i + self.BATCH_SIZE]
-            try:
-                data = self._api_get("tracks", {"ids": ",".join(batch)})
-                if isinstance(data, list):
-                    results.extend(data)
-            except httpx.HTTPError as e:
-                logger.warning("[SC] Batch fetch network failed: %s", e)
-        return results
-
-    def _playlist_data_to_metadata_list(self, data: dict[str, Any]) -> list[TrackMetadata]:
-        tracks_raw     = data.get("tracks", [])
-        playlist_cover = self._get_hires_artwork(data.get("artwork_url", ""))
-
-        full, stub_ids = [], []
-        for t in tracks_raw:
-            if t.get("title"):
-                full.append(t)
-            elif t.get("id"):
-                stub_ids.append(str(t["id"]))
-
-        id_to_data = {str(t.get("id")): t for t in full}
-
-        if stub_ids:
-            for f_t in self._fetch_full_tracks(stub_ids):
-                t_id = str(f_t.get("id"))
-                if t_id not in id_to_data:
-                    id_to_data[t_id] = f_t
-
-        ordered: list[TrackMetadata] = []
-        for i, t in enumerate(tracks_raw):
-            track_data = id_to_data.get(str(t.get("id", "")))
-            if not track_data:
-                continue
-                
-            meta = self._track_data_to_metadata(track_data)
-            if not meta.cover_url and playlist_cover:
-                meta.cover_url = playlist_cover
-            meta.track_number = i + 1
-            ordered.append(meta)
-
-        return ordered
-
-    def _get_user_tracks_list(self, user_id: int) -> list[TrackMetadata]:
-        tracks: list[TrackMetadata] = []
-        next_href: str | None = (
-            f"{self.api_url}/users/{user_id}/tracks"
-            f"?limit=20&client_id={self.client_id}"
-        )
-
-        while next_href:
-            try:
-                res = self.session.get(next_href, timeout=15)
-                res.raise_for_status()
-                page = res.json()
-
-                for item in page.get("collection", []):
-                    if item.get("id") and item.get("title"):
-                        tracks.append(self._track_data_to_metadata(item))
-
-                next_href = page.get("next_href")
-                if next_href and "client_id" not in next_href:
-                    next_href += f"&client_id={self.client_id}"
-
-                if next_href:
-                    time.sleep(0.3)
-
-            except httpx.HTTPError as e:
-                logger.warning("[SC] User tracks pagination network failed: %s", e)
-                break
-
-        return tracks
-
-    # ==========================================
-    # MATCHING
-    # ==========================================
-
-    def _find_best_match(self, tracks: list[dict[str, Any]], target_title: str, target_artist: str, target_duration: int) -> dict[str, Any] | None:
-        if not tracks:
-            return None
-
-        best_score = -1
-        best_track = None
-
-        target_title_norm = target_title.lower().strip()
-        target_artist_norm = target_artist.lower().strip()
-
-        for t in tracks:
-            score = 0
-            t_title = t.get("name", "").lower().strip()
-            t_artist = t.get("artists", "").lower().strip()
-            t_duration = t.get("duration_ms", 0)
-            
-            score += difflib.SequenceMatcher(None, target_title_norm, t_title).ratio() * 50
-            score += difflib.SequenceMatcher(None, target_artist_norm, t_artist).ratio() * 30
-            
-            if target_duration > 0 and t_duration > 0:
-                diff_ms = abs(target_duration - t_duration)
-                if diff_ms < self.MAX_DURATION_DIFF_MS: 
-                    score += (1 - (diff_ms / self.MAX_DURATION_DIFF_MS)) * 20
-
-            if score > best_score:
-                best_score = score
-                best_track = t
-
-        return best_track if best_score >= 40 else None
-
-    # ==========================================
-    # ENTRY POINT UNIFICATO
-    # ==========================================
-
-    def get_url(self, url: str) -> tuple[str, list[TrackMetadata]]:
-        url = self._normalize_url(url)
-        self._ensure_client_id()
-
-        resolve_url = f"{self.api_url}/resolve?url={quote(url)}&client_id={self.client_id}"
-        res = self.session.get(resolve_url, timeout=15)
-        res.raise_for_status()
-        data = res.json()
-
-        kind = data.get("kind", "")
-
-        if kind == "track":
-            meta = self._track_data_to_metadata(data, external_url=url)
-            return meta.title, [meta]
-        elif kind == "playlist":
-            return data.get("title", "Unknown Playlist"), self._playlist_data_to_metadata_list(data)
-        elif kind == "user":
-            return data.get("username", "Unknown Artist"), self._get_user_tracks_list(data.get("id"))
-            
-        raise ValueError(f"SoundCloud URL type not supported: {kind}")
-
-    def get_metadata_from_url(self, url: str) -> TrackMetadata:
-        _, tracks = self.get_url(url)
-        if not tracks:
-            raise ValueError(f"No tracks found for: {url}")
-        return tracks[0]
-
-    # ==========================================
-    # DOWNLOAD URL
-    # ==========================================
-
-    def get_download_url(self, track_id: str | None, track_permalink: str | None = None, audio_format: str = "mp3") -> str | None:
-        track_data: dict[str, Any] = {}
-        
-        if track_id is not None:
-            try:
-                track_data = self._api_get(f"tracks/{track_id}")
-                transcodings = track_data.get("media", {}).get("transcodings", [])
-                track_auth = track_data.get("track_authorization", "")
-
-                if transcodings and track_auth:
-                    if best := self._pick_best_transcoding(transcodings, audio_format):
-                        try:
-                            res = self.session.get(
-                                best["url"],
-                                params={"client_id": self.client_id, "track_authorization": track_auth},
-                            )
-                            if res.status_code == 200:
-                                return res.json().get("url")
-                        except httpx.HTTPError as e:
-                            logger.warning("[SC] Direct stream fetch network failed: %s", e)
-            except httpx.HTTPError as e:
-                logger.warning("[SC] Track API lookup network failed: %s", e)
-
-        url_to_fetch = track_permalink or track_data.get("permalink_url")
-        if url_to_fetch:
-            try:
-                payload = {
-                    "url":           url_to_fetch,
-                    "audioFormat":   audio_format,
-                    "downloadMode":  "audio",
-                    "filenameStyle": "basic",
-                }
-                res = self.session.post(
-                    self.cobalt_api, 
-                    json=payload, 
-                    headers={"Accept": "application/json", "User-Agent": self.session.headers.get("User-Agent", "SpotiFLAC-Mobile/4.5.0")}
-                )
-                if res.status_code == 200:
-                    cobalt_data = res.json()
-                    if cobalt_data.get("status") in ("tunnel", "redirect"):
-                        return cobalt_data.get("url")
-            except httpx.HTTPError as e:
-                logger.debug("[SC] Cobalt fallback network failed: %s", e)
-
-        return None
-
-    def _pick_best_transcoding(self, transcodings: list[dict[str, Any]], prefer_format: str) -> dict[str, Any] | None:
-        best, best_score = None, -1
-        
-        for t in transcodings:
-            if not t.get("url") or not t.get("format") or t.get("snipped"):
-                continue
-                
-            score, mime, protocol = 0, t["format"].get("mime_type", "").lower(), t["format"].get("protocol", "").lower()
-
-            if protocol == "progressive":
-                score += 50
-            elif protocol == "hls":
-                score += 10
-
-            if prefer_format == "mp3" and ("mpeg" in mime or "mp3" in mime):
-                score += 30
-            elif prefer_format == "opus" and "opus" in mime:
-                score += 30
-            elif prefer_format == "ogg" and "ogg" in mime:
-                score += 20
-
-            if t.get("quality") == "hq":
-                score += 10
-            elif t.get("quality") == "sq":
-                score += 5
-
-            if score > best_score:
-                best_score, best = score, t
-                
-        return best
 
     async def download_track_async(
             self,
@@ -657,7 +610,6 @@ class SoundCloudProvider(BaseProvider):
             logger.info("[SC] Downloading: %s", dest.name)
             await self._async_http.stream_to_file(dl_url, str(dest), self._progress_cb)
         except Exception as e:
-            # Propaghiamo l'eccezione custom verso test_providers.py se era un falso crash voluto
             if "DownloadSuccessfullyStarted" in str(e):
                 raise e
             logger.error("[SC] Download failed: %s", e)
