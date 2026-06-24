@@ -6,12 +6,12 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
-from ..core.spotfetch import SpotifyWebClient
+from ..core.errors import ErrorKind, InvalidUrlError, SpotiflacError
 from ..core.http import AsyncHttpClient
-from ..core.errors import InvalidUrlError, SpotiflacError, ErrorKind
 from ..core.models import TrackMetadata
+from ..core.spotfetch import SpotifyWebClient
 
 logger = logging.getLogger(__name__)
 

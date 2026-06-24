@@ -1,7 +1,8 @@
 import json
-import re
 import logging
-from typing import Optional, Dict
+import re
+from typing import Dict, Optional
+
 from ..core.http import AsyncHttpClient
 
 logger = logging.getLogger(__name__)

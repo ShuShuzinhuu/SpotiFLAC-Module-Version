@@ -114,7 +114,7 @@ def log_result(provider_name: str, status: str, details: str = ""):
         f.write(f"[{timestamp}] {msg}\n")
 
 
-async def test_single_provider(provider, metadata: TrackMetadata):
+async def _test_single_provider(provider, metadata: TrackMetadata):
     """Tests a single provider and captures its result."""
     print(f"\n⏳ Testing provider: {provider.name.upper()}...")
 

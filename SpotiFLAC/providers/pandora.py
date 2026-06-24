@@ -17,20 +17,21 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Callable, Any
-from urllib.parse import urlparse, urlencode, quote, unquote
+from typing import Any, Callable
+from urllib.parse import quote, unquote, urlencode, urlparse
 
 import httpx
-from ..core.http import RetryConfig, async_songlink_rate_limiter
-from .base import BaseProvider
+
 from ..core.console import print_source_banner
-from ..core.errors import SpotiflacError, ErrorKind, TrackNotFoundError
-from ..core.models import TrackMetadata, DownloadResult
-from ..core.musicbrainz import AsyncMBFetch, mb_result_to_tags
-from ..core.tagger import embed_metadata_async, _print_mb_summary, EmbedOptions
-from ..core.endpoints import get_pandora_base_and_path
-from ..core.quality import normalize_quality
 from ..core.download_validation import validate_downloaded_track_async
+from ..core.endpoints import get_pandora_base_and_path
+from ..core.errors import ErrorKind, SpotiflacError, TrackNotFoundError
+from ..core.http import RetryConfig, async_songlink_rate_limiter
+from ..core.models import DownloadResult, TrackMetadata
+from ..core.musicbrainz import AsyncMBFetch, mb_result_to_tags
+from ..core.quality import normalize_quality
+from ..core.tagger import EmbedOptions, _print_mb_summary, embed_metadata_async
+from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
 

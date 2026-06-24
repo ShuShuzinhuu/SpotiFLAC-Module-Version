@@ -1,37 +1,37 @@
-# amazon_provider.py
 from __future__ import annotations
 
 import asyncio
 import base64
 import binascii
 import hashlib
+import json
 import logging
 import os
 import re
-import json
-import httpx
 import threading
 import time
-import aiofiles
-from typing import Callable, Awaitable
+from pathlib import Path
+from typing import Awaitable, Callable
 from urllib.parse import urlparse
+
+import aiofiles
+import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import PictureType
 from mutagen.mp4 import MP4, MP4Cover
 
-from .base import BaseProvider
 from ..core.console import print_source_banner
-from ..core.errors import SpotiflacError, ErrorKind
-from ..core.models import TrackMetadata, DownloadResult
-from ..core.musicbrainz import mb_result_to_tags
-from ..core.tagger import EmbedOptions, embed_metadata_async
 from ..core.endpoints import get_amazon_endpoint, get_pandora_base_and_path
-from ..core.quality import to_zarz_codec
+from ..core.errors import ErrorKind, SpotiflacError
 from ..core.flac_validation import validate_and_repair_if_needed
 from ..core.isrc_utils import normalize_isrc
+from ..core.models import DownloadResult, TrackMetadata
+from ..core.musicbrainz import mb_result_to_tags
+from ..core.quality import to_zarz_codec
+from ..core.tagger import EmbedOptions, embed_metadata_async
+from .base import BaseProvider
 from .tidal import _find_isrc_via_qobuz
-
 
 logger = logging.getLogger(__name__)
 
@@ -1429,7 +1429,8 @@ class AmazonProvider(BaseProvider):
                     logger.debug("[amazon] Failed to normalize Qobuz ISRC: %s", qobuz_isrc)
             elif api_metadata and api_metadata.get("isrc") and api_metadata["isrc"] != metadata.isrc:
                 try:
-                    from ..core.isrc_utils import normalize_isrc, confirm_isrc_with_qobuz_async
+                    from ..core.isrc_utils import (
+                        confirm_isrc_with_qobuz_async, normalize_isrc)
                     isrc_val = normalize_isrc(api_metadata["isrc"])
                     if isrc_val:
                         # Recupera la durata reale dai metadati anziché passare 0

@@ -5,19 +5,19 @@ import difflib
 import logging
 import time
 from collections import OrderedDict
-from typing import Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable
 
-from ..core.http import RetryConfig
-from .base import BaseProvider
-from ..core.console import print_source_banner, print_quality_fallback
+from ..core.console import print_quality_fallback, print_source_banner
 from ..core.download_validation import validate_downloaded_track_async
-from ..core.errors import SpotiflacError, ErrorKind, TrackNotFoundError
-from ..core.models import TrackMetadata, DownloadResult
-from ..core.musicbrainz import AsyncMBFetch, mb_result_to_tags
-from ..core.provider_stats import record_success_async, record_failure_async
-from ..core.tagger import embed_metadata_async, _print_mb_summary, EmbedOptions
 from ..core.endpoints import get_apple_music_endpoint
+from ..core.errors import ErrorKind, SpotiflacError, TrackNotFoundError
+from ..core.http import RetryConfig
+from ..core.models import DownloadResult, TrackMetadata
+from ..core.musicbrainz import AsyncMBFetch, mb_result_to_tags
+from ..core.provider_stats import record_failure_async, record_success_async
 from ..core.quality import normalize_quality
+from ..core.tagger import EmbedOptions, _print_mb_summary, embed_metadata_async
+from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
 

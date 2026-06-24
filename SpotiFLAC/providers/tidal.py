@@ -3,8 +3,8 @@ TidalProvider — implementazione migliorata, robusta e tipizzata.
 """
 from __future__ import annotations
 
-import base64
 import asyncio
+import base64
 import difflib
 import json
 import logging
@@ -26,23 +26,24 @@ try:
 except ImportError:
     aiofiles = None
 
-from .base import BaseProvider
-from ..core.console import print_api_failure, print_quality_fallback, print_source_banner
+from ..core.console import (print_api_failure, print_quality_fallback,
+                            print_source_banner)
 from ..core.download_validation import validate_downloaded_track_async
-from ..core.errors import ErrorKind, ParseError, SpotiflacError, TrackNotFoundError
+from ..core.endpoints import (get_community_url, get_monochrome_token,
+                              get_tidal_post_endpoints)
+from ..core.errors import (ErrorKind, ParseError, SpotiflacError,
+                           TrackNotFoundError)
+from ..core.flac_validation import validate_and_repair_if_needed
 from ..core.http import NetworkManager, RetryConfig, async_zarz_rate_limiter
 from ..core.link_resolver import LinkResolver
 from ..core.models import DownloadResult, TrackMetadata
 from ..core.musicbrainz import fetch_mb_metadata_async, mb_result_to_tags
+from ..core.quality import normalize_quality as _cq_normalize_quality
+from ..core.quality import quality_fallback_chain as _cq_quality_fallback_chain
 from ..core.tagger import EmbedOptions, _print_mb_summary, embed_metadata_async
-from ..core.endpoints import get_tidal_post_endpoints, get_community_url, get_monochrome_token
-from ..core.quality import normalize_quality as _cq_normalize_quality, quality_fallback_chain as _cq_quality_fallback_chain
-from ..core.flac_validation import validate_and_repair_if_needed
-from .qobuz import (
-    _scrape_credentials_async,
-    _compute_signature,
-    _API_BASE as QOBUZ_API_BASE,
-)
+from .base import BaseProvider
+from .qobuz import _API_BASE as QOBUZ_API_BASE
+from .qobuz import _compute_signature, _scrape_credentials_async
 
 logger = logging.getLogger(__name__)
 
@@ -965,7 +966,8 @@ class TidalProvider(BaseProvider):
         raise TrackNotFoundError(self.name, spotify_track_id)
 
     async def _get_download_url_async(self, track_id: int, quality: str) -> str:
-        from ..core.provider_stats import prioritize_providers_async, record_success_async
+        from ..core.provider_stats import (prioritize_providers_async,
+                                           record_success_async)
 
         try:
             rotated = get_rotated_tidal_api_list()
@@ -1138,6 +1140,27 @@ class TidalProvider(BaseProvider):
         except Exception:
             pass
         return 0
+
+    @staticmethod
+    def _parse_track_id(tidal_url: str) -> int:
+        parts = tidal_url.split("/track/")
+        if len(parts) < 2:
+            raise ParseError("tidal", f"invalid Tidal URL: {tidal_url}")
+        try:
+            return int(parts[1].split("?")[0].strip())
+        except ValueError as exc:
+            raise ParseError("tidal", f"cannot parse track ID from {tidal_url}", exc)
+
+    @staticmethod
+    def _random_ua() -> str:
+        rng = random.Random()
+        rng.seed(int(time.time() // 3600))
+        return (
+            f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_{rng.randrange(11,15)}_{rng.randrange(4,9)}) "
+            f"AppleWebKit/{rng.randrange(530,537)}.{rng.randrange(30,37)} (KHTML, like Gecko) "
+            f"Chrome/{rng.randrange(80,105)}.0.{rng.randrange(3000,4500)}.{rng.randrange(60,125)} "
+            f"Safari/{rng.randrange(530,537)}.{rng.randrange(30,36)}"
+        )
 
     async def download_track_async(
         self,
@@ -1317,23 +1340,3 @@ class TidalProvider(BaseProvider):
             logger.exception("[tidal] unexpected error")
             return DownloadResult.fail(self.name, str(exc))
 
-    @staticmethod
-    def _parse_track_id(tidal_url: str) -> int:
-        parts = tidal_url.split("/track/")
-        if len(parts) < 2:
-            raise ParseError("tidal", f"invalid Tidal URL: {tidal_url}")
-        try:
-            return int(parts[1].split("?")[0].strip())
-        except ValueError as exc:
-            raise ParseError("tidal", f"cannot parse track ID from {tidal_url}", exc)
-
-    @staticmethod
-    def _random_ua() -> str:
-        rng = random.Random()
-        rng.seed(int(time.time() // 3600))
-        return (
-            f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_{rng.randrange(11,15)}_{rng.randrange(4,9)}) "
-            f"AppleWebKit/{rng.randrange(530,537)}.{rng.randrange(30,37)} (KHTML, like Gecko) "
-            f"Chrome/{rng.randrange(80,105)}.0.{rng.randrange(3000,4500)}.{rng.randrange(60,125)} "
-            f"Safari/{rng.randrange(530,537)}.{rng.randrange(30,36)}"
-        )

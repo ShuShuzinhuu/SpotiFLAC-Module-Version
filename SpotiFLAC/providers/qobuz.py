@@ -12,27 +12,24 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlparse, quote
+from urllib.parse import quote, urlparse
 
 import httpx
 
-from .base import BaseProvider
-from ..core.console import (
-    print_source_banner, print_api_failure
-)
+from ..core.console import print_api_failure, print_source_banner
 from ..core.download_validation import validate_downloaded_track_async
-from ..core.errors import (
-    TrackNotFoundError, NetworkError,
-    ParseError, SpotiflacError, ErrorKind,
-)
-from ..core.http import AsyncHttpClient, RetryConfig, NetworkManager, async_zarz_rate_limiter
-from ..core.models import TrackMetadata, DownloadResult
-from ..core.musicbrainz import mb_result_to_tags, fetch_mb_metadata_async
-from ..core.provider_stats import record_success_async, record_failure_async, prioritize_providers_async
-from ..core.tagger import _print_mb_summary, EmbedOptions
-from ..core.tagger import embed_metadata_async
 from ..core.endpoints import get_qobuz_endpoints
+from ..core.errors import (ErrorKind, NetworkError, ParseError, SpotiflacError,
+                           TrackNotFoundError)
+from ..core.http import (AsyncHttpClient, NetworkManager, RetryConfig,
+                         async_zarz_rate_limiter)
+from ..core.models import DownloadResult, TrackMetadata
+from ..core.musicbrainz import fetch_mb_metadata_async, mb_result_to_tags
+from ..core.provider_stats import (prioritize_providers_async,
+                                   record_failure_async, record_success_async)
 from ..core.quality import map_musicdl_quality
+from ..core.tagger import EmbedOptions, _print_mb_summary, embed_metadata_async
+from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
 
@@ -345,8 +342,8 @@ def _parse_retry_after(resp: httpx.Response) -> float | None:
     except ValueError:
         pass
     try:
-        from email.utils import parsedate_to_datetime
         import datetime
+        from email.utils import parsedate_to_datetime
         dt = parsedate_to_datetime(raw)
         secs = (dt - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
         return max(0.0, secs)
@@ -700,8 +697,8 @@ class QobuzProvider(BaseProvider):
                     resp = await client.post(post_url, json=payload_fd, headers=fd_headers, timeout=timeout_s)
 
                 elif is_squid:
-                    import struct
                     import base64
+                    import struct
                     parsed = urlparse(api_base)
                     origin = f"{parsed.scheme}://{parsed.netloc}"
                     squid_headers = {
@@ -1082,6 +1079,14 @@ class QobuzProvider(BaseProvider):
         except Exception:
             return 0
 
+    @staticmethod
+    def _raise_api_error(resp: httpx.Response, endpoint: str) -> None:
+        try:
+            msg = resp.json().get("message", f"HTTP {resp.status_code}")
+        except Exception:
+            msg = f"HTTP {resp.status_code}"
+        raise NetworkError("qobuz", f"{endpoint} → {msg}")
+
     async def download_track_async(
             self,
             metadata:   TrackMetadata,
@@ -1183,7 +1188,8 @@ class QobuzProvider(BaseProvider):
                     isrc_val = normalize_isrc(track["isrc"])
                     if isrc_val:
                         try:
-                            from ..core.isrc_utils import confirm_isrc_with_qobuz_async
+                            from ..core.isrc_utils import \
+                                confirm_isrc_with_qobuz_async
                             ok, _ = await confirm_isrc_with_qobuz_async(isrc_val, metadata.title or "", metadata.artists or "", metadata.duration_ms or 0)
                             if ok:
                                 metadata.isrc = isrc_val
@@ -1312,11 +1318,3 @@ class QobuzProvider(BaseProvider):
         except Exception as exc:
             logger.exception("[qobuz] unexpected error")
             return DownloadResult.fail(self.name, f"unexpected: {exc}")
-
-    @staticmethod
-    def _raise_api_error(resp: httpx.Response, endpoint: str) -> None: 
-        try:
-            msg = resp.json().get("message", f"HTTP {resp.status_code}")
-        except Exception:
-            msg = f"HTTP {resp.status_code}"
-        raise NetworkError("qobuz", f"{endpoint} → {msg}")

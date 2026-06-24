@@ -1,14 +1,15 @@
 from __future__ import annotations
+
 import asyncio
 import asyncio.subprocess as _subproc
 import logging
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Callable, Awaitable
+from typing import Awaitable, Callable
 
-from ..core.models import TrackMetadata, DownloadResult, build_filename
 from ..core.http import AsyncHttpClient, AsyncRateLimiter, RetryConfig
+from ..core.models import DownloadResult, TrackMetadata, build_filename
 
 logger = logging.getLogger(__name__)
 
@@ -146,12 +147,27 @@ class BaseProvider(ABC):
         stdout, stderr = await proc.communicate()
         return proc.returncode, stdout.decode(errors="ignore"), stderr.decode(errors="ignore")
 
-    async def _run_ffprobe(self, *args: str) -> tuple[int, str, str]:
-        """Executes ffprobe asynchronously and returns (returncode, stdout, stderr)."""
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=_subproc.PIPE,
-            stderr=_subproc.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        return proc.returncode, stdout.decode(errors="ignore"), stderr.decode(errors="ignore")
+    # ------------------------------------------------------------------
+    # Interface methods — subclasses must implement
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    async def download_track_async(
+            self,
+            metadata:   TrackMetadata,
+            output_dir: str,
+            *,
+            filename_format:      str  = "{title} - {artist}",
+            position:             int  = 1,
+            include_track_num:    bool = False,
+            use_album_track_num:  bool = False,
+            first_artist_only:    bool = False,
+            allow_fallback:       bool = True,
+            embed_lyrics:         bool = False,
+            lyrics_providers:     list[str] | None = None,
+            enrich_metadata:      bool = False,
+            enrich_providers:     list[str] | None = None,
+            is_album:             bool = False,
+            **kwargs,
+    ) -> DownloadResult:
+        raise NotImplementedError

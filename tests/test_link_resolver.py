@@ -49,9 +49,9 @@ class LinkResolverTests(unittest.TestCase):
             "<a href=\"https://listen.tidal.com/track/56789\"></a>"
             "</html>"
         )
-        self.http.get.return_value = Mock(text=html)
+        self.http.get_async.return_value = Mock(text=html)
 
-        links = self.resolver._get_songlink_html_links("ABCDEFG")
+        links = asyncio.run(self.resolver._get_songlink_html_links_async("ABCDEFG"))
 
         self.assertEqual(links["deezer"], "https://www.deezer.com/track/123")
         self.assertEqual(links["amazonMusic"], "https://music.amazon.com/tracks/B123456789?musicTerritory=US")

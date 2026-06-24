@@ -1,26 +1,25 @@
 # youtube_provider.py
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
-import asyncio
 from pathlib import Path
 from typing import Any, Callable, Iterator
-from urllib.parse import quote, urlparse, parse_qs
+from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import yt_dlp
 
-from ..core.http import AsyncHttpClient
-from ..core.models import TrackMetadata, DownloadResult
-from ..core.errors import SpotiflacError, ErrorKind
-from .base import BaseProvider
-from ..core.tagger import embed_metadata_async, EmbedOptions
-from ..core.musicbrainz import mb_result_to_tags
 from ..core.download_validation import validate_downloaded_track_async
-from ..core.musicbrainz import AsyncMBFetch
 from ..core.endpoints import get_youtube_endpoints
+from ..core.errors import ErrorKind, SpotiflacError
+from ..core.http import AsyncHttpClient
+from ..core.models import DownloadResult, TrackMetadata
+from ..core.musicbrainz import AsyncMBFetch, mb_result_to_tags
+from ..core.tagger import EmbedOptions, embed_metadata_async
+from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +204,8 @@ class YouTubeProvider(BaseProvider):
                                 isrc_val = normalize_isrc(entity_data.get("isrc"))
                                 if isrc_val:
                                     try:
-                                        from ..core.isrc_utils import confirm_isrc_with_qobuz_async
+                                        from ..core.isrc_utils import \
+                                            confirm_isrc_with_qobuz_async
                                         ok, _ = await confirm_isrc_with_qobuz_async(isrc_val, metadata.title or "", metadata.artists or "", metadata.duration_ms or 0)
                                         if ok:
                                             metadata.isrc = isrc_val
@@ -226,11 +226,13 @@ class YouTubeProvider(BaseProvider):
                                 dz_data = dz_resp.json()
                                 if dz_data.get("isrc"):
                                     try:
-                                        from ..core.isrc_utils import normalize_isrc
+                                        from ..core.isrc_utils import \
+                                            normalize_isrc
                                         isrc_val = normalize_isrc(dz_data.get("isrc"))
                                         if isrc_val:
                                             try:
-                                                from ..core.isrc_utils import confirm_isrc_with_qobuz_async
+                                                from ..core.isrc_utils import \
+                                                    confirm_isrc_with_qobuz_async
                                                 ok, _ = await confirm_isrc_with_qobuz_async(isrc_val, metadata.title or "", metadata.artists or "", metadata.duration_ms or 0)
                                                 if ok:
                                                     metadata.isrc = isrc_val

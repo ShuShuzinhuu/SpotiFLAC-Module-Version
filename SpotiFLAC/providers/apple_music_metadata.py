@@ -15,7 +15,7 @@ import urllib.parse
 from typing import Any
 from urllib.parse import urlparse
 
-from ..core.errors import SpotiflacError, ErrorKind, InvalidUrlError, AuthError
+from ..core.errors import AuthError, ErrorKind, InvalidUrlError, SpotiflacError
 from ..core.http import AsyncHttpClient
 from ..core.models import TrackMetadata
 

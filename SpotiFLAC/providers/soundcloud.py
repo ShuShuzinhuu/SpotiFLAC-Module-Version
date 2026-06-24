@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import logging
 import os
 import re
-import difflib
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
-from .base import BaseProvider
+from ..core.endpoints import get_soundcloud_cobalt
+from ..core.errors import AuthError
 from ..core.http import AsyncHttpClient
 from ..core.link_resolver import LinkResolver
 from ..core.models import DownloadResult, TrackMetadata, build_filename
-from ..core.tagger import embed_metadata_async, EmbedOptions
-from ..core.endpoints import get_soundcloud_cobalt
-from ..core.errors import AuthError
+from ..core.tagger import EmbedOptions, embed_metadata_async
+from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
 

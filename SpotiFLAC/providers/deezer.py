@@ -2,27 +2,27 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
 import logging
-import time
-import difflib
-import urllib.parse
-import threading
 import shutil
+import threading
+import time
+import urllib.parse
 from pathlib import Path
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
 
 import httpx
 
-from ..core.tagger import embed_metadata_async, EmbedOptions
-from ..core.models import TrackMetadata, DownloadResult
-from ..core.errors import SpotiflacError, ErrorKind
-from ..core.http import NetworkManager
-from .base import BaseProvider
-from ..core.musicbrainz import mb_result_to_tags, fetch_mb_metadata_async
-from ..core.endpoints import get_deezer_endpoint, get_youtube_endpoints
-from ..core.quality import normalize_quality
 from ..core.download_validation import validate_downloaded_track_async
+from ..core.endpoints import get_deezer_endpoint, get_youtube_endpoints
+from ..core.errors import ErrorKind, SpotiflacError
+from ..core.http import NetworkManager
+from ..core.models import DownloadResult, TrackMetadata
+from ..core.musicbrainz import fetch_mb_metadata_async, mb_result_to_tags
+from ..core.quality import normalize_quality
+from ..core.tagger import EmbedOptions, embed_metadata_async
+from .base import BaseProvider
 
 try:
     from Crypto.Cipher import Blowfish
@@ -512,7 +512,8 @@ class DeezerProvider(BaseProvider):
         isrc_to_use = track.get("isrc") or metadata.isrc
         if track.get("isrc") and track["isrc"] != metadata.isrc:
             try:
-                from ..core.isrc_utils import normalize_isrc, confirm_isrc_with_qobuz_async
+                from ..core.isrc_utils import (confirm_isrc_with_qobuz_async,
+                                               normalize_isrc)
                 isrc_val = normalize_isrc(track["isrc"])
                 if isrc_val:
                     ok, _ = await confirm_isrc_with_qobuz_async(isrc_val, metadata.title or "", metadata.artists or "", metadata.duration_ms or 0)
@@ -566,7 +567,8 @@ class DeezerProvider(BaseProvider):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 await asyncio.to_thread(shutil.move, str(downloaded_path), str(dest))
 
-            from ..core.download_validation import validate_downloaded_track_async
+            from ..core.download_validation import \
+                validate_downloaded_track_async
             expected_s = metadata.duration_ms // 1000
             valid, err_msg = await validate_downloaded_track_async(str(dest), expected_s)
             if not valid:

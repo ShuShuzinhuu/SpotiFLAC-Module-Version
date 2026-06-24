@@ -11,10 +11,9 @@ import unicodedata
 from typing import Any
 from urllib.parse import urlparse
 
-from ..core.errors import (
-    AuthError, ErrorKind, InvalidUrlError, NetworkError,
-    RateLimitedError, SpotiflacError, TrackNotFoundError,
-)
+from ..core.errors import (AuthError, ErrorKind, InvalidUrlError, NetworkError,
+                           RateLimitedError, SpotiflacError,
+                           TrackNotFoundError)
 from ..core.http import AsyncHttpClient
 from ..core.models import TrackMetadata
 
