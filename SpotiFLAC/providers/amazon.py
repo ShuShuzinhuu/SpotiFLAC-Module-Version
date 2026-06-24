@@ -26,10 +26,11 @@ from ..core.errors import SpotiflacError, ErrorKind
 from ..core.models import TrackMetadata, DownloadResult
 from ..core.musicbrainz import mb_result_to_tags
 from ..core.tagger import EmbedOptions, embed_metadata_async
-from ..core.endpoints import get_amazon_endpoint
+from ..core.endpoints import get_amazon_endpoint, get_pandora_base_and_path
 from ..core.quality import to_zarz_codec
 from ..core.flac_validation import validate_and_repair_if_needed
 from ..core.isrc_utils import normalize_isrc
+from .tidal import _find_isrc_via_qobuz
 
 
 logger = logging.getLogger(__name__)
@@ -268,13 +269,13 @@ class AmazonProvider(BaseProvider):
         # 1. ZARZ.MOE API (Spotify ID)
         source_url = f"https://open.spotify.com/track/{track_id}"
         try:
-            _zarz_base = get_amazon_endpoint("zarz")
+            _zarz_base, _zarz_path = get_pandora_base_and_path()
             if _zarz_base:
-                _zarz_url = f"{_zarz_base.rstrip('/')}/resolve"
+                _zarz_url = f"{_zarz_base.rstrip('/')}/v1/resolve"
                 resp = await self._async_http.post(
                     _zarz_url,
                     json={"url": source_url},
-                    headers={"User-Agent": "SpotiFLAC-Mobile/4.5.0"},
+                    headers={"User-Agent": "SpotiFLAC-Mobile/4.3.0"},
                     timeout=15
                 )
                 data = resp.json()
@@ -1378,12 +1379,55 @@ class AmazonProvider(BaseProvider):
             )
             if await asyncio.to_thread(self._file_exists, dest):
                 return DownloadResult.skipped_result(self.name, str(dest))
-            
+
+            # Avvia in parallelo la ricerca ISRC su Qobuz per ridurre la latenza
+            try:
+                duration_ms = int(getattr(metadata, "duration_ms", 0) or (int(getattr(metadata, "duration", 0)) * 1000))
+            except Exception:
+                duration_ms = 0
+
+            try:
+                qobuz_task = asyncio.create_task(
+                    _find_isrc_via_qobuz(
+                        getattr(metadata, "title", ""),
+                        getattr(metadata, "artists", ""),
+                        duration_ms,
+                    )
+                )
+            except Exception:
+                qobuz_task = None
+
             amazon_url = await self._resolve_amazon_url(metadata)
             downloaded, api_metadata = await self._download_from_api(amazon_url, output_dir, quality)
 
+            # Normalizza risultato Qobuz (gather/task può sollevare eccezioni)
+            qobuz_isrc = None
+            if qobuz_task is not None:
+                try:
+                    res = await qobuz_task
+                    if isinstance(res, BaseException):
+                        logger.debug("[amazon] Qobuz ISRC lookup raised: %s", res)
+                    else:
+                        qobuz_isrc = res
+                except Exception as exc:
+                    logger.debug("[amazon] Qobuz ISRC lookup failed: %s", exc)
+
             
-            if api_metadata and api_metadata.get("isrc") and api_metadata["isrc"] != metadata.isrc:
+            # Qobuz ha priorità assoluta su Amazon API: sempre consultato,
+            # il suo ISRC sovrascrive quello originale se trovato.
+            # Se Qobuz NON trova un ISRC, allora valida quello dell'API Amazon.
+            if qobuz_isrc:
+                try:
+                    normalized = normalize_isrc(qobuz_isrc)
+                    if normalized:
+                        logger.info("[amazon] ISRC from Qobuz (preferred): %s", normalized)
+                        metadata.isrc = normalized
+                        if api_metadata is None:
+                            api_metadata = {}
+                        api_metadata["isrc"] = normalized
+                except Exception:
+                    logger.debug("[amazon] Failed to normalize Qobuz ISRC: %s", qobuz_isrc)
+            elif api_metadata and api_metadata.get("isrc") and api_metadata["isrc"] != metadata.isrc:
                 try:
                     from ..core.isrc_utils import normalize_isrc, confirm_isrc_with_qobuz_async
                     isrc_val = normalize_isrc(api_metadata["isrc"])
