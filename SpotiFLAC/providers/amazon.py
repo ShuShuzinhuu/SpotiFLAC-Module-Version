@@ -1388,15 +1388,24 @@ class AmazonProvider(BaseProvider):
                     from ..core.isrc_utils import normalize_isrc, confirm_isrc_with_qobuz_async
                     isrc_val = normalize_isrc(api_metadata["isrc"])
                     if isrc_val:
-                        ok, _ = await confirm_isrc_with_qobuz_async(isrc_val, metadata.title or "", metadata.artists or "", 0)
+                        # Recupera la durata reale dai metadati anziché passare 0
+                        track_duration = getattr(metadata, "duration", 0) or getattr(metadata, "duration_ms", 0) / 1000 or 0
+                        
+                        ok, _ = await confirm_isrc_with_qobuz_async(
+                            isrc_val, 
+                            metadata.title or "", 
+                            metadata.artists or "", 
+                            track_duration
+                        )
                         if ok:
                             logger.info("[amazon] Syncing metadata ISRC: %s -> %s", metadata.isrc, isrc_val)
                             metadata.isrc = isrc_val
                             api_metadata["isrc"] = isrc_val
                         else:
+                            logger.warning("[amazon] Qobuz verification failed for ISRC: %s", isrc_val)
                             api_metadata["isrc"] = metadata.isrc
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error("[amazon] Error during Qobuz ISRC validation: %s", e)
 
             from ..core.musicbrainz import AsyncMBFetch
             mb_fetcher = AsyncMBFetch(metadata.isrc) if getattr(metadata, "isrc", None) else None
