@@ -665,10 +665,24 @@ class QobuzProvider(BaseProvider):
                 elif is_fd:
                     parsed_fd = urlparse(api_cleaning)
                     base_origin = f"{parsed_fd.scheme}://{parsed_fd.netloc}"
-                    t_token = await self._get_fd_token_async(client, base_origin, timeout_s)
-                    fd_headers = headers.copy()
-                    fd_headers["X-Dl-Token"] = t_token
-                    fd_headers["Referer"] = f"{base_origin}/download"
+                    # The flacdownloader expects a cookie + referer on /prepare and
+                    # an X-Dl-Token + Referer on the POST. Mirror common browsers.
+                    prepare_headers = {
+                        "Accept": "*/*",
+                        "User-Agent": _DEFAULT_UA,
+                        "Cookie": "csrftoken=laFTROF6th29hXV3Q5KtVw1oelBIGBXS",
+                        "Referer": f"{base_origin}/download",
+                    }
+                    # Fetch token using the prepare headers
+                    t_token = await self._get_fd_token_async(client, base_origin, prepare_headers, timeout_s)
+                    fd_headers = {
+                        "Accept": "application/json",
+                        "User-Agent": _DEFAULT_UA,
+                        "Referer": f"{base_origin}/download",
+                        "X-Dl-Token": t_token,
+                        "Cookie": "csrftoken=laFTROF6th29hXV3Q5KtVw1oelBIGBXS",
+                        "Content-Type": "application/json",
+                    }
                     fmt_map = {"27": 27, "7": 7, "6": 6, "5": 5,
                                "HI_RES_LOSSLESS": 27, "HI_RES": 7, "LOSSLESS": 6}
                     fmt_id = fmt_map.get(quality, 7)
@@ -676,7 +690,14 @@ class QobuzProvider(BaseProvider):
                         "url": f"{_OPEN_URL}{track_id}",
                         "formatId": fmt_id,
                     }
-                    resp = await client.post(api_cleaning, json=payload_fd, headers=fd_headers, timeout=timeout_s)
+                    # Some flacdownloader entries are a bare domain (https://flacdownloader.com).
+                    # In that case the correct POST path is /qobuz-asset — otherwise use the full api_cleaning as provided.
+                    parsed_fd_full = urlparse(api_cleaning)
+                    if not parsed_fd_full.path or parsed_fd_full.path == "/":
+                        post_url = api_cleaning.rstrip("/") + "/qobuz-asset"
+                    else:
+                        post_url = api_cleaning
+                    resp = await client.post(post_url, json=payload_fd, headers=fd_headers, timeout=timeout_s)
 
                 elif is_squid:
                     import struct
@@ -764,7 +785,42 @@ class QobuzProvider(BaseProvider):
                         "url": f"{_OPEN_URL}{track_id}",
                     }
                     post_headers = {"User-Agent": _ZARZ_USER_AGENT if is_zarz else _DEFAULT_UA}
+                    # If this API is in the community list, adapt payload and headers
+                    if api_base in _COMMUNITY_APIS:
+                        # Community endpoints expect an 'id' numeric and quality like "24"/"16"
+                        try:
+                            # map quality: 27/7 -> "24", else "16"
+                            community_quality = "24" if str(quality) in ("27", "7") else "16"
+                            payload = {
+                                "id": int(track_id),
+                                "quality": int(community_quality) if community_quality.isdigit() else community_quality,
+                                "upload_to_r2": False,
+                            }
+                        except Exception:
+                            payload = {"id": track_id, "quality": _map_musicdl_quality(quality), "upload_to_r2": False}
+                        # set headers required by community
+                        post_headers = {
+                            "User-Agent": f"SpotiFLAC/7.1.9",
+                            "Accept": "application/json",
+                            "Content-Type": "application/json",
+                            "x-api-key": "explore-obscure-chivalry-travesty-blinks",
+                        }
+
+                    # Attempt request, refresh credentials and retry once on 400/401
                     resp = await client.post(api_base, json=payload, headers=post_headers, timeout=timeout_s)
+                    if resp.status_code in (400, 401):
+                        try:
+                            await self._get_credentials_async(force_refresh=True)
+                            # rebuild headers with refreshed creds
+                            creds = await self._get_credentials_async()
+                            if creds:
+                                if creds.app_id:
+                                    post_headers["X-App-Id"] = creds.app_id
+                                if creds.user_auth_token:
+                                    post_headers["X-User-Auth-Token"] = creds.user_auth_token
+                            resp = await client.post(api_base, json=payload, headers=post_headers, timeout=timeout_s)
+                        except Exception:
+                            pass
 
                 else:
                     url = _build_stream_url(api_base, track_id, quality)
