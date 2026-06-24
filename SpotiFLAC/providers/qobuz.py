@@ -11,8 +11,6 @@ import re
 import threading
 import time
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor, as_completed, Future
-from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse, quote
@@ -78,7 +76,7 @@ _QOBUZ_DL_: list[str]           = get_qobuz_endpoints("dl")
 _POST_APIS: list[str]           = get_qobuz_endpoints("post")
 _GDSTUDIO_APIS: list[str]       = get_qobuz_endpoints("gdstudio")
 _WJHE_APIS: list[str]           = get_qobuz_endpoints("wjhe")
-_flacdownloader_raw = get_qobuz_endpoints("flacdownloader")
+_flacdownloader_raw              = get_qobuz_endpoints("flacdownloader")
 _FLACDOWNLOADER_APIS: list[str] = (
     [_flacdownloader_raw] if isinstance(_flacdownloader_raw, str) and _flacdownloader_raw
     else list(_flacdownloader_raw) if isinstance(_flacdownloader_raw, list)
@@ -374,16 +372,23 @@ _dns_failed_hosts_lock: threading.Lock = threading.Lock()
 def _get_fd_token(
         client:    httpx.Client,
         origin:    str,
-        headers:   dict,
         timeout_s: int,
 ) -> str:
+    fd_headers = {
+        "User-Agent": _DEFAULT_UA,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+        "Referer": f"{origin}/download",
+        "Cookie": "csrftoken=IaFTROF6th29hXV3Q5KtVw1oelBIGBXS",
+    }
+
     now = time.time()
     with _fd_token_lock:
         cached = _fd_token_cache.get(origin)
-        if cached and (now - cached[1]) < 55.0:   # token valido ~60s
+        if cached and (now - cached[1]) < 55.0:
             return cached[0]
 
-    prep_resp = client.get(f"{origin}/prepare", headers=headers, timeout=timeout_s)
+    prep_resp = client.get(f"{origin}/prepare", headers=fd_headers, timeout=timeout_s)
     if prep_resp.status_code == 429:
         raise RuntimeError("rate limited (HTTP 429) su /prepare")
     if prep_resp.status_code != 200:
@@ -391,7 +396,7 @@ def _get_fd_token(
 
     t_token = prep_resp.json().get("t")
     if not t_token:
-        raise RuntimeError("fd /prepare: nessun token 't'")
+        raise RuntimeError("fd /prepare: no token 't'")
 
     with _fd_token_lock:
         _fd_token_cache[origin] = (t_token, now)
@@ -424,332 +429,6 @@ def _build_gdstudio_signature(host: str, track_id: str, ts9: str) -> str:
     base = f"{host}|{version}|{ts9}|{escaped_track_id}"
     return hashlib.md5(base.encode("utf-8")).hexdigest().upper()[-8:]
 
-def _fetch_stream_url_once(
-        client:        httpx.Client,
-        api_base:      str,
-        track_id:      int,
-        quality:       str,
-        timeout_s:     int = _API_TIMEOUT_S,
-        local_api_url: str | None = None,
-) -> str:
-    api_cleaning = api_base.rstrip('/')
-    
-    if local_api_url:
-        local_api_url = local_api_url.rstrip('/')
-    is_local_api = (api_cleaning == local_api_url) and bool(local_api_url)
-    
-    is_zarz = "zarz.moe" in api_cleaning
-    is_gdstudio = "gdstudio" in api_cleaning
-    is_wjhe = "wjhe.top" in api_cleaning
-    is_squid = "squid.wtf" in api_cleaning
-    is_fd = "flacdownloader.com" in api_cleaning
-    
-    is_post = api_base in _POST_APIS or api_base in _COMMUNITY_APIS or is_zarz or is_gdstudio or is_fd
-    max_retries = _MAX_RETRIES_POST if is_post else _MAX_RETRIES_GET
-
-    headers = {
-        "User-Agent": _ZARZ_USER_AGENT if is_zarz else _DEFAULT_UA,
-        "Accept": "application/json"
-    }
-    last_err: Exception = RuntimeError("no attempts made")
-
-    for attempt in range(max_retries + 1):
-        if attempt > 0:
-            delay = _backoff_delay(attempt)
-            logger.debug(
-                "[qobuz] retry %d/%d for %s after %.2fs",
-                attempt, max_retries, api_base, delay,
-            )
-            time.sleep(delay)
-
-        try:
-            if is_local_api:
-                local_q = _map_local_api_quality(quality)
-                url = f"{api_cleaning}/download-url/{track_id}?quality={local_q}"
-                resp = client.get(url, headers=headers, timeout=timeout_s)
-
-            elif is_gdstudio:
-                host = urlparse(api_base).netloc
-                ts9 = _get_gdstudio_ts9(host)
-                br = "999" if quality in ("27", "7") else "740" if quality in ("", "6") else "320"
-                
-                payload = {
-                    "types": "url",
-                    "id": str(track_id),
-                    "source": "qobuz",
-                    "br": br,
-                    "s": _build_gdstudio_signature(host, str(track_id), ts9)
-                }
-                
-                gdstudio_headers = {
-                    "User-Agent": _DEFAULT_UA,
-                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                    "Origin": f"https://{host}",
-                    "Referer": f"https://{host}/",
-                    "Accept": "application/json"
-                }
-                resp = client.post(api_base, data=payload, headers=gdstudio_headers, timeout=timeout_s)
-
-            elif is_wjhe:
-                q_map = {"27": 2000, "7": 2000, "6": 1000, "": 1000}
-                wjhe_q = q_map.get(quality, 1000)
-                wjhe_f = "flac" 
-                url = f"{api_base}?ID={track_id}&quality={wjhe_q}&format={wjhe_f}"
-                
-                resp = client.get(url, headers=headers, timeout=timeout_s, follow_redirects=False) 
-                
-                if resp.status_code in (301, 302, 303, 307, 308):
-                    loc = resp.headers.get("Location")
-                    if loc and loc.startswith("http"):
-                        return loc
-
-            elif is_fd:
-                _parsed_fd  = urlparse(api_cleaning)
-                base_origin = f"{_parsed_fd.scheme}://{_parsed_fd.netloc}"
-
-                t_token = _get_fd_token(client, base_origin, headers, timeout_s)
-
-                fd_headers = headers.copy()
-                fd_headers["X-Dl-Token"] = t_token
-                fd_headers["Referer"]    = f"{base_origin}/it/download"
-
-                fmt_map = {"27": 27, "7": 7, "6": 6, "5": 5,
-                        "HI_RES_LOSSLESS": 27, "HI_RES": 7, "LOSSLESS": 6}
-                fmt_id  = fmt_map.get(quality, 7)
-
-                payload_fd = {
-                    "url":      f"https://open.qobuz.com/track/{track_id}",
-                    "formatId": fmt_id,
-                }
-
-                resp = client.post(api_cleaning, json=payload_fd, headers=fd_headers, timeout=timeout_s)
-
-            elif is_squid:
-                import struct
-                import base64
-                
-                parsed = urlparse(api_base)
-                origin = f"{parsed.scheme}://{parsed.netloc}"
-                
-                squid_headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "application/json, text/plain, */*",
-                    "Accept-Language": "en-US,en;q=0.9",
-                }
-                
-                current_ts = int(time.time() * 1000)
-                chal_resp = client.get(
-                    f"{origin}/api/altcha/challenge",
-                    params={"ts": current_ts},
-                    headers=squid_headers,
-                    timeout=timeout_s
-                )
-                chal_resp.raise_for_status()
-                
-                challenge_json_str = chal_resp.text
-                challenge_data = json.loads(challenge_json_str)
-                params = challenge_data["parameters"]
-                
-                salt_hex   = params.get("salt", "")
-                nonce_hex  = params["nonce"]
-                key_prefix = params["keyPrefix"]
-                algorithm  = params.get("algorithm", "SHA-256")
-                cost       = params.get("cost", 1)
-                key_length = params.get("keyLength", 32)
-
-                if algorithm != "SHA-256":
-                    raise ValueError(f"Algoritmo ALTCHA non supportato: {algorithm}")
-
-                salt_bytes  = bytes.fromhex(salt_hex) if salt_hex else b""
-                nonce_bytes = bytes.fromhex(nonce_hex)
-
-                start_time = time.time()
-                counter = 0
-
-                while True:
-                    password = nonce_bytes + struct.pack(">I", counter)
-                    for i in range(cost):
-                        data = (salt_bytes + password) if i == 0 else derived
-                        derived = hashlib.sha256(data).digest()[:key_length]
-
-                    hex_digest = derived.hex()
-                    if hex_digest.startswith(key_prefix):
-                        break
-                    counter += 1
-
-                elapsed = (time.time() - start_time) * 1000
-                min_elapsed = 160.0 + random.uniform(0, 20)
-                if elapsed < min_elapsed:
-                    time.sleep((min_elapsed - elapsed) / 1000.0)
-                    elapsed = min_elapsed
-
-                solution = {
-                    "counter":    counter,
-                    "derivedKey": hex_digest,
-                    "time":       round(elapsed, 1),
-                }
-                
-                solution_json = json.dumps(solution, separators=(",", ":"))
-                payload_json  = f'{{"challenge":{challenge_json_str},"solution":{solution_json}}}'
-                payload_b64 = base64.b64encode(payload_json.encode()).decode()
-                
-                verify_resp = client.post(
-                    f"{origin}/api/altcha/verify",
-                    json={"payload": payload_b64},
-                    headers={
-                        "Origin":  origin,
-                        "Referer": f"{origin}/",
-                        **squid_headers
-                    },
-                    timeout=timeout_s,
-                )
-                verify_resp.raise_for_status()
-                
-                url = _build_stream_url(api_base, track_id, quality)
-                resp = client.get(
-                    url,
-                    headers={
-                        "Origin":  origin,
-                        "Referer": f"{origin}/",
-                        **squid_headers
-                    },
-                    timeout=timeout_s
-                )
-
-            elif is_post:
-                if is_zarz:
-                    from ..core.http import zarz_rate_limiter
-                    zarz_rate_limiter.wait_for_slot()
-
-                payload = {
-                    "quality": _map_musicdl_quality(quality),
-                    "upload_to_r2": False,
-                    "url": f"{_OPEN_URL}{track_id}"
-                }
-                post_headers = {"User-Agent": _ZARZ_USER_AGENT if is_zarz else _DEFAULT_UA}
-
-                resp = client.post(
-                    api_base,
-                    json=payload,
-                    headers=post_headers,
-                    timeout=timeout_s,
-                )
-            else:
-                url = _build_stream_url(api_base, track_id, quality)
-                resp = client.get(url, headers=headers, timeout=timeout_s)
-
-            if resp.status_code == 429:
-                retry_after = _parse_retry_after(resp)
-                wait = _backoff_delay(attempt + 1, retry_after)
-                last_err = RuntimeError("rate limited (HTTP 429)")
-                if attempt < max_retries:
-                    time.sleep(wait)
-                continue
-
-            if resp.status_code >= 500:
-                last_err = RuntimeError(f"HTTP {resp.status_code}")
-                continue
-            if resp.status_code != 200:
-                raise RuntimeError(f"HTTP {resp.status_code}")
-
-            text = resp.text.strip()
-            if not text:
-                last_err = RuntimeError("empty response body")
-                continue
-            if text.startswith("<"):
-                raise RuntimeError("received HTML instead of JSON")
-
-            try:
-                data = resp.json()
-            except ValueError:
-                last_err = RuntimeError("invalid JSON in response")
-                continue
-
-            if isinstance(data.get("error"), str) and data["error"].strip():
-                raise RuntimeError(data["error"].strip())
-            if isinstance(data.get("detail"), str) and data["detail"].strip():
-                raise RuntimeError(data["detail"].strip())
-            if data.get("success") is False:
-                msg = data.get("message", "api returned success=false")
-                raise RuntimeError(str(msg))
-
-            stream = _extract_stream_url_from_json(data)
-            if stream:
-                return stream
-
-            last_err = RuntimeError("no download URL in response")
-
-        except (httpx.TimeoutException, httpx.ConnectError) as exc: 
-            last_err = exc
-            if isinstance(exc, httpx.ConnectError) and "nodename nor servname" in str(exc):
-                host = urlparse(api_base).netloc
-                with _dns_failed_hosts_lock:
-                    _dns_failed_hosts.add(host)
-                break
-            continue
-        except RuntimeError:
-            raise
-        except Exception as exc:
-            last_err = exc
-            if not is_post:
-                break
-            break
-
-    raise last_err
-
-async def _fetch_stream_url_parallel(
-        client:        httpx.Client,
-        apis:          list[str],
-        track_id:      int,
-        quality:       str,
-        timeout_s:     int = _API_TIMEOUT_S,
-        local_api_url: str | None = None,
-) -> tuple[str, str]:
-    if not apis:
-        raise SpotiflacError(ErrorKind.UNAVAILABLE, "no stream APIs configured", "qobuz")
-
-    start  = time.time()
-    errors: list[str] = []
-
-    with _dns_failed_hosts_lock:
-        dead = frozenset(_dns_failed_hosts)
-    available_apis = [a for a in apis if urlparse(a).netloc not in dead]
-    if not available_apis:
-        available_apis = apis  # fallback se tutti morti
-    pool = ThreadPoolExecutor(max_workers=min(len(available_apis), 4))
-    try:
-        futures: dict[Future, str] = {
-            pool.submit(_fetch_stream_url_once, client, api, track_id, quality, timeout_s, local_api_url): api
-            for api in apis
-        }
-        for fut in as_completed(futures, timeout=timeout_s + 2):
-            api = futures[fut]
-            try:
-                stream_url = fut.result()
-                short_api = _shorten_api_url(api)
-                logger.debug("[qobuz] parallel: got URL from %s in %.2fs", short_api, time.time() - start)
-                pool.shutdown(wait=False, cancel_futures=True)
-                await record_success_async("qobuz", api)
-                print_source_banner("qobuz", "", quality)
-                return api, stream_url
-            except Exception as exc:
-                err_msg = str(exc)[:80]
-                short_api = _shorten_api_url(api)
-                errors.append(f"{short_api}: {err_msg}")
-                await record_failure_async("qobuz", api)
-                print_api_failure("qobuz", api, err_msg)
-    except FuturesTimeoutError:
-        errors.append("global timeout exceeded")
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
-
-    logger.debug("[qobuz] All APIs failed details: %s", "; ".join(errors))
-    raise SpotiflacError(
-        ErrorKind.UNAVAILABLE,
-        f"All {len(apis)} Qobuz stream APIs failed.",
-        "qobuz",
-    )
-
 # ---------------------------------------------------------------------------
 # QobuzProvider
 # ---------------------------------------------------------------------------
@@ -769,7 +448,7 @@ class QobuzProvider(BaseProvider):
             headers   = {"User-Agent": _DEFAULT_UA, "Accept": "application/json"},
         )
         self._creds:      QobuzCredentials | None = None
-        self._creds_lock = threading.Lock()
+        self._creds_lock = asyncio.Lock()
         self._qobuz_token = qobuz_token or os.environ.get("QOBUZ_AUTH_TOKEN")
         self._local_api_url = local_api_url or os.environ.get("QOBUZ_LOCAL_API_URL")
 
@@ -788,7 +467,7 @@ class QobuzProvider(BaseProvider):
         )
 
     async def _get_credentials_async(self, force_refresh: bool = False) -> QobuzCredentials:
-        with self._creds_lock:
+        async with self._creds_lock:
             if not force_refresh and self._creds and self._creds.is_fresh():
                 if self._qobuz_token and not self._creds.user_auth_token:
                     self._creds.user_auth_token = self._qobuz_token
@@ -811,7 +490,7 @@ class QobuzProvider(BaseProvider):
         except Exception as exc:
             logger.warning("[qobuz] credential refresh failed: %s", exc)
 
-        with self._creds_lock:
+        async with self._creds_lock:
             if scraped:
                 self._creds = scraped
             elif disk:
@@ -992,10 +671,10 @@ class QobuzProvider(BaseProvider):
                 elif is_fd:
                     parsed_fd = urlparse(api_cleaning)
                     base_origin = f"{parsed_fd.scheme}://{parsed_fd.netloc}"
-                    t_token = await self._get_fd_token_async(client, base_origin, headers, timeout_s)
+                    t_token = await self._get_fd_token_async(client, base_origin, timeout_s)
                     fd_headers = headers.copy()
                     fd_headers["X-Dl-Token"] = t_token
-                    fd_headers["Referer"] = f"{base_origin}/it/download"
+                    fd_headers["Referer"] = f"{base_origin}/download"
                     fmt_map = {"27": 27, "7": 7, "6": 6, "5": 5,
                                "HI_RES_LOSSLESS": 27, "HI_RES": 7, "LOSSLESS": 6}
                     fmt_id = fmt_map.get(quality, 7)
@@ -1202,7 +881,7 @@ class QobuzProvider(BaseProvider):
                         for pending_task in pending:
                             pending_task.cancel()
                         await record_success_async("qobuz", api)
-                        print_source_banner("qobuz", "", quality)
+                        print_source_banner("qobuz", api, quality)
                         return api, stream_url, quality
                     except Exception as exc:
                         err_msg = str(exc)[:80]
@@ -1212,8 +891,8 @@ class QobuzProvider(BaseProvider):
                         print_api_failure("qobuz", api, err_msg)
                         continue
 
-            raise FuturesTimeoutError
-        except FuturesTimeoutError:
+            raise TimeoutError()
+        except TimeoutError:
             errors.append("global timeout exceeded")
         finally:
             for task in tasks:
@@ -1510,7 +1189,7 @@ class QobuzProvider(BaseProvider):
                     },
                 )
 
-                valid, err = await asyncio.to_thread(validate_downloaded_track_async, str(dest), expected_s)
+                valid, err = await validate_downloaded_track_async(str(dest), expected_s)
                 if not valid:
                     actual_duration = await self._get_audio_duration_seconds_async(str(dest))
                     if actual_duration > 0 and actual_duration <= 35 and expected_s > 45:
