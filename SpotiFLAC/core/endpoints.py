@@ -112,7 +112,7 @@ def get_deezer_endpoint(key: str) -> str:
 def get_amazon_endpoint(key: str) -> str:
     """
     Chiavi valide:
-    - Download: 'musicdl', 'spotbye1', 'spotbye2', 'zarz', 'community'
+    - Download: 'musicdl', 'spotbye1', 'spotbye2', 'zarz', 'zarz_media', 'community'
     - S: 's', 's_home', 's_challenge', 's_verify', 's_stream', 's_queue'
     - Resolver: 'resolver_songstats', 'resolver_songlink_api', 'resolver_songlink_html', 'resolver_spotify', 'resolver_deezer'
     - Base: 'amazon_music_base'
@@ -221,6 +221,9 @@ if __name__ == "__main__":
     
     qobuz_dl = get_qobuz_endpoints("dl")
     print(f"   Qobuz DL URLs       : {len(qobuz_dl)} trovati")
+
+    zarz_media = get_amazon_endpoint("zarz_media")
+    print(f"   Amazon Zarz Media   : {'Presente' if zarz_media else 'NON TROVATO'}")
 
     squid = get_amazon_endpoint("s")
     print(f"   Amazon S endpoint   : {'Presente' if squid else '�NON TROVATO'}")

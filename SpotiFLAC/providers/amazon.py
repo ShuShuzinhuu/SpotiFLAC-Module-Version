@@ -697,6 +697,17 @@ class AmazonProvider(BaseProvider):
         """Map quality string to Amazon/Zarz codec name (delegates to core.quality)."""
         return to_zarz_codec(quality)
 
+    def _build_zarz_url(self, base_url: str) -> str:
+        if not base_url:
+            raise ValueError("Zarz endpoint not configured")
+
+        url = base_url.rstrip("/")
+        if url.endswith("/media") or "/v1/media" in url:
+            return url
+        if "/v1/dl/" in url:
+            return url
+        return f"{url}/media"
+
     async def _download_from_zarz_api(self, asin: str, output_dir: str, quality: str) -> tuple[str, dict] | None:
         codec = self._quality_to_zarz_codec(quality)
         logger.info("[amazon] Trying Zarz.moe API (ASIN: %s, codec: %s)", asin, codec)
@@ -713,7 +724,15 @@ class AmazonProvider(BaseProvider):
             except ImportError:
                 pass
 
-            url = f"{get_amazon_endpoint('zarz').rstrip('/')}/media"
+            zarz_endpoint = (
+                get_amazon_endpoint('zarz_media')
+                or get_amazon_endpoint('zarz')
+            )
+            if not zarz_endpoint:
+                logger.warning("[amazon] Zarz media endpoint not configured; skipping Zarz API.")
+                return None
+
+            url = self._build_zarz_url(zarz_endpoint)
             try:
                 return await self._do_request_with_retry(
                     "GET",
