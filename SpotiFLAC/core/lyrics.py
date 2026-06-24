@@ -6,10 +6,29 @@ import logging
 import re
 import unicodedata
 import urllib.parse
-import httpx
+
+from dataclasses import dataclass
 
 from .http import NetworkManager
 from ..providers.amazon import get_amazon_endpoint
+
+
+@dataclass(slots=True)
+class LyricsContext:
+    track_name: str
+    artist_name: str
+    album_name: str
+    duration_s: int
+    spotify_id: str
+    isrc: str
+
+    @property
+    def clean_track(self) -> str:
+        return simplify_track_name(self.track_name)
+
+    @property
+    def clean_artist(self) -> str:
+        return get_primary_artist(self.artist_name)
 
 DEFAULT_LYRICS_PROVIDERS = ["spotify", "apple", "musixmatch", "lrclib", "amazon"]
 DEFAULT_ENRICH_PROVIDERS = ["deezer", "apple", "qobuz", "tidal", "soundcloud"]
@@ -70,81 +89,113 @@ _UA = (
     "Chrome/145.0.0.0 Safari/537.36"
 )
 
-_ID_BASED_PROVIDERS = {"spotify", "amazon"}
-
-_spotify_session_cache: dict = {}
-
 
 # ---------------------------------------------------------------------------
 # Spotify anon token (sync helper, riusato da async)
 # ---------------------------------------------------------------------------
 
-def _get_spotify_anon_token(timeout: int = 7) -> str:
-    import time as _time
-    global _spotify_session_cache
+_spotify_session_cache: dict[str, object] = {}
+_spotify_token_lock: asyncio.Lock | None = None
 
-    cached    = _spotify_session_cache.get("token")
+
+async def _get_spotify_lock() -> asyncio.Lock:
+    global _spotify_token_lock
+
+    if _spotify_token_lock is None:
+        _spotify_token_lock = asyncio.Lock()
+
+    return _spotify_token_lock
+
+
+async def _get_spotify_anon_token(timeout: int = 7) -> str:
+    import time
+
+    cached = _spotify_session_cache.get("token")
     cached_at = _spotify_session_cache.get("cached_at", 0)
-    if cached and (_time.time() - cached_at) < 3000:
-        return cached
 
-    try:
-        session = _spotify_session_cache.get("session")
-        if session is None:
-            session = httpx.Client(timeout=15.0)
-            _spotify_session_cache["session"] = session
+    if cached and (time.time() - cached_at) < 3000:
+        return str(cached)
 
-        session.get("https://open.spotify.com", headers={"User-Agent": _UA}, timeout=timeout)
+    lock = await _get_spotify_lock()
 
-        totp_headers: dict[str, str] = {}
+    async with lock:
+        cached = _spotify_session_cache.get("token")
+        cached_at = _spotify_session_cache.get("cached_at", 0)
+
+        if cached and (time.time() - cached_at) < 3000:
+            return str(cached)
+
         try:
-            from .spotify_totp import generate_spotify_totp
-            code, version = generate_spotify_totp()
-            if code:
-                totp_headers["Spotify-TOTP"]    = code
-                totp_headers["Spotify-TOTP-V2"] = f"{code}:{version}"
-        except Exception:
-            pass
+            client = await NetworkManager.get_async_client_safe()
 
-        r = session.get(
-            "https://open.spotify.com/api/token",
-            params={"reason": "init", "productType": "web-player"},
-            headers={"User-Agent": _UA, **totp_headers},
-            timeout=timeout,
-        )
-        if r.is_success:
-            token = r.json().get("accessToken", "")
-            if token:
-                _spotify_session_cache["token"]     = token
-                _spotify_session_cache["cached_at"] = _time.time()
-                return token
-    except Exception as exc:
-        logger.debug("[lyrics/spotify] anon token failed: %s", exc)
-    return ""
+            totp_headers: dict[str, str] = {}
 
+            try:
+                from .spotify_totp import generate_spotify_totp
 
-async def _get_spotify_anon_token_async(timeout: int = 7) -> str:
-    """Async wrapper per il token Spotify (usa to_thread per la sessione sync)."""
-    import time as _time
-    global _spotify_session_cache
+                code, version = generate_spotify_totp()
 
-    cached    = _spotify_session_cache.get("token")
-    cached_at = _spotify_session_cache.get("cached_at", 0)
-    if cached and (_time.time() - cached_at) < 3000:
-        return cached
+                if code:
+                    totp_headers["Spotify-TOTP"] = code
+                    totp_headers["Spotify-TOTP-V2"] = f"{code}:{version}"
 
-    return await asyncio.to_thread(_get_spotify_anon_token, timeout)
+            except Exception:
+                pass
+
+            await client.get(
+                "https://open.spotify.com",
+                headers={"User-Agent": _UA},
+                timeout=timeout,
+            )
+
+            r = await client.get(
+                "https://open.spotify.com/api/token",
+                params={
+                    "reason": "init",
+                    "productType": "web-player",
+                },
+                headers={
+                    "User-Agent": _UA,
+                    **totp_headers,
+                },
+                timeout=timeout,
+            )
+
+            if not r.is_success:
+                return ""
+
+            token = r.json().get("accessToken")
+
+            if not token:
+                return ""
+
+            _spotify_session_cache["token"] = token
+            _spotify_session_cache["cached_at"] = time.time()
+
+            return token
+
+        except Exception as exc:
+            logger.debug("[lyrics/spotify] anon token failed: %s", exc)
+            return ""
 
 
 # ---------------------------------------------------------------------------
 # Async fetch functions (Phase 2 — new)
 # ---------------------------------------------------------------------------
 
+async def _invalidate_spotify_token() -> None:
+    lock = await _get_spotify_lock()
+
+    async with lock:
+        _spotify_session_cache.pop("token", None)
+        _spotify_session_cache.pop("cached_at", None)
+
+
 async def _fetch_spotify_async(track_id: str, timeout: int = 7) -> str:
     if not track_id:
         return ""
     try:
-        access_token = await _get_spotify_anon_token_async(timeout)
+        access_token = await _get_spotify_anon_token(timeout)
         if not access_token:
             return ""
         client = await NetworkManager.get_async_client_safe()
@@ -155,9 +206,10 @@ async def _fetch_spotify_async(track_id: str, timeout: int = 7) -> str:
             timeout=timeout,
         )
         if r.status_code == 401:
-            _spotify_session_cache.pop("token", None)
-            _spotify_session_cache.pop("cached_at", None)
-            access_token = await _get_spotify_anon_token_async(timeout)
+            await _invalidate_spotify_token()
+
+            access_token = await _get_spotify_anon_token(timeout)
+
             if not access_token:
                 return ""
             r = await client.get(
@@ -326,12 +378,32 @@ async def _fetch_lrclib_async(
             pass
         return ""
 
-    result = await _exact(track_name, artist_name, album_name, duration_s)
-    if result:
-        return result
+    tasks = [
+        _exact(
+            track_name,
+            artist_name,
+            album_name,
+            duration_s,
+        )
+    ]
+
     if album_name:
-        result = await _exact(track_name, artist_name, "", duration_s)
-        if result:
+        tasks.append(
+            _exact(
+                track_name,
+                artist_name,
+                "",
+                duration_s,
+            )
+        )
+
+    results = await asyncio.gather(
+        *tasks,
+        return_exceptions=True,
+    )
+
+    for result in results:
+        if isinstance(result, str) and result:
             return result
 
     try:
@@ -361,54 +433,122 @@ async def _fetch_lrclib_async(
 # Async fetch_lyrics — Phase 2 (parallel, as_completed)
 # ---------------------------------------------------------------------------
 
+_PROVIDER_MAP = {
+    "spotify": lambda ctx: _fetch_spotify_async(
+        ctx.spotify_id,
+    ),
+    "apple": lambda ctx: _fetch_apple_async(
+        ctx.clean_track,
+        ctx.clean_artist,
+        ctx.duration_s,
+    ),
+    "musixmatch": lambda ctx: _fetch_musixmatch_async(
+        ctx.clean_track,
+        ctx.clean_artist,
+        ctx.duration_s,
+    ),
+    "amazon": lambda ctx: _fetch_amazon_async(
+        ctx.isrc,
+    ),
+    "lrclib": lambda ctx: _fetch_lrclib_async(
+        ctx.clean_track,
+        ctx.clean_artist,
+        ctx.album_name,
+        ctx.duration_s,
+    ),
+}
+
+
 async def fetch_lyrics_async(
-    track_name:  str,
+    track_name: str,
     artist_name: str,
-    album_name:  str = "",
-    duration_s:  int = 0,
-    track_id:    str = "",
-    isrc:        str = "",
-    providers:   list[str] | None = None,
+    album_name: str = "",
+    duration_s: int = 0,
+    track_id: str = "",
+    isrc: str = "",
+    providers: list[str] | None = None,
 ) -> tuple[str, str]:
-    """
-    Versione async: lancia tutti i provider in parallelo.
-    Restituisce il primo risultato valido (asyncio.as_completed).
-    """
-    if providers is None:
-        providers = DEFAULT_LYRICS_PROVIDERS
 
-    clean_track  = simplify_track_name(track_name)
-    clean_artist = get_primary_artist(artist_name)
+    providers = providers or DEFAULT_LYRICS_PROVIDERS
 
-    async def try_provider(provider: str) -> tuple[str, str]:
-        try:
-            result = ""
-            if provider == "spotify":
-                spotify_id = track_id if (track_id and len(track_id) == 22 and "_" not in track_id) else ""
-                result     = await _fetch_spotify_async(spotify_id)
-            elif provider == "apple":
-                result = await _fetch_apple_async(clean_track, clean_artist, duration_s)
-            elif provider == "musixmatch":
-                result = await _fetch_musixmatch_async(clean_track, clean_artist, duration_s)
-            elif provider == "amazon":
-                result = await _fetch_amazon_async(isrc)
-            elif provider == "lrclib":
-                result = await _fetch_lrclib_async(clean_track, clean_artist, album_name, duration_s)
-            else:
-                return "", ""
-            return (result, provider) if result and result.strip() else ("", "")
-        except Exception as exc:
-            logger.debug("[lyrics/%s] async error: %s", provider, exc)
+    ctx = LyricsContext(
+        track_name=track_name,
+        artist_name=artist_name,
+        album_name=album_name,
+        duration_s=duration_s,
+        spotify_id=(
+            track_id
+            if track_id
+            and len(track_id) == 22
+            and "_" not in track_id
+            else ""
+        ),
+        isrc=isrc,
+    )
+
+    async def run_provider(
+        provider_name: str,
+    ) -> tuple[str, str]:
+
+        fetcher = _PROVIDER_MAP.get(
+            provider_name,
+        )
+
+        if not fetcher:
             return "", ""
 
-    tasks = [asyncio.create_task(try_provider(p)) for p in providers]
+        try:
+            result = await asyncio.wait_for(
+                fetcher(ctx),
+                timeout=10,
+            )
 
-    for coro in asyncio.as_completed(tasks):
-        lyrics, provider = await coro
-        if lyrics:
-            for t in tasks:
-                if not t.done():
-                    t.cancel()
-            return add_lrc_metadata(lyrics.strip(), track_name, artist_name), provider
+            if result and result.strip():
+                return (
+                    result,
+                    provider_name,
+                )
 
-    return "", ""
+        except Exception as exc:
+            logger.debug(
+                "[lyrics/%s] %s",
+                provider_name,
+                exc,
+            )
+
+        return "", ""
+
+    tasks = [
+        asyncio.create_task(
+            run_provider(provider)
+        )
+        for provider in providers
+    ]
+
+    try:
+        for task in asyncio.as_completed(tasks):
+
+            lyrics, provider = await task
+
+            if not lyrics:
+                continue
+
+            return (
+                add_lrc_metadata(
+                    lyrics.strip(),
+                    track_name,
+                    artist_name,
+                ),
+                provider,
+            )
+
+        return "", ""
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+        await asyncio.gather(
+            *tasks,
+            return_exceptions=True,
+        )
