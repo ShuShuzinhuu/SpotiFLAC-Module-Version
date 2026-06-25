@@ -15,7 +15,7 @@ function detectAndApplyOSStyles() {
     detectedOS = 'linux';
   }
 
-  // Se è Windows, applica la classe CSS per i pulsanti Windows
+  // If this is Windows, apply the CSS class for Windows-style buttons
   if (detectedOS === 'windows') {
     document.body.classList.add('windows-style');
   }
@@ -34,7 +34,7 @@ function showSkeletonTracks(count = 5) {
   const container = $('track-rows');
   if (!container) return;
   
-  // Svuota la tabella e inserisci gli skeleton con lo STESSO grid delle tracks reali
+  // Clear the table and insert skeletons using the SAME grid as real tracks
   container.innerHTML = Array(count).fill(0).map(() => `
     <div class="track-row" style="pointer-events: none; border-bottom: 1px solid var(--border);">
       <div><div class="skeleton" style="width:14px; height:14px; border-radius:2px;"></div></div>
@@ -59,10 +59,10 @@ function showSkeletonTracks(count = 5) {
   
   $('track-table-wrap').classList.remove('hidden');
   
-  // Nascondi i recenti
+  // Hide the recents
   if ($('recent-wrap')) $('recent-wrap').style.display = 'none'; 
   
-  // Nascondi l'header della tabella finché non arrivano i dati veri
+  // Hide the table header until the real data arrives
   const header = document.querySelector('.track-table-header');
   if (header) header.style.display = 'none';
 }
@@ -805,11 +805,11 @@ function logMessage(msg, type = '') {
     area.scrollTop = area.scrollHeight;
   }
 
-  // Genera anche un Toast visuale basato sul tipo di evento!
+  // Also generate a visual Toast based on the event type!
   if (type === 'ok') toastMgr.success(msg);
   else if (type === 'error') toastMgr.error(msg);
   else if (type === 'warn') toastMgr.warning(msg);
-  // Se non c'è tipo o è un info di routine ("info"), mostriamo info solo se ha rilevanza
+  // If there is no type or it is routine info ("info"), show info only when relevant
   else if (type === 'info') toastMgr.info(msg, { duration: 2500 });
 }
 
@@ -1222,10 +1222,10 @@ function showSingleTrackCard(t) {
       ' <span class="track-explicit-title">E</span>';
   }
 
-  // Nascondi il subtitle (qualità) — già mostrata altrove
+  // Hide the subtitle (quality) — already shown elsewhere
   $('album-subtitle').style.display = 'none';
 
-  // Popola la griglia meta
+  // Populate the meta grid
   const section = $('track-meta-section');
   const playcountRaw = t.plays ?? t.playcount ?? t.playCount ?? t.plays_count;
   const playcountVal = playcountRaw != null
@@ -1491,7 +1491,7 @@ function renderTracks(tracks, page = 1) {
 
     for (; index < end; index += 1) {
       const t = pageTrackS[index];
-      const globalIndex = startIdx + index; // Per compatibilità con gli indici globali
+      const globalIndex = startIdx + index; // For compatibility with global indices
       const row = document.createElement('div');
       row.className = 'track-row';
       row.id = `track-row-${globalIndex}`;
@@ -1516,10 +1516,10 @@ function renderTracks(tracks, page = 1) {
       const playcountCell = isPlaylist ? escHtml(albumName || '—') : playcount;
       let previewUrl = t.preview_url || '';
       
-      // Se non c'è, controlliamo se è una proprietà dell'oggetto track
+      // If it is not present, check whether it is a property of the track object
       if (!previewUrl && t.previewUrl) previewUrl = t.previewUrl;
       
-      // Lazy Loading: il pulsante è sempre abilitato, ma recupererà il preview al click se necessario
+      // Lazy Loading: the button is always enabled, but it will fetch the preview on click if necessary
       const previewBtn = `<button class="ta-btn ta-preview" data-preview-index="${globalIndex}" data-track-id="${t.id || ''}" data-tip="Play Preview" onclick="playPreview(${globalIndex})">
              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
            </button>`;
@@ -1577,7 +1577,7 @@ function renderTracks(tracks, page = 1) {
     } else {
       setTrackRenderStatus('', false);
       updateAlbumMeta(tracks.length);
-      // Se è una page artista, inietta la section album sopra le tracks
+      // If this is an artist page, inject the album section above the tracks
       const urlLower = (currentUrl || '').toLowerCase();
       const isArtist = urlLower.includes('/artist/') || urlLower.includes('spotify:artist:') || urlLower.includes('/browse/artist');
       document.getElementById('artist-tabs-section')?.remove();
@@ -1889,11 +1889,11 @@ function setPreviewButtonState(button, active) {
   if (!button) return;
   button.classList.toggle('active', active);
   
-  // Controlliamo se è il bottone della card singola (.act-btn) o della tabella
+  // Check whether this is the single-card button (.act-btn) or the table button
   const isCardBtn = button.classList.contains('act-btn');
   const svgSize = isCardBtn ? "13" : "11";
 
-  // Handling dinamica dei tooltip
+  // Dynamic tooltip handling
   if (isCardBtn) {
     button.title = active ? 'Pause preview' : 'Play Preview';
   } else {
@@ -1956,7 +1956,7 @@ function runTypewriter() {
   const mode = $('searchMode').value;
   const input = $('urlInput');
   
-  // Scegli l'array giusto in base alla modalità
+  // Choose the correct array based on the current mode
   const links = (mode === 'search') ? searchPlaceholderLinks : placeholderLinks;
   const currentText = links[phIndex];
 
@@ -2094,7 +2094,7 @@ function updateSearchMode() {
   const label = $('searchModeText');
   
   if (mode === 'search') {
-    // Modalità Testo: ferma l'animazione e metti il testo fisso
+    // Text mode: stop the animation and set the fixed text
     clearTimeout(phTimeout);
     input.placeholder = 'Search Spotify with keywords, artist or track name…';
     toggle.classList.add('active');
@@ -2105,7 +2105,7 @@ function updateSearchMode() {
     $('track-controls')?.classList.add('hidden');
     $('album-card')?.classList.add('hidden');
   } else {
-    // Modalità Link: resetta e fai ripartire l'animazione
+    // Link mode: reset and restart the animation
     toggle.classList.remove('active');
     icon.textContent = '🔗';
     label.textContent = 'Fetch';
@@ -2847,7 +2847,7 @@ function setFetchingState(state, customMsg = null) {
 
   if (state === 'start') {
     const title = customMsg || 'fetching metadata...';
-    // Se c'è già un toast aperto, lo chiudiamo prima di aprirne un altro
+    // If a toast is already open, close it before opening another
     if (currentFetchToastId) toastMgr.dismiss(currentFetchToastId);
     
     currentFetchToastId = toastMgr.loading(
@@ -2878,7 +2878,7 @@ async function onFetch() {
 
   const mode = $('searchMode').value;
   const url = $('urlInput').value.trim();
-  // 1. Controllo base: l'input non deve essere vuoto in nessuna modalità
+  // 1. Basic check: input must not be empty in any mode
   if (!url) {
     setFetchingState('error', "Input empty. Please enter a URL or search term.");
     return;
@@ -3271,16 +3271,16 @@ function renderHomeSections(sections) {
       `;
 
       card.onclick = () => {
-        // Torna alla home page
+        // Return to the home page
         switchView('home');
         
-        // Passa in modalità Fetch (Link)
+        // Switch to Fetch (Link) mode
         const mode = $('searchMode');
         if (mode && mode.value === 'search') {
-          toggleSearchMode(); // Simula click per rimetterlo a "link"
+          toggleSearchMode(); // Simulate click to set it back to "link"
         }
         
-        // Inserisci l'URI
+        // Insert the URI
         const input = $('urlInput');
         if (input) {
           input.value = item.uri || `spotify:${item.type}:${item.id}`;

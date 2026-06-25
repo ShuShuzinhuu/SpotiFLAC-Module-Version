@@ -1,8 +1,12 @@
+import asyncio
 import json
 import logging
+import random
 import urllib.parse
 import re
 from typing import Dict, Optional
+
+import httpx
 
 from .http import AsyncHttpClient, async_songlink_rate_limiter
 
@@ -15,6 +19,9 @@ class LinkResolver:
     SONGLINK_API_URL = "https://api.song.link/v1-alpha.1/links"
     DEEZER_ISRC_API = "https://api.deezer.com/track/isrc:{}"
     DEEZER_TRACK_API = "https://api.deezer.com/track/{}"
+    MAX_RETRIES = 3
+    BASE_DELAY_S = 1.0
+    MAX_DELAY_S = 10.0
 
     _SONGLINK_PLATFORMS = (
         "deezer",
@@ -39,35 +46,47 @@ class LinkResolver:
             "Accept-Language": "en-US,en;q=0.9",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
+            "Referer": "https://song.link/",
         }
-        if hasattr(self.http, "get_json_async"):
-            try:
-                return await self.http.get_json_async(
-                    url, params=params, headers=headers
-                )
-            except TypeError:
-                return await self.http.get_json_async(url, params=params)
-
-        # Fallback per httpx.AsyncClient nativo con spoofing dei metadati di navigazione
-        resp = await self.http.get(url, params=params, headers=headers)
-        return resp.json()
+        return await self._request_with_retry(
+            lambda: self.http.get_json_async(url, params=params, headers=headers)
+        )
 
     async def _safe_get_html(self, url: str):
         """Helper robusto che emula un browser desktop per le richieste di scraping HTML."""
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/ *;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
             "Upgrade-Insecure-Requests": "1",
+            "Referer": "https://song.link/",
         }
-        if hasattr(self.http, "get_async"):
-            try:
-                return await self.http.get_async(url, headers=headers)
-            except TypeError:
-                return await self.http.get_async(url)
+        return await self._request_with_retry(
+            lambda: self.http.get_async(url, headers=headers)
+        )
 
-        # Fallback per httpx.AsyncClient nativo
-        return await self.http.get(url, headers=headers)
+    async def _request_with_retry(self, request_callable):
+        last_error: Exception | None = None
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            try:
+                return await request_callable()
+            except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+                last_error = exc
+                delay = min(self.BASE_DELAY_S * 2 ** (attempt - 1), self.MAX_DELAY_S)
+                delay += random.random() * 0.2
+                logger.debug(
+                    f"[link_resolver] HTTP request failed (attempt {attempt}/{self.MAX_RETRIES}): {exc}. Retrying in {delay:.2f}s"
+                )
+                await asyncio.sleep(delay)
+            except Exception as exc:
+                last_error = exc
+                logger.debug(
+                    f"[link_resolver] Non-retryable request error: {exc}"
+                )
+                break
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Unexpected error in _request_with_retry")
 
     def identify_provider(self, url: str) -> str:
         url = url.lower()

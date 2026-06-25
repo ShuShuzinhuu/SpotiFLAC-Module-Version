@@ -64,6 +64,14 @@ _DEFAULT_UA = (
     "Chrome/146.0.0.0 Safari/537.36"
 )
 _ZARZ_USER_AGENT = "SpotiFLAC-Mobile/4.5.0"
+
+# Headers da usare per le richieste "community" verso mirror Qobuz
+_COMMUNITY_POST_HEADERS = {
+    "User-Agent": "SpotiFLAC/7.1.9",
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+    "x-api-key": "explore-obscure-chivalry-travesty-blinks",
+}
 _CREDS_TTL = 24 * 3600
 _PROBE_ISRC = "USUM71703861"
 _OPEN_URL = "https://open.qobuz.com/track/"
@@ -90,6 +98,7 @@ _FLACDOWNLOADER_APIS: list[str] = (
     if isinstance(_flacdownloader_raw, str) and _flacdownloader_raw
     else list(_flacdownloader_raw) if isinstance(_flacdownloader_raw, list) else []
 )
+
 _COMMUNITY_APIS: list[str] = []
 try:
     _community_raw = get_qobuz_endpoints("community")
@@ -674,6 +683,7 @@ class QobuzProvider(BaseProvider):
         is_wjhe = "wjhe.top" in api_cleaning
         is_squid = "squid.wtf" in api_cleaning
         is_fd = "flacdownloader.com" in api_cleaning
+        is_antra = "anandserver.cfd" in api_cleaning
 
         is_post = (
             api_base in _POST_APIS
@@ -703,6 +713,12 @@ class QobuzProvider(BaseProvider):
                 await asyncio.sleep(delay)
 
             try:
+                if is_antra:
+                    url = f"{api_cleaning}/api/stream/{track_id}"
+                    if quality in ("27", "7", "HI_RES_LOSSLESS", "HI_RES", "hi96", "hi24"):
+                        url += "?strict_24=1"
+                    return url
+
                 if is_local_api:
                     local_q = _map_local_api_quality(quality)
                     url = f"{api_cleaning}/download-url/{track_id}?quality={local_q}"
@@ -912,13 +928,8 @@ class QobuzProvider(BaseProvider):
                                 "quality": _map_musicdl_quality(quality),
                                 "upload_to_r2": False,
                             }
-                        # set headers required by community
-                        post_headers = {
-                            "User-Agent": "SpotiFLAC/7.1.9",
-                            "Accept": "application/json",
-                            "Content-Type": "application/json",
-                            "x-api-key": "explore-obscure-chivalry-travesty-blinks",
-                        }
+                        # set headers required by community (use shared constant)
+                        post_headers = dict(_COMMUNITY_POST_HEADERS)
 
                     # Attempt request, refresh credentials and retry once on 400/401
                     resp = await client.post(
@@ -944,6 +955,12 @@ class QobuzProvider(BaseProvider):
                             )
                         except Exception:
                             pass
+
+                elif is_antra:
+                    url = f"{api_cleaning}/api/stream/{track_id}"
+                    if quality in ("27", "7", "HI_RES_LOSSLESS", "HI_RES", "hi96", "hi24"):
+                        url += "?strict_24=1"
+                    return url
 
                 else:
                     url = _build_stream_url(api_base, track_id, quality)
@@ -1461,17 +1478,23 @@ class QobuzProvider(BaseProvider):
                     last_err = "stream URL already known-bad"
                     continue
 
+                headers_dl = {
+                    "User-Agent": _DEFAULT_UA,
+                    "Accept": "audio/flac, audio/*, */*",
+                    "Accept-Encoding": "identity",
+                    "Referer": "https://open.qobuz.com/",
+                    "Origin": "https://open.qobuz.com",
+                }
+                
+                if "anandserver.cfd" in stream_url:
+                    headers_dl["X-API-Key"] = "ak_8e3f1a7c2b5d9e4f0a6c3b8d1e5f2a9c7b4d0e6f"
+                    headers_dl["api-key"] = "ak_8e3f1a7c2b5d9e4f0a6c3b8d1e5f2a9c7b4d0e6f"
+
                 await self._async_http.stream_to_file(
                     stream_url,
                     str(dest),
                     self._progress_cb,
-                    extra_headers={
-                        "User-Agent": _DEFAULT_UA,
-                        "Accept": "audio/flac, audio/*, */*",
-                        "Accept-Encoding": "identity",
-                        "Referer": "https://open.qobuz.com/",
-                        "Origin": "https://open.qobuz.com",
-                    },
+                    extra_headers=headers_dl,
                 )
                 valid, err = await validate_downloaded_track_async(
                     str(dest), expected_s
