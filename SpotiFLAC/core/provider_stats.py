@@ -53,16 +53,16 @@ def _save_cache_sync(data: dict[str, dict]) -> None:
 
 @dataclass
 class _ProviderStats:
-    successes:    int   = 0
-    failures:     int   = 0
+    successes: int = 0
+    failures: int = 0
     last_success: float = 0.0
     last_failure: float = 0.0
     last_attempt: float = 0.0
-    last_outcome: str   = ""
+    last_outcome: str = ""
 
     def score(self) -> float:
         base = self.successes - (self.failures * 2)
-        now  = time.time()
+        now = time.time()
         if self.last_failure > 0 and (now - self.last_failure) < 300:
             base -= 10
         if self.last_success > 0 and (now - self.last_success) < 300:
@@ -72,12 +72,12 @@ class _ProviderStats:
     @classmethod
     def from_dict(cls, data: dict) -> "_ProviderStats":
         return cls(
-            successes = int(data.get("successes", 0)),
-            failures  = int(data.get("failures", 0)),
-            last_success = float(data.get("last_success", 0.0)),
-            last_failure = float(data.get("last_failure", 0.0)),
-            last_attempt = float(data.get("last_attempt", 0.0)),
-            last_outcome = str(data.get("last_outcome", "")) or "",
+            successes=int(data.get("successes", 0)),
+            failures=int(data.get("failures", 0)),
+            last_success=float(data.get("last_success", 0.0)),
+            last_failure=float(data.get("last_failure", 0.0)),
+            last_attempt=float(data.get("last_attempt", 0.0)),
+            last_outcome=str(data.get("last_outcome", "")) or "",
         )
 
     def to_dict(self) -> dict:
@@ -89,6 +89,7 @@ class ProviderScorer:
     Gestore thread-safe asincrono che traccia successi/fallimenti per API URL.
     Usa l'inizializzazione lazy per supportare operazioni asyncio.
     """
+
     def __init__(self) -> None:
         self._stats: dict[str, _ProviderStats] = {}
         self._stats_lock = asyncio.Lock()
@@ -112,11 +113,13 @@ class ProviderScorer:
         cache = {key: stat.to_dict() for key, stat in self._stats.items()}
         await asyncio.to_thread(_save_cache_sync, cache)
 
-    async def _record_async(self, provider_type: str, api_url: str, success: bool) -> None:
+    async def _record_async(
+        self, provider_type: str, api_url: str, success: bool
+    ) -> None:
         await self._ensure_initialized()
         key = f"{provider_type}:{api_url}"
         now = time.time()
-        
+
         async with self._stats_lock:
             s = self._stats.setdefault(key, _ProviderStats())
             if success:
@@ -128,7 +131,7 @@ class ProviderScorer:
                 s.last_failure = now
                 s.last_outcome = "failure"
             s.last_attempt = now
-            
+
             # Scrittura su disco delegata a un worker
             await self._persist_to_disk_async()
 
@@ -138,9 +141,11 @@ class ProviderScorer:
     async def record_failure_async(self, provider_type: str, api_url: str) -> None:
         await self._record_async(provider_type, api_url, False)
 
-    async def prioritize_async(self, provider_type: str, api_urls: list[str]) -> list[str]:
+    async def prioritize_async(
+        self, provider_type: str, api_urls: list[str]
+    ) -> list[str]:
         await self._ensure_initialized()
-        
+
         async with self._stats_lock:
             original_index = {url: idx for idx, url in enumerate(api_urls)}
 
@@ -157,7 +162,12 @@ class ProviderScorer:
                     outcome_rank = 0
 
                 last_attempt = max(s.last_success, s.last_failure, s.last_attempt)
-                return (outcome_rank, s.last_success, last_attempt, -original_index.get(url, 0))
+                return (
+                    outcome_rank,
+                    s.last_success,
+                    last_attempt,
+                    -original_index.get(url, 0),
+                )
 
             return sorted(api_urls, key=_rank, reverse=True)
 
@@ -183,6 +193,7 @@ async def record_failure_async(provider_type: str, api_url: str) -> None:
 
 async def prioritize_async(provider_type: str, api_urls: list[str]) -> list[str]:
     return await _scorer.prioritize_async(provider_type, api_urls)
+
 
 # Alias per compatibilità asincrona globale
 prioritize_providers_async = prioritize_async

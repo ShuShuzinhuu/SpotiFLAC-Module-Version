@@ -1,8 +1,8 @@
 """
 Centralized quality normalization and provider mappings.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 # Canonical qualities
 _CANONICAL = {
@@ -43,11 +43,11 @@ def normalize_quality(q: str) -> str:
 def quality_fallback_chain(quality: str) -> list[str]:
     """Return a canonical fallback chain for a given quality."""
     chains = {
-        "DOLBY_ATMOS":    ["DOLBY_ATMOS", "HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW"],
+        "DOLBY_ATMOS": ["DOLBY_ATMOS", "HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW"],
         "HI_RES_LOSSLESS": ["HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW"],
-        "LOSSLESS":        ["LOSSLESS", "HIGH", "LOW"],
-        "HIGH":            ["HIGH", "LOW"],
-        "LOW":             ["LOW"],
+        "LOSSLESS": ["LOSSLESS", "HIGH", "LOW"],
+        "HIGH": ["HIGH", "LOW"],
+        "LOW": ["LOW"],
     }
     n = normalize_quality(quality)
     return chains.get(n, [n or "LOSSLESS"])

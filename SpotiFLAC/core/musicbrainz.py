@@ -2,6 +2,7 @@
 MusicBrainz API Client — versione originale sync + nuova variante async (Phase 2).
 La variante async usa asyncio.Event per deduplicazione in-flight invece di threading.Event.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -19,12 +20,12 @@ import threading as _threading
 
 logger = logging.getLogger(__name__)
 
-_MB_API_BASE             = "https://musicbrainz.org/ws/2"
-_MB_TIMEOUT              = 6
-_MB_RETRIES              = 2
-_MB_RETRY_WAIT           = 1.5
-_MB_MIN_REQ_INTERVAL     = 1.1
-_MB_THROTTLE_COOLDOWN    = 5.0
+_MB_API_BASE = "https://musicbrainz.org/ws/2"
+_MB_TIMEOUT = 6
+_MB_RETRIES = 2
+_MB_RETRY_WAIT = 1.5
+_MB_MIN_REQ_INTERVAL = 1.1
+_MB_THROTTLE_COOLDOWN = 5.0
 
 _USER_AGENT = "SpotiFLAC/2.0 ( support@spotbye.qzz.io )"
 
@@ -48,13 +49,13 @@ def _get_async_inflight_lock() -> asyncio.Lock:
     return _mb_inflight_async_lock
 
 
-_mb_throttle_mu    = threading.Lock()
-_mb_next_request:  float = 0.0
-_mb_blocked_till:  float = 0.0
+_mb_throttle_mu = threading.Lock()
+_mb_next_request: float = 0.0
+_mb_blocked_till: float = 0.0
 
-_mb_status_lock        = _threading.Lock()
-_mb_last_checked_at:   float = 0.0
-_mb_last_online:       bool  = True
+_mb_status_lock = _threading.Lock()
+_mb_last_checked_at: float = 0.0
+_mb_last_online: bool = True
 _MB_STATUS_SKIP_WINDOW = 30.0
 
 
@@ -62,7 +63,7 @@ def set_mb_status(online: bool) -> None:
     global _mb_last_checked_at, _mb_last_online
     with _mb_status_lock:
         _mb_last_checked_at = time.time()
-        _mb_last_online     = online
+        _mb_last_online = online
 
 
 def should_skip_mb() -> bool:
@@ -86,8 +87,8 @@ def _wait_for_request_slot() -> None:
         if ready_at < now:
             ready_at = now
 
-        _mb_next_request      = ready_at + _MB_MIN_REQ_INTERVAL
-        wait_duration         = ready_at - now
+        _mb_next_request = ready_at + _MB_MIN_REQ_INTERVAL
+        wait_duration = ready_at - now
 
     if wait_duration > 0:
         time.sleep(wait_duration)
@@ -106,8 +107,8 @@ async def _wait_for_request_slot_async() -> None:
         if ready_at < now:
             ready_at = now
 
-        _mb_next_request  = ready_at + _MB_MIN_REQ_INTERVAL
-        wait_duration     = ready_at - now
+        _mb_next_request = ready_at + _MB_MIN_REQ_INTERVAL
+        wait_duration = ready_at - now
 
     if wait_duration > 0:
         await asyncio.sleep(wait_duration)
@@ -140,9 +141,9 @@ async def _query_recordings_async(query: str) -> dict:
         f"?query={urllib.parse.quote(query)}"
         f"&fmt=json&inc=releases+artist-credits+tags+media+release-groups+labels+label-info+isrcs"
     )
-    headers  = {"User-Agent": _USER_AGENT, "Accept": "application/json"}
+    headers = {"User-Agent": _USER_AGENT, "Accept": "application/json"}
     last_err = Exception("Empty response")
-    client   = await NetworkManager.get_async_client_safe()
+    client = await NetworkManager.get_async_client_safe()
 
     for attempt in range(_MB_RETRIES):
         await _wait_for_request_slot_async()
@@ -170,12 +171,25 @@ def _query_recordings(query: str) -> dict:
 def _parse_mb_response(data: dict) -> dict:
     """Logica di parsing estratta per riutilizzo da sync e async."""
     parsed: dict = {
-        "genre": "", "original_date": "", "bpm": "", "mbid_track": "",
-        "mbid_album": "", "mbid_artist": "", "mbid_relgroup": "",
-        "mbid_albumartist": "", "albumartist_sort": "", "catalognumber": "",
-        "label": "", "barcode": "", "organization": "",
-        "country": "", "script": "", "status": "",
-        "media": "", "type": "", "artist_sort": ""
+        "genre": "",
+        "original_date": "",
+        "bpm": "",
+        "mbid_track": "",
+        "mbid_album": "",
+        "mbid_artist": "",
+        "mbid_relgroup": "",
+        "mbid_albumartist": "",
+        "albumartist_sort": "",
+        "catalognumber": "",
+        "label": "",
+        "barcode": "",
+        "organization": "",
+        "country": "",
+        "script": "",
+        "status": "",
+        "media": "",
+        "type": "",
+        "artist_sort": "",
     }
 
     recs = data.get("recordings", [])
@@ -183,17 +197,17 @@ def _parse_mb_response(data: dict) -> dict:
         return parsed
 
     rec = recs[0]
-    parsed["mbid_track"]    = rec.get("id", "")
+    parsed["mbid_track"] = rec.get("id", "")
     parsed["original_date"] = rec.get("first-release-date", "")
-    parsed["bpm"]           = str(rec.get("bpm", "")) if rec.get("bpm") else ""
+    parsed["bpm"] = str(rec.get("bpm", "")) if rec.get("bpm") else ""
 
     credits = rec.get("artist-credit", [])
     if credits:
-        artist_ids  = []
-        sort_names  = []
+        artist_ids = []
+        sort_names = []
         for c in credits:
             artist_obj = c.get("artist", {})
-            a_id   = artist_obj.get("id")
+            a_id = artist_obj.get("id")
             a_sort = artist_obj.get("sort-name", "")
             phrase = c.get("joinphrase", "")
             if a_id:
@@ -217,6 +231,7 @@ def _parse_mb_response(data: dict) -> dict:
 
     releases = rec.get("releases", [])
     if releases:
+
         def _release_score(r: dict) -> int:
             score = 0
             if r.get("barcode"):
@@ -230,23 +245,23 @@ def _parse_mb_response(data: dict) -> dict:
             return score
 
         rel = max(releases, key=_release_score)
-        parsed["mbid_album"]    = rel.get("id", "")
+        parsed["mbid_album"] = rel.get("id", "")
         parsed["mbid_relgroup"] = rel.get("release-group", {}).get("id", "")
-        parsed["status"]        = rel.get("status", "")
-        parsed["type"]          = rel.get("release-group", {}).get("primary-type", "")
-        parsed["country"]       = rel.get("country", "")
-        parsed["script"]        = rel.get("text-representation", {}).get("script", "")
-        media                   = rel.get("media", [])
+        parsed["status"] = rel.get("status", "")
+        parsed["type"] = rel.get("release-group", {}).get("primary-type", "")
+        parsed["country"] = rel.get("country", "")
+        parsed["script"] = rel.get("text-representation", {}).get("script", "")
+        media = rel.get("media", [])
         if media:
             parsed["media"] = media[0].get("format", "")
 
         rel_credits = rel.get("artist-credit", [])
         if rel_credits:
-            aa_ids        = []
+            aa_ids = []
             aa_sort_names = []
             for c in rel_credits:
                 artist_obj = c.get("artist", {})
-                a_id   = artist_obj.get("id")
+                a_id = artist_obj.get("id")
                 a_sort = artist_obj.get("sort-name", "")
                 phrase = c.get("joinphrase", "")
                 if a_id:
@@ -262,11 +277,15 @@ def _parse_mb_response(data: dict) -> dict:
             for li in r.get("label-info", []):
                 lbl = li.get("label") or {}
                 if not parsed.get("label") and lbl.get("name"):
-                    parsed["label"]        = lbl["name"]
+                    parsed["label"] = lbl["name"]
                     parsed["organization"] = lbl["name"]
                 if not parsed.get("catalognumber") and li.get("catalog-number"):
                     parsed["catalognumber"] = li["catalog-number"]
-            if parsed.get("barcode") and parsed.get("label") and parsed.get("catalognumber"):
+            if (
+                parsed.get("barcode")
+                and parsed.get("label")
+                and parsed.get("catalognumber")
+            ):
                 break
 
     return parsed
@@ -276,12 +295,13 @@ def _parse_mb_response(data: dict) -> dict:
 # Sync fetch_mb_metadata (invariato)
 # ---------------------------------------------------------------------------
 
+
 def fetch_mb_metadata(isrc: str) -> dict:
     if not isrc:
         return {}
 
     cache_key = isrc.strip().upper()
-    cached    = _mb_cache.get(cache_key)
+    cached = _mb_cache.get(cache_key)
     if cached is not None:
         return {} if cached is _LOOKUP_FAILED else cached  # type: ignore
 
@@ -291,12 +311,12 @@ def fetch_mb_metadata(isrc: str) -> dict:
 
     with _mb_inflight_mu:
         if cache_key in _mb_inflight:
-            event      = _mb_inflight[cache_key]
-            is_leader  = False
+            event = _mb_inflight[cache_key]
+            is_leader = False
         else:
-            event      = threading.Event()
+            event = threading.Event()
             _mb_inflight[cache_key] = event
-            is_leader  = True
+            is_leader = True
 
     if not is_leader:
         event.wait()
@@ -307,7 +327,7 @@ def fetch_mb_metadata(isrc: str) -> dict:
     try:
         data = _query_recordings(f"isrc:{isrc}")
         set_mb_status(True)
-        res  = _parse_mb_response(data)
+        res = _parse_mb_response(data)
     except Exception as e:
         set_mb_status(False)
         logger.debug("[musicbrainz] lookup failed: %s", e)
@@ -332,6 +352,7 @@ def fetch_mb_metadata(isrc: str) -> dict:
 # Async fetch_mb_metadata_async (Phase 2 — nuovo)
 # ---------------------------------------------------------------------------
 
+
 async def fetch_mb_metadata_async(isrc: str) -> dict:
     """
     Versione async di fetch_mb_metadata.
@@ -342,7 +363,7 @@ async def fetch_mb_metadata_async(isrc: str) -> dict:
         return {}
 
     cache_key = isrc.strip().upper()
-    cached    = _mb_cache.get(cache_key)
+    cached = _mb_cache.get(cache_key)
     if cached is not None:
         return {} if cached is _LOOKUP_FAILED else cached  # type: ignore
 
@@ -393,24 +414,24 @@ def mb_result_to_tags(res: dict) -> dict[str, str]:
         return {}
 
     mapping = {
-        "mbid_track":       "MUSICBRAINZ_TRACKID",
-        "mbid_album":       "MUSICBRAINZ_ALBUMID",
-        "mbid_artist":      "MUSICBRAINZ_ARTISTID",
-        "mbid_relgroup":    "MUSICBRAINZ_RELEASEGROUPID",
+        "mbid_track": "MUSICBRAINZ_TRACKID",
+        "mbid_album": "MUSICBRAINZ_ALBUMID",
+        "mbid_artist": "MUSICBRAINZ_ARTISTID",
+        "mbid_relgroup": "MUSICBRAINZ_RELEASEGROUPID",
         "mbid_albumartist": "MUSICBRAINZ_ALBUMARTISTID",
-        "barcode":          "BARCODE",
-        "label":            "LABEL",
-        "organization":     "ORGANIZATION",
-        "country":          "RELEASECOUNTRY",
-        "script":           "SCRIPT",
-        "status":           "RELEASESTATUS",
-        "media":            "MEDIA",
-        "type":             "RELEASETYPE",
-        "artist_sort":      "ARTISTSORT",
+        "barcode": "BARCODE",
+        "label": "LABEL",
+        "organization": "ORGANIZATION",
+        "country": "RELEASECOUNTRY",
+        "script": "SCRIPT",
+        "status": "RELEASESTATUS",
+        "media": "MEDIA",
+        "type": "RELEASETYPE",
+        "artist_sort": "ARTISTSORT",
         "albumartist_sort": "ALBUMARTISTSORT",
-        "catalognumber":    "CATALOGNUMBER",
-        "bpm":              "BPM",
-        "genre":            "GENRE",
+        "catalognumber": "CATALOGNUMBER",
+        "bpm": "BPM",
+        "genre": "GENRE",
     }
 
     tags = {}
@@ -432,6 +453,7 @@ def mb_result_to_tags(res: dict) -> dict[str, str]:
 # AsyncMBFetch — helper che wrappa ThreadPoolExecutor (backward compat)
 # Per i provider già migrati ad async, usare direttamente fetch_mb_metadata_async.
 # ---------------------------------------------------------------------------
+
 
 class AsyncMBFetch:
     _executor: ThreadPoolExecutor | None = ThreadPoolExecutor(max_workers=4)

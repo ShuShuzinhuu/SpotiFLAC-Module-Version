@@ -1,6 +1,6 @@
 from __future__ import annotations
 import sys
-from tqdm import tqdm 
+from tqdm import tqdm
 
 _BANNER_WIDTH = 60
 _MAX_API_FAILURES_PER_PROVIDER = 20
@@ -14,12 +14,15 @@ def _reset_api_failure_state() -> None:
 
 def _should_print_api_failure(provider: str, api: str, reason: str) -> bool:
     normalized_reason = _clean_error(reason)
-    provider_state = _api_failure_state.setdefault(provider, {
-        "seen": set(),
-        "printed": 0,
-        "suppressed": 0,
-        "summary_shown": False,
-    })
+    provider_state = _api_failure_state.setdefault(
+        provider,
+        {
+            "seen": set(),
+            "printed": 0,
+            "suppressed": 0,
+            "summary_shown": False,
+        },
+    )
     key = (api, normalized_reason)
     if key in provider_state["seen"]:
         return False
@@ -40,15 +43,21 @@ def _maybe_print_api_failure_summary(provider: str) -> None:
     provider_state["summary_shown"] = True
     suppressed = provider_state["suppressed"]
     with tqdm.get_lock():
-        tqdm.write(f"  ... {suppressed} more {provider} API failures suppressed", file=sys.stderr)
+        tqdm.write(
+            f"  ... {suppressed} more {provider} API failures suppressed",
+            file=sys.stderr,
+        )
 
 
-def print_track_header(position: int, total: int, title: str, artists: str, album: str) -> None:
+def print_track_header(
+    position: int, total: int, title: str, artists: str, album: str
+) -> None:
     _reset_api_failure_state()
     pos = f"[{position}/{total}]"
     summary = f"Track {pos} {title[:40]!s} — {artists[:40]!s} ({album[:32]!s})"
     with tqdm.get_lock():
         tqdm.write(summary, file=sys.stderr)
+
 
 def print_source_banner(provider: str, api: str, quality: str) -> None:
     provider_label = provider.upper()
@@ -61,12 +70,16 @@ def print_source_banner(provider: str, api: str, quality: str) -> None:
     with tqdm.get_lock():
         tqdm.write(line, file=sys.stderr)
 
+
 def print_official_source(provider: str, quality: str) -> None:
     line = f"[SOURCE] {provider.upper()} · Official API · {quality}"
     with tqdm.get_lock():
         tqdm.write(line, file=sys.stderr)
 
-def print_summary(total: int, succeeded: int, failed: list[tuple[str, str, str]], elapsed_s: float) -> None:
+
+def print_summary(
+    total: int, succeeded: int, failed: list[tuple[str, str, str]], elapsed_s: float
+) -> None:
     bar = "═" * _BANNER_WIDTH
     summary = f"\n╔{bar}╗\n"
     summary += f"║  SESSION SUMMARY{'':<43}║\n"
@@ -75,7 +88,7 @@ def print_summary(total: int, succeeded: int, failed: list[tuple[str, str, str]]
     summary += f"║  Successful    : {succeeded:<42}║\n"
     summary += f"║  Failed        : {len(failed):<42}║\n"
     summary += f"║  Time Elapsed  : {_fmt_seconds(elapsed_s):<42}║"
-    
+
     if failed:
         summary += f"\n╠{bar}╣\n"
         summary += f"║  ✗ FAILURES{'':<47}║\n"
@@ -87,6 +100,7 @@ def print_summary(total: int, succeeded: int, failed: list[tuple[str, str, str]]
     with tqdm.get_lock():
         tqdm.write(summary, file=sys.stderr)
 
+
 def print_api_failure(provider: str, api: str, reason: str) -> None:
     with tqdm.get_lock():
         tqdm.write(
@@ -94,15 +108,20 @@ def print_api_failure(provider: str, api: str, reason: str) -> None:
             file=sys.stderr,
         )
 
+
 def print_quality_fallback(provider: str, from_q: str, to_q: str) -> None:
     with tqdm.get_lock():
-        tqdm.write(f"  ⬇  {provider}: quality {from_q} unavailable — falling back to {to_q}", file=sys.stderr)
+        tqdm.write(
+            f"  ⬇  {provider}: quality {from_q} unavailable — falling back to {to_q}",
+            file=sys.stderr,
+        )
+
 
 def _shorten_api(provider: str, url: str) -> str:
-    return url.removeprefix("https://") \
-              .removeprefix("http://") \
-              .split("/")[0] \
-              .split(".")[0]
+    return (
+        url.removeprefix("https://").removeprefix("http://").split("/")[0].split(".")[0]
+    )
+
 
 def _fmt_seconds(s: float) -> str:
     s = int(round(s))
@@ -113,11 +132,15 @@ def _fmt_seconds(s: float) -> str:
             parts.append(f"{val}{unit}")
     return " ".join(parts) or "0s"
 
+
 def _clean_error(err: str) -> str:
     err_str = str(err)
     if "Max retries exceeded" in err_str or "NameResolutionError" in err_str:
         return "Connection timeout / Unreachable"
-    if "nodename nor servname provided" in err_str or "Name or service not known" in err_str:
+    if (
+        "nodename nor servname provided" in err_str
+        or "Name or service not known" in err_str
+    ):
         return "DNS resolution failed"
     if "Read timed out" in err_str or "Timeout" in err_str:
         return "Read timed out"
@@ -133,4 +156,4 @@ def _clean_error(err: str) -> str:
         return "HTTP 403 Forbidden (Cloudflare/WAF blocked)"
     if "Expecting value: line 1" in err_str or "invalid JSON" in err_str.lower():
         return "Invalid JSON response"
-    return err_str.split('\n')[0][:60]
+    return err_str.split("\n")[0][:60]

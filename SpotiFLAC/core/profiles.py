@@ -7,6 +7,7 @@ Uso asincrono:
     cfg = await get_profile_async("tidal-hires")
     names = await list_profiles_async()
 """
+
 from __future__ import annotations
 
 import json
@@ -109,9 +110,13 @@ async def _load_async() -> dict:
                             continue
                         try:
                             # La validazione Pydantic è velocissima in RAM
-                            validated[name] = ProfileConfig.model_validate(profile).model_dump(exclude_none=True)
+                            validated[name] = ProfileConfig.model_validate(
+                                profile
+                            ).model_dump(exclude_none=True)
                         except ValidationError as exc:
-                            logger.warning("[profile] invalid profile %s: %s", name, exc)
+                            logger.warning(
+                                "[profile] invalid profile %s: %s", name, exc
+                            )
                     return validated
         except json.JSONDecodeError as exc:
             logger.warning("[profile] profiles.json is invalid JSON: %s", exc)

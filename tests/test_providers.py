@@ -35,18 +35,18 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 # "Protected" imports for ALL providers
 # ---------------------------------------------------------------------------
 _PROVIDER_IMPORT_SPECS = [
-    ("amazon",     ["amazon"],     ["AmazonProvider"]),
-    ("qobuz",      ["qobuz"],      ["QobuzProvider"]),
+    ("amazon", ["amazon"], ["AmazonProvider"]),
+    ("qobuz", ["qobuz"], ["QobuzProvider"]),
     ("soundcloud", ["soundcloud"], ["SoundCloudProvider"]),
-    ("youtube",    ["youtube"],    ["YouTubeProvider"]),
-    ("tidal",      ["tidal"],      ["TidalProvider"]),
-    ("deezer",     ["deezer"],     ["DeezerProvider"]),
-    ("apple",      ["apple_music"], ["AppleMusicProvider", "AppleProvider"]),
-    ("pandora",    ["pandora"],    ["PandoraProvider"]),
-    ("joox",       ["gdstudio", "gsstudio"], ["JooxProvider"]),
-    ("netease",    ["gdstudio", "gsstudio"], ["NeteaseProvider"]),
-    ("migu",       ["gdstudio", "gsstudio"], ["MiguProvider"]),
-    ("kuwo",       ["gdstudio", "gsstudio"], ["KuwoProvider"]),
+    ("youtube", ["youtube"], ["YouTubeProvider"]),
+    ("tidal", ["tidal"], ["TidalProvider"]),
+    ("deezer", ["deezer"], ["DeezerProvider"]),
+    ("apple", ["apple_music"], ["AppleMusicProvider", "AppleProvider"]),
+    ("pandora", ["pandora"], ["PandoraProvider"]),
+    ("joox", ["gdstudio", "gsstudio"], ["JooxProvider"]),
+    ("netease", ["gdstudio", "gsstudio"], ["NeteaseProvider"]),
+    ("migu", ["gdstudio", "gsstudio"], ["MiguProvider"]),
+    ("kuwo", ["gdstudio", "gsstudio"], ["KuwoProvider"]),
 ]
 
 PROVIDER_CLASSES: dict[str, type] = {}
@@ -88,15 +88,18 @@ class DownloadSuccessfullyStarted(BaseException):
     """Extends BaseException (not Exception) so that no provider's `except Exception`
     block can swallow it. It will always propagate up to test_single_provider,
     stopping the download immediately once real audio data has been received."""
+
     pass
 
 
 def create_aborting_progress_cb():
     """Creates a callback that aborts the download as soon as it receives real audio data."""
+
     def cb(downloaded_bytes: int, total_bytes: int):
         # Wait for 16 KB to be sure it's audio and not an error JSON
         if downloaded_bytes > 16384:
             raise DownloadSuccessfullyStarted("The download started successfully!")
+
     return cb
 
 
@@ -131,7 +134,9 @@ async def _test_single_provider(provider, metadata: TrackMetadata):
         )
         # Reached only if the download completed (or failed) before the 16 KB threshold
         if result.success:
-            log_result(provider.name, "SUCCESS", "Download completed before interruption.")
+            log_result(
+                provider.name, "SUCCESS", "Download completed before interruption."
+            )
         else:
             log_result(provider.name, "FAIL", str(result.error))
 
@@ -172,7 +177,11 @@ async def main():
             providers_to_test.append(provider_cls())
             seen_classes.add(provider_cls)
         except Exception as e:
-            note = " (download-only service)" if provider_key in DOWNLOAD_ONLY_PROVIDERS else ""
+            note = (
+                " (download-only service)"
+                if provider_key in DOWNLOAD_ONLY_PROVIDERS
+                else ""
+            )
             print(f"⚠️  Could not instantiate '{provider_key}'{note}: {e}")
 
     if not providers_to_test:

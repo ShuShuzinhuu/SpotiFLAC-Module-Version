@@ -5,7 +5,7 @@ from SpotiFLAC.providers import tidal
 
 def test_parse_manifest_json():
     # parse_manifest expects a JSON object (starts with '{'), not a list
-    b = b"{\"urls\": [\"https://example.com/track.flac\"], \"mimeType\": \"audio/flac\"}"
+    b = b'{"urls": ["https://example.com/track.flac"], "mimeType": "audio/flac"}'
     encoded = base64.b64encode(b).decode()
     result = tidal.parse_manifest(encoded)
     assert result.direct_url == "https://example.com/track.flac"
@@ -14,7 +14,7 @@ def test_parse_manifest_json():
 
 def test_parse_dash_manifest():
     # simple DASH MPD with initialization and one segment
-    mpd = '''<?xml version="1.0"?>
+    mpd = """<?xml version="1.0"?>
     <MPD>
       <Period>
         <AdaptationSet>
@@ -26,7 +26,7 @@ def test_parse_dash_manifest():
         </AdaptationSet>
       </Period>
     </MPD>
-    '''
+    """
     encoded = base64.b64encode(mpd.encode()).decode()
     res = tidal.parse_manifest(encoded)
     assert res.init_url == "init.mp4"

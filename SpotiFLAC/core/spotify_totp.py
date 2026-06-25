@@ -11,20 +11,104 @@ logger = logging.getLogger(__name__)
 # Fallback secrets
 _TOTP_VERSION = 61
 _TOTP_SECRETS: dict[int, list[int]] = {
-    59: [123,105,79,70,110,59,52,125,60,49,80,70,89,75,80,86,63,53,123,37,117,49,52,93,77,62,47,86,48,104,68,72],
-    60: [79,109,69,123,90,65,46,74,94,34,58,48,70,71,92,85,122,63,91,64,87,87],
-    61: [44,55,47,42,70,40,34,114,76,74,50,111,120,97,75,76,94,102,43,69,49,120,118,80,64,78],
+    59: [
+        123,
+        105,
+        79,
+        70,
+        110,
+        59,
+        52,
+        125,
+        60,
+        49,
+        80,
+        70,
+        89,
+        75,
+        80,
+        86,
+        63,
+        53,
+        123,
+        37,
+        117,
+        49,
+        52,
+        93,
+        77,
+        62,
+        47,
+        86,
+        48,
+        104,
+        68,
+        72,
+    ],
+    60: [
+        79,
+        109,
+        69,
+        123,
+        90,
+        65,
+        46,
+        74,
+        94,
+        34,
+        58,
+        48,
+        70,
+        71,
+        92,
+        85,
+        122,
+        63,
+        91,
+        64,
+        87,
+        87,
+    ],
+    61: [
+        44,
+        55,
+        47,
+        42,
+        70,
+        40,
+        34,
+        114,
+        76,
+        74,
+        50,
+        111,
+        120,
+        97,
+        75,
+        76,
+        94,
+        102,
+        43,
+        69,
+        49,
+        120,
+        118,
+        80,
+        64,
+        78,
+    ],
 }
 
 _BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 _CACHED_SECRETS = None
+
 
 def get_secrets() -> dict[int, list[int]]:
     """Dynamically fetches the latest TOTP secrets from the community repository."""
     global _CACHED_SECRETS
     if _CACHED_SECRETS is not None:
         return _CACHED_SECRETS
-    
+
     try:
         url = "https://raw.githubusercontent.com/xyloflake/spot-secrets-go/main/secrets/secretDict.json"
         resp = httpx.get(url, timeout=5.0)
@@ -34,9 +118,10 @@ def get_secrets() -> dict[int, list[int]]:
             return _CACHED_SECRETS
     except Exception as exc:
         logger.warning(f"[spotify_totp] Could not fetch remote TOTP secrets: {exc}")
-    
+
     # Fallback to local hardcoded secrets if offline or fails
     return _TOTP_SECRETS
+
 
 def _base32_encode(data: bytes) -> str:
     result = []
@@ -51,6 +136,7 @@ def _base32_encode(data: bytes) -> str:
     if bits > 0:
         result.append(_BASE32_ALPHABET[(value << (5 - bits)) & 31])
     return "".join(result)
+
 
 def _base32_decode(s: str) -> bytes:
     s = s.upper().rstrip("=")
@@ -68,17 +154,19 @@ def _base32_decode(s: str) -> bytes:
             bits -= 8
     return bytes(result)
 
+
 def _hotp(key_bytes: bytes, counter: int) -> str:
     counter_bytes = struct.pack(">Q", counter)
     h = hmac.new(key_bytes, counter_bytes, hashlib.sha1).digest()
     offset = h[-1] & 0x0F
     code = (
-            ((h[offset] & 0x7F) << 24)
-            | ((h[offset + 1] & 0xFF) << 16)
-            | ((h[offset + 2] & 0xFF) << 8)
-            | (h[offset + 3] & 0xFF)
+        ((h[offset] & 0x7F) << 24)
+        | ((h[offset + 1] & 0xFF) << 16)
+        | ((h[offset + 2] & 0xFF) << 8)
+        | (h[offset + 3] & 0xFF)
     )
     return str(code % 1_000_000).zfill(6)
+
 
 def _compute_secret(version: int, secrets_dict: dict[int, list[int]]) -> str:
     secret_list = secrets_dict.get(version)
@@ -97,14 +185,15 @@ def _compute_secret(version: int, secrets_dict: dict[int, list[int]]) -> str:
     hex_str = "".join(format(ord(ch), "02x") for ch in joined)
 
     # Step 4: hex string -> bytes
-    hex_bytes = bytes(int(hex_str[i:i+2], 16) for i in range(0, len(hex_str), 2))
+    hex_bytes = bytes(int(hex_str[i : i + 2], 16) for i in range(0, len(hex_str), 2))
 
     # Step 5: base32 encode
     return _base32_encode(hex_bytes)
 
+
 def generate_spotify_totp(
-        timestamp: float | None = None,
-        version: int | None = None,
+    timestamp: float | None = None,
+    version: int | None = None,
 ) -> tuple[str, int]:
     """
     Generates a Spotify TOTP code dynamically.
@@ -114,7 +203,7 @@ def generate_spotify_totp(
         if version is None:
             # Dynamically determine the highest current version directly from API
             version = max(secrets.keys())
-            
+
         ts = timestamp if timestamp is not None else time.time()
         counter = int(ts) // 30
 

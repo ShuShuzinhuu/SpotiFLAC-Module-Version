@@ -23,6 +23,7 @@ Batch (more URL):
         output_dir="./Music",
     )
 """
+
 from __future__ import annotations
 import logging
 import importlib.metadata
@@ -67,6 +68,7 @@ __all__ = [
     "DownloadResult",
 ]
 
+
 def _setup_logger(level: int):
     logger = logging.getLogger("SpotiFLAC")
     if not logger.handlers:
@@ -77,32 +79,33 @@ def _setup_logger(level: int):
     logger.setLevel(level)
     return logger
 
+
 def SpotiFLAC(
-        url:                   str | list[str],
-        output_dir:            str,
-        services:              list[str] | None = None,
-        filename_format:       str              = "{title} - {artist}",
-        use_track_numbers:     bool             = False,
-        use_album_track_numbers: bool           = False,
-        use_artist_subfolders: bool             = False,
-        use_album_subfolders:  bool             = False,
-        loop:                  int | None       = None,
-        allow_fallback:        bool             = True,
-        quality:               str              = "LOSSLESS",
-        first_artist_only:     bool             = False,
-        log_level:             int              = logging.WARNING,
-        output_path:           str | None       = None,
-        embed_lyrics:          bool             = True,
-        lyrics_providers:      list[str] | None = None,
-        enrich_metadata:       bool             = True,
-        enrich_providers:      list[str] | None = None,
-        qobuz_token:           str | None       = None,
-        qobuz_local_api_url:   str | None       = None,
-        track_max_retries:     int              = 0,
-        post_download_action:  str              = "none",
-        post_download_command: str              = "",
-        tidal_custom_api:      str | None       = None,
-        timeout_s:             int | None       = None,
+    url: str | list[str],
+    output_dir: str,
+    services: list[str] | None = None,
+    filename_format: str = "{title} - {artist}",
+    use_track_numbers: bool = False,
+    use_album_track_numbers: bool = False,
+    use_artist_subfolders: bool = False,
+    use_album_subfolders: bool = False,
+    loop: int | None = None,
+    allow_fallback: bool = True,
+    quality: str = "LOSSLESS",
+    first_artist_only: bool = False,
+    log_level: int = logging.WARNING,
+    output_path: str | None = None,
+    embed_lyrics: bool = True,
+    lyrics_providers: list[str] | None = None,
+    enrich_metadata: bool = True,
+    enrich_providers: list[str] | None = None,
+    qobuz_token: str | None = None,
+    qobuz_local_api_url: str | None = None,
+    track_max_retries: int = 0,
+    post_download_action: str = "none",
+    post_download_command: str = "",
+    tidal_custom_api: str | None = None,
+    timeout_s: int | None = None,
 ) -> None:
     """
     Download tracks/album/playlist from Spotify, Tidal, Apple Music, Deezer, SoundCloud, Pandora and YouTube.
@@ -118,43 +121,49 @@ def SpotiFLAC(
     _setup_logger(log_level)
 
     opts = DownloadOptions(
-        output_dir              = output_dir,
-        services                = services or ["tidal"],
-        filename_format         = filename_format,
-        use_track_numbers       = use_track_numbers,
-        use_album_track_numbers = use_album_track_numbers,
-        use_artist_subfolders   = use_artist_subfolders,
-        allow_fallback          = allow_fallback,
-        use_album_subfolders    = use_album_subfolders,
-        quality                 = quality,
-        first_artist_only       = first_artist_only,
-        output_path             = output_path,
-        embed_lyrics            = embed_lyrics,
-        lyrics_providers        = lyrics_providers or ["spotify", "apple", "musixmatch", "lrclib", "amazon"],
-        enrich_metadata         = enrich_metadata,
-        enrich_providers        = enrich_providers or ["deezer", "apple", "qobuz", "tidal", "soundcloud"],
-        qobuz_token             = qobuz_token,
-        qobuz_local_api_url     = qobuz_local_api_url,
-        track_max_retries       = track_max_retries,
-        post_download_action    = post_download_action,
-        post_download_command   = post_download_command,
-        tidal_custom_api        = tidal_custom_api,
-        timeout_s               = timeout_s,
+        output_dir=output_dir,
+        services=services or ["tidal"],
+        filename_format=filename_format,
+        use_track_numbers=use_track_numbers,
+        use_album_track_numbers=use_album_track_numbers,
+        use_artist_subfolders=use_artist_subfolders,
+        allow_fallback=allow_fallback,
+        use_album_subfolders=use_album_subfolders,
+        quality=quality,
+        first_artist_only=first_artist_only,
+        output_path=output_path,
+        embed_lyrics=embed_lyrics,
+        lyrics_providers=lyrics_providers
+        or ["spotify", "apple", "musixmatch", "lrclib", "amazon"],
+        enrich_metadata=enrich_metadata,
+        enrich_providers=enrich_providers
+        or ["deezer", "apple", "qobuz", "tidal", "soundcloud"],
+        qobuz_token=qobuz_token,
+        qobuz_local_api_url=qobuz_local_api_url,
+        track_max_retries=track_max_retries,
+        post_download_action=post_download_action,
+        post_download_command=post_download_command,
+        tidal_custom_api=tidal_custom_api,
+        timeout_s=timeout_s,
     )
 
     try:
         downloader = SpotiflacDownloader(opts)
-        
-        # Gestiamo l'avvio del loop asincrono in modo "safe" 
+
+        # Gestiamo l'avvio del loop asincrono in modo "safe"
         # (copre sia chiamate standard che chiamate da contesti già asincroni come Jupyter)
         try:
             asyncio.run(downloader.run_async(url, loop_minutes=loop))
         except RuntimeError:
             # Fallback se un event loop è già in esecuzione nel thread attuale
             loop_instance = asyncio.get_event_loop()
-            loop_instance.run_until_complete(downloader.run_async(url, loop_minutes=loop))
-            
+            loop_instance.run_until_complete(
+                downloader.run_async(url, loop_minutes=loop)
+            )
+
     except KeyboardInterrupt:
         print("\n\n[!] Operazione interrotta dall'utente.")
     except Exception as e:
-        logging.getLogger("SpotiFLAC").error("Critical error durante l'esecuzione: %s", e)
+        logging.getLogger("SpotiFLAC").error(
+            "Critical error durante l'esecuzione: %s", e
+        )

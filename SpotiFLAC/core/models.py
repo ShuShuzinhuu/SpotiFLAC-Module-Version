@@ -2,53 +2,54 @@
 Modelli Pydantic per SpotiFLAC.
 Sostituiscono i dict raw per garantire validazione, coercizione e zero KeyError.
 """
+
 from __future__ import annotations
 import re
 from typing import Literal, Any
 from pydantic import BaseModel, field_validator, model_validator, ValidationInfo, Field
 
-
 # ---------------------------------------------------------------------------
 # Track / Metadata
 # ---------------------------------------------------------------------------
 
+
 class TrackMetadata(BaseModel):
     # Campi Base
-    id:           str
-    title:        str
-    artists:      str
-    album:        str
+    id: str
+    title: str
+    artists: str
+    album: str
     album_artist: str
-    isrc:         str        = ""
-    track_number: int        = 0
-    disc_number:  int        = 1
-    total_tracks: int        = 0
-    total_discs:  int        = 1  # Definito una sola volta
-    duration_ms:  int        = 0
-    release_date: str        = ""
-    cover_url:    str        = ""
-    external_url: str        = ""
-    copyright:    str        = ""
-    publisher:    str        = ""  # Definito una sola volta
-    composer:     str        = ""
-    genre:        str        = ""
-    bpm:          int        = 0
-    extra_info:   dict       = Field(default_factory=dict) # Usa Field
-    upc:          str        = ""
-    album_type:   str        = ""
-    preview_url:  str        = ""
-    album_id:     str        = ""
-    album_url:    str        = ""
-    artist_id:    str        = ""
-    artist_url:   str        = ""
-    artists_data: list       = Field(default_factory=list) 
-    plays:        str        = "0"
-    is_explicit:  bool       = False
-    status:       str        = ""
-    rank:         str        = ""
-    description:  str        = ""
-    avatar_url:   str        = ""
-    header_url:   str        = ""
+    isrc: str = ""
+    track_number: int = 0
+    disc_number: int = 1
+    total_tracks: int = 0
+    total_discs: int = 1  # Definito una sola volta
+    duration_ms: int = 0
+    release_date: str = ""
+    cover_url: str = ""
+    external_url: str = ""
+    copyright: str = ""
+    publisher: str = ""  # Definito una sola volta
+    composer: str = ""
+    genre: str = ""
+    bpm: int = 0
+    extra_info: dict = Field(default_factory=dict)  # Usa Field
+    upc: str = ""
+    album_type: str = ""
+    preview_url: str = ""
+    album_id: str = ""
+    album_url: str = ""
+    artist_id: str = ""
+    artist_url: str = ""
+    artists_data: list = Field(default_factory=list)
+    plays: str = "0"
+    is_explicit: bool = False
+    status: str = ""
+    rank: str = ""
+    description: str = ""
+    avatar_url: str = ""
+    header_url: str = ""
 
     @field_validator("title", "artists", "album", "album_artist", mode="before")
     @classmethod
@@ -87,23 +88,23 @@ class TrackMetadata(BaseModel):
         album_artist = self.first_artist if first_artist_only else self.album_artist
 
         tags: dict[str, str] = {
-            "TITLE":        self.title,
-            "ARTIST":       artist,
-            "ALBUM":        self.album,
-            "ALBUMARTIST":  album_artist,
-            "DATE":         self.year,
-            "TRACKNUMBER":  str(self.track_number or 1),
-            "TRACKTOTAL":   str(self.total_tracks or 1),
-            "DISCNUMBER":   str(self.disc_number or 1),
-            "DISCTOTAL":    str(self.total_discs or 1),
+            "TITLE": self.title,
+            "ARTIST": artist,
+            "ALBUM": self.album,
+            "ALBUMARTIST": album_artist,
+            "DATE": self.year,
+            "TRACKNUMBER": str(self.track_number or 1),
+            "TRACKTOTAL": str(self.total_tracks or 1),
+            "DISCNUMBER": str(self.disc_number or 1),
+            "DISCTOTAL": str(self.total_discs or 1),
         }
 
         for key, val in [
-            ("ISRC",         self.isrc),
-            ("COPYRIGHT",    self.copyright),
-            ("COMPOSER",     self.composer),
+            ("ISRC", self.isrc),
+            ("COPYRIGHT", self.copyright),
+            ("COMPOSER", self.composer),
             ("ORGANIZATION", self.publisher),
-            ("URL",          self.external_url),
+            ("URL", self.external_url),
         ]:
             if val:
                 tags[key] = val
@@ -148,14 +149,16 @@ class TrackMetadata(BaseModel):
 # Download Result
 # ---------------------------------------------------------------------------
 
+
 class DownloadResult(BaseModel):
     """Rappresenta l'esito di un'operazione di download."""
-    success:    bool
-    provider:   str
-    file_path:  str | None = None
-    format:     Literal["flac", "mp3", "m4a"] | None = None
-    error:      str | None = None
-    skipped:    bool = False
+
+    success: bool
+    provider: str
+    file_path: str | None = None
+    format: Literal["flac", "mp3", "m4a"] | None = None
+    error: str | None = None
+    skipped: bool = False
 
     @model_validator(mode="after")
     def _check_consistency(self) -> "DownloadResult":
@@ -165,14 +168,25 @@ class DownloadResult(BaseModel):
         return self
 
     @classmethod
-    def ok(cls, provider: str, file_path: str,
-           fmt: Literal["flac", "mp3", "m4a"] = "flac") -> "DownloadResult":
+    def ok(
+        cls, provider: str, file_path: str, fmt: Literal["flac", "mp3", "m4a"] = "flac"
+    ) -> "DownloadResult":
         return cls(success=True, provider=provider, file_path=file_path, format=fmt)
 
     @classmethod
-    def skipped_result(cls, provider: str, file_path: str,
-                       fmt: Literal["flac", "mp3", "m4a"] | None = None) -> "DownloadResult":
-        return cls(success=True, provider=provider, file_path=file_path, format=fmt, skipped=True)
+    def skipped_result(
+        cls,
+        provider: str,
+        file_path: str,
+        fmt: Literal["flac", "mp3", "m4a"] | None = None,
+    ) -> "DownloadResult":
+        return cls(
+            success=True,
+            provider=provider,
+            file_path=file_path,
+            format=fmt,
+            skipped=True,
+        )
 
     @classmethod
     def fail(cls, provider: str, error: str) -> "DownloadResult":
@@ -183,8 +197,8 @@ class DownloadResult(BaseModel):
 # Filename / Path Helpers
 # ---------------------------------------------------------------------------
 
-_UNSAFE_RE   = re.compile(r'[\\/*?:"<>|]')
-_WHITESPACE  = re.compile(r"\s+")
+_UNSAFE_RE = re.compile(r'[\\/*?:"<>|]')
+_WHITESPACE = re.compile(r"\s+")
 
 
 def sanitize(value: str, fallback: str = "Unknown") -> str:
@@ -197,25 +211,27 @@ def sanitize(value: str, fallback: str = "Unknown") -> str:
 
 
 def build_filename(
-        metadata:            TrackMetadata,
-        fmt:                 str,
-        position:            int   = 1,
-        include_track_number:   bool  = False,
-        use_album_track_number: bool  = False,
-        first_artist_only:   bool  = False,
-        extension:           str   = ".flac",
+    metadata: TrackMetadata,
+    fmt: str,
+    position: int = 1,
+    include_track_number: bool = False,
+    use_album_track_number: bool = False,
+    first_artist_only: bool = False,
+    extension: str = ".flac",
 ) -> str:
     """
     Costruisce il filename finale applicando i placeholder o i formati legacy.
     Placeholder supportati: {title}, {artist}, {album}, {album_artist}, {year}, {date}, {disc}, {isrc}, {track}
     """
-    artist       = sanitize(metadata.first_artist if first_artist_only else metadata.artists)
-    album_artist = sanitize(metadata.first_artist if first_artist_only else metadata.album_artist)
-    title        = sanitize(metadata.title)
-    album        = sanitize(metadata.album)
-    year         = metadata.year
-    date         = sanitize(metadata.release_date)
-    disc         = metadata.disc_number
+    artist = sanitize(metadata.first_artist if first_artist_only else metadata.artists)
+    album_artist = sanitize(
+        metadata.first_artist if first_artist_only else metadata.album_artist
+    )
+    title = sanitize(metadata.title)
+    album = sanitize(metadata.album)
+    year = metadata.year
+    date = sanitize(metadata.release_date)
+    disc = metadata.disc_number
 
     track_number = (
         metadata.track_number
@@ -225,16 +241,15 @@ def build_filename(
 
     if "{" in fmt:
         result = (
-            fmt
-            .replace("{title}",        title)
-            .replace("{artist}",       artist)
-            .replace("{album}",        album)
+            fmt.replace("{title}", title)
+            .replace("{artist}", artist)
+            .replace("{album}", album)
             .replace("{album_artist}", album_artist)
-            .replace("{year}",         year)
-            .replace("{date}",         date)
-            .replace("{disc}",         str(disc) if disc > 0 else "")
-            .replace("{isrc}",         sanitize(metadata.isrc))
-            .replace("{position}",     f"{position:02d}")
+            .replace("{year}", year)
+            .replace("{date}", date)
+            .replace("{disc}", str(disc) if disc > 0 else "")
+            .replace("{isrc}", sanitize(metadata.isrc))
+            .replace("{position}", f"{position:02d}")
         )
 
         if metadata.track_number > 0:

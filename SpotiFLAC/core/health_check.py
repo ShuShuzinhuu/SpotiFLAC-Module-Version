@@ -10,10 +10,10 @@ import httpx
 
 from ..core.endpoints import get_health_zarz_url
 
-
 # ---------------------------------------------------------------------------
 # Helper per la validazione del payload
 # ---------------------------------------------------------------------------
+
 
 def _is_streaming_url(raw: str) -> bool:
     """Check if una stringa è un URL HTTP/HTTPS valido."""
@@ -48,6 +48,7 @@ def _contains_streaming_url(body: str) -> bool:
 
 _TIDAL_MAX_MIRRORS = 8
 
+
 def _load_endpoints() -> dict[str, list[tuple[str, str]]]:
     """
     Carica dinamicamente gli endpoint interrogando il registro centralizzato.
@@ -72,11 +73,14 @@ def _load_endpoints() -> dict[str, list[tuple[str, str]]]:
     tidal_eps = []
     try:
         from ..providers.tidal import get_tidal_api_list
+
         for url in get_tidal_api_list()[:_TIDAL_MAX_MIRRORS]:
-            tidal_eps.append(("GET", f"{url.rstrip('/')}/track/?id=251380837&quality=LOSSLESS"))
+            tidal_eps.append(
+                ("GET", f"{url.rstrip('/')}/track/?id=251380837&quality=LOSSLESS")
+            )
     except Exception:
         pass
-        
+
     for url in get_tidal_post_endpoints():
         tidal_eps.append(("POST", url))
     tidal_eps.append(("GET", zarz_health))
@@ -85,27 +89,27 @@ def _load_endpoints() -> dict[str, list[tuple[str, str]]]:
     # ── Qobuz ──────────────────────────────────────────────────────────────
     qobuz_eps = []
     _QOBUZ_PROBE_ID = "3135556"
-    
+
     for url in get_qobuz_endpoints("stream"):
         sep = "" if url.endswith("=") else "?"
         qobuz_eps.append(("GET", f"{url}{_QOBUZ_PROBE_ID}{sep}quality=6"))
-        
+
     for url in get_qobuz_endpoints("dl"):
         qobuz_eps.append(("GET", f"{url}track_id={_QOBUZ_PROBE_ID}&quality=6"))
-        
+
     for url in get_qobuz_endpoints("post"):
         qobuz_eps.append(("POST", url))
-        
+
     for url in get_qobuz_endpoints("flacdownloader"):
         qobuz_eps.append(("GET", f"{url.rstrip('/')}/prepare"))
-    
+
     qobuz_eps.append(("GET", zarz_health))
     endpoints["qobuz"] = qobuz_eps
 
     # ── Deezer ─────────────────────────────────────────────────────────────
     dzr_res = get_deezer_endpoint("resolver")
     dzr_flac = get_deezer_endpoint("flacdownloader_prepare")
-    
+
     deezer_eps = []
     if dzr_res:
         deezer_eps.append(("POST", dzr_res))
@@ -116,11 +120,17 @@ def _load_endpoints() -> dict[str, list[tuple[str, str]]]:
 
     # ── Amazon ─────────────────────────────────────────────────────────────
     amazon_eps = []
-    for key, method in [("spotbye1", "POST"), ("spotbye2", "GET"), ("zarz", "GET"), ("musicdl", "POST"), ("squid", "GET")]:
+    for key, method in [
+        ("spotbye1", "POST"),
+        ("spotbye2", "GET"),
+        ("zarz", "GET"),
+        ("musicdl", "POST"),
+        ("squid", "GET"),
+    ]:
         url = get_amazon_endpoint(key)
         if url:
             amazon_eps.append((method, url))
-            
+
     amazon_eps.append(("GET", zarz_health))
     endpoints["amazon"] = amazon_eps
 
@@ -148,25 +158,30 @@ def _load_endpoints() -> dict[str, list[tuple[str, str]]]:
         gd_url = get_asian_provider_endpoint(provider, "gdstudio")
         if gd_url:
             prov_eps.append(("GET", gd_url))
-        
-        wjhe_url = get_asian_provider_endpoint(provider, "wjhe") or get_asian_provider_endpoint("joox", "wjhe")
+
+        wjhe_url = get_asian_provider_endpoint(
+            provider, "wjhe"
+        ) or get_asian_provider_endpoint("joox", "wjhe")
         if wjhe_url:
             if "?" not in wjhe_url:
-                wjhe_url = f"{wjhe_url.rstrip('/')}/url?ID=11259&quality=1000&format=flac"
+                wjhe_url = (
+                    f"{wjhe_url.rstrip('/')}/url?ID=11259&quality=1000&format=flac"
+                )
             prov_eps.append(("GET", wjhe_url))
-        
+
         endpoints[provider] = prov_eps
 
     return endpoints
+
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-_UA                = "SpotiFLAC-HealthCheck/4.5.0"
-_TIMEOUT           = httpx.Timeout(connect=2.0, read=2.0, write=2.0, pool=2.0)
-_MAX_CONCURRENT    = 25
-_ZARZ_HEALTH_URL   = get_health_zarz_url() or "https://api.zarz.moe/v1/health"
+_UA = "SpotiFLAC-HealthCheck/4.5.0"
+_TIMEOUT = httpx.Timeout(connect=2.0, read=2.0, write=2.0, pool=2.0)
+_MAX_CONCURRENT = 25
+_ZARZ_HEALTH_URL = get_health_zarz_url() or "https://api.zarz.moe/v1/health"
 _GLOBAL_HC_TIMEOUT = 10  # secondi
 
 # Carica gli endpoint una sola volta al momento dell'import
@@ -193,18 +208,20 @@ def _make_async_client() -> httpx.AsyncClient:
 # Data model
 # ---------------------------------------------------------------------------
 
+
 class HealthResult(NamedTuple):
     provider: str
-    url:      str
-    method:   str
-    ok:       bool
-    latency:  float
-    detail:   str
+    url: str
+    method: str
+    ok: bool
+    latency: float
+    detail: str
 
 
 # ---------------------------------------------------------------------------
 # Core async check logic
 # ---------------------------------------------------------------------------
+
 
 async def _check_one(
     client: httpx.AsyncClient,
@@ -222,12 +239,18 @@ async def _check_one(
         # Iniezione degli header richiesti per endpoint di tipo FlacDownloader
         if "/prepare" in url:
             parsed = urlparse(url)
-            origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
-            req_kwargs["headers"].update({
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
-                "Accept": "application/json",
-                "Referer": f"{origin}/it/download" if origin else ""
-            })
+            origin = (
+                f"{parsed.scheme}://{parsed.netloc}"
+                if parsed.scheme and parsed.netloc
+                else ""
+            )
+            req_kwargs["headers"].update(
+                {
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+                    "Accept": "application/json",
+                    "Referer": f"{origin}/it/download" if origin else "",
+                }
+            )
 
         # Payload standard per l'API di Deezer
         if method == "POST" and provider == "deezer":
@@ -237,9 +260,9 @@ async def _check_one(
             }
 
         resp = await client.request(method, url, follow_redirects=True, **req_kwargs)
-        ms   = (time.perf_counter() - t0) * 1000
+        ms = (time.perf_counter() - t0) * 1000
 
-        ok     = False
+        ok = False
         detail = f"HTTP {resp.status_code}"
 
         # ── POST probe ─────────────────────────────────────────────────────
@@ -257,7 +280,7 @@ async def _check_one(
                             or data.get("status") == "error"
                             or data.get("success") is False
                         ):
-                            ok     = False
+                            ok = False
                             detail = str(
                                 data.get("message") or data.get("error") or "API Error"
                             )[:10]
@@ -267,7 +290,7 @@ async def _check_one(
                         ok, detail = True, "HTTP 200 OK"
 
             elif resp.status_code >= 500:
-                ok = False   # detail già impostato sopra ("HTTP 5xx")
+                ok = False  # detail già impostato sopra ("HTTP 5xx")
 
             elif resp.status_code == 401:
                 ok, detail = False, "Auth required"
@@ -294,9 +317,9 @@ async def _check_one(
             # ── Centralised Zarz health check ──────────────────────────────
             if "api.zarz.moe/v1/health" in url or "/v1/health" in url:
                 try:
-                    data     = json.loads(body)
+                    data = json.loads(body)
                     services = data.get("services", {})
-                    svc_key  = "qobuz" if provider == "qbz" else provider
+                    svc_key = "qobuz" if provider == "qbz" else provider
 
                     if svc_key in services:
                         svc_info = services[svc_key]
@@ -305,10 +328,12 @@ async def _check_one(
                             and svc_info.get("detail") == "auth_required"
                         ):
                             ok, detail = False, "Auth required"
-                        elif svc_info.get("ok") is True or svc_info.get("status") == 200:
+                        elif (
+                            svc_info.get("ok") is True or svc_info.get("status") == 200
+                        ):
                             ok, detail = True, svc_info.get("detail") or "ok"
                         else:
-                            ok     = False
+                            ok = False
                             detail = (
                                 f"Zarz {svc_info.get('status')} "
                                 f"({svc_info.get('detail') or 'error'})"
@@ -410,9 +435,9 @@ async def _zarz_bulk_check(
     Returns {provider: HealthResult} solo per i provider presenti nella risposta.
     """
     try:
-        t0   = time.perf_counter()
+        t0 = time.perf_counter()
         resp = await client.get(_ZARZ_HEALTH_URL, headers={"User-Agent": _UA})
-        ms   = (time.perf_counter() - t0) * 1000
+        ms = (time.perf_counter() - t0) * 1000
 
         if resp.status_code != 200:
             return {}
@@ -430,7 +455,7 @@ async def _zarz_bulk_check(
             elif info.get("ok") is True or info.get("status") == 200:
                 ok, detail = True, info.get("detail") or "ok"
             else:
-                ok     = False
+                ok = False
                 detail = f"Zarz {info.get('status')} ({info.get('detail', 'error')})"
 
             out[svc] = HealthResult(svc, _ZARZ_HEALTH_URL, "GET", ok, ms, detail)
@@ -444,6 +469,7 @@ async def _zarz_bulk_check(
 # Public API
 # ---------------------------------------------------------------------------
 
+
 async def run_health_check(
     services: list[str],
     *,
@@ -452,13 +478,15 @@ async def run_health_check(
     """
     Check in modo asincrono la raggiungibilità di tutti i provider indicati.
     """
-    results:   list[HealthResult]         = []
+    results: list[HealthResult] = []
     task_list: list[tuple[str, str, str]] = []
 
     for svc in services:
         if svc == "youtube":
             results.append(
-                HealthResult("youtube", "yt-dlp (local binary)", "CLI", True, 0.0, "local")
+                HealthResult(
+                    "youtube", "yt-dlp (local binary)", "CLI", True, 0.0, "local"
+                )
             )
 
     remaining = [s for s in services if s != "youtube"]
@@ -524,12 +552,16 @@ async def run_health_check(
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
 
-    auth_blocked = {r.provider for r in results if "auth" in r.detail.lower() and not r.ok}
+    auth_blocked = {
+        r.provider for r in results if "auth" in r.detail.lower() and not r.ok
+    }
     if auth_blocked:
         results = [
-            r._replace(ok=False, detail="Auth required")
-            if r.provider in auth_blocked
-            else r
+            (
+                r._replace(ok=False, detail="Auth required")
+                if r.provider in auth_blocked
+                else r
+            )
             for r in results
         ]
 
@@ -555,7 +587,7 @@ def print_health_report(
         print("  Nessun provider da verificare.")
         return
 
-    url_col    = _URL_MAX if show_urls else 0
+    url_col = _URL_MAX if show_urls else 0
     header_top = "┬".join(
         ["─" * 14, "─" * 6, "─" * 12, "─" * 9]
         + (["─" * (url_col + 2)] if show_urls else [])
@@ -575,9 +607,9 @@ def print_health_report(
 
     prev_provider = None
     for r in results:
-        symbol  = "✅" if r.ok else "❌"
+        symbol = "✅" if r.ok else "❌"
         lat_str = f"{r.latency:>5.0f} ms" if r.latency >= 0 else "  timeout"
-        detail  = r.detail[:10]
+        detail = r.detail[:10]
 
         provider_cell = r.provider if r.provider != prev_provider else ""
         prev_provider = r.provider
@@ -594,8 +626,8 @@ def print_health_report(
     )
     print(f"  └{footer}┘")
 
-    ok_count   = sum(1 for r in results if r.ok)
-    prov_ok    = len({r.provider for r in results if r.ok})
+    ok_count = sum(1 for r in results if r.ok)
+    prov_ok = len({r.provider for r in results if r.ok})
     prov_total = len({r.provider for r in results})
     print(
         f"\n  {ok_count}/{len(results)} endpoints reachable "
@@ -606,6 +638,7 @@ def print_health_report(
 # ---------------------------------------------------------------------------
 # Convenience helpers
 # ---------------------------------------------------------------------------
+
 
 def any_service_ok(results: list[HealthResult]) -> bool:
     """True se almeno un endpoint di almeno un provider è raggiungibile."""

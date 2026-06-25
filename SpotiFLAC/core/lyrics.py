@@ -1,4 +1,5 @@
 """Async multi-provider lyrics fetcher."""
+
 from __future__ import annotations
 
 import asyncio
@@ -30,6 +31,7 @@ class LyricsContext:
     def clean_artist(self) -> str:
         return get_primary_artist(self.artist_name)
 
+
 DEFAULT_LYRICS_PROVIDERS = ["spotify", "apple", "musixmatch", "lrclib", "amazon"]
 DEFAULT_ENRICH_PROVIDERS = ["deezer", "apple", "qobuz", "tidal", "soundcloud"]
 
@@ -38,12 +40,22 @@ DEFAULT_ENRICH_PROVIDERS = ["deezer", "apple", "qobuz", "tidal", "soundcloud"]
 # Helpers (invariati)
 # ---------------------------------------------------------------------------
 
+
 def simplify_track_name(name: str) -> str:
     patterns = [
-        r'\s*\(feat\..*?\)', r'\s*\(ft\..*?\)', r'\s*\(featuring.*?\)', r'\s*\(with.*?\)',
-        r'\s*-\s*Remaster(ed)?.*$', r'\s*-\s*\d{4}\s*Remaster.*$',
-        r'\s*\(Remaster(ed)?.*?\)', r'\s*\(Deluxe.*?\)', r'\s*\(Bonus.*?\)',
-        r'\s*\(Live.*?\)', r'\s*\(Acoustic.*?\)', r'\s*\(Radio Edit\)', r'\s*\(Single Version\)'
+        r"\s*\(feat\..*?\)",
+        r"\s*\(ft\..*?\)",
+        r"\s*\(featuring.*?\)",
+        r"\s*\(with.*?\)",
+        r"\s*-\s*Remaster(ed)?.*$",
+        r"\s*-\s*\d{4}\s*Remaster.*$",
+        r"\s*\(Remaster(ed)?.*?\)",
+        r"\s*\(Deluxe.*?\)",
+        r"\s*\(Bonus.*?\)",
+        r"\s*\(Live.*?\)",
+        r"\s*\(Acoustic.*?\)",
+        r"\s*\(Radio Edit\)",
+        r"\s*\(Single Version\)",
     ]
     result = name
     for pattern in patterns:
@@ -64,10 +76,14 @@ def get_primary_artist(name: str) -> str:
 
 def normalize_loose_string(text: str) -> str:
     text = text.lower().strip()
-    text = text.replace('ß', 'ss').replace('đ', 'dj').replace('æ', 'ae').replace('œ', 'oe')
-    text = ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
-    text = re.sub(r'[/\\_\-|.&+]', ' ', text)
-    return ' '.join(text.split())
+    text = (
+        text.replace("ß", "ss").replace("đ", "dj").replace("æ", "ae").replace("œ", "oe")
+    )
+    text = "".join(
+        c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn"
+    )
+    text = re.sub(r"[/\\_\-|.&+]", " ", text)
+    return " ".join(text.split())
 
 
 def add_lrc_metadata(lrc_text: str, track_name: str, artist_name: str) -> str:
@@ -79,15 +95,12 @@ def add_lrc_metadata(lrc_text: str, track_name: str, artist_name: str) -> str:
 
 logger = logging.getLogger(__name__)
 
-_LRCLIB         = "https://lrclib.net/api"
+_LRCLIB = "https://lrclib.net/api"
 _SPOTIFY_LYRICS = "https://spclient.wg.spotify.com/color-lyrics/v2/track"
 _PAXSENIX_APPLE = "https://lyrics.paxsenix.org/apple-music"
-_PAXSENIX_MXM   = "https://lyrics.paxsenix.org/musixmatch"
+_PAXSENIX_MXM = "https://lyrics.paxsenix.org/musixmatch"
 
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "Chrome/145.0.0.0 Safari/537.36"
-)
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " "Chrome/145.0.0.0 Safari/537.36"
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +196,7 @@ async def _get_spotify_anon_token(timeout: int = 7) -> str:
 # Async fetch functions (Phase 2 — new)
 # ---------------------------------------------------------------------------
 
+
 async def _invalidate_spotify_token() -> None:
     lock = await _get_spotify_lock()
 
@@ -202,7 +216,11 @@ async def _fetch_spotify_async(track_id: str, timeout: int = 7) -> str:
         r = await client.get(
             f"{_SPOTIFY_LYRICS}/{track_id}",
             params={"format": "json", "market": "from_token"},
-            headers={"Authorization": f"Bearer {access_token}", "App-Platform": "WebPlayer", "User-Agent": _UA},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "App-Platform": "WebPlayer",
+                "User-Agent": _UA,
+            },
             timeout=timeout,
         )
         if r.status_code == 401:
@@ -215,23 +233,27 @@ async def _fetch_spotify_async(track_id: str, timeout: int = 7) -> str:
             r = await client.get(
                 f"{_SPOTIFY_LYRICS}/{track_id}",
                 params={"format": "json", "market": "from_token"},
-                headers={"Authorization": f"Bearer {access_token}", "App-Platform": "WebPlayer", "User-Agent": _UA},
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "App-Platform": "WebPlayer",
+                    "User-Agent": _UA,
+                },
                 timeout=timeout,
             )
         if r.status_code != 200:
             return ""
 
-        data      = r.json()
-        lines     = data.get("lyrics", {}).get("lines", [])
+        data = r.json()
+        lines = data.get("lyrics", {}).get("lines", [])
         if not lines:
             return ""
         sync_type = data.get("lyrics", {}).get("syncType", "")
         if sync_type == "LINE_SYNCED":
             lrc_lines = []
             for line in lines:
-                ms   = int(line.get("startTimeMs", 0))
+                ms = int(line.get("startTimeMs", 0))
                 m, s = divmod(ms // 1000, 60)
-                cs   = (ms % 1000) // 10
+                cs = (ms % 1000) // 10
                 lrc_lines.append(f"[{m:02d}:{s:02d}.{cs:02d}]{line.get('words', '')}")
             return "\n".join(lrc_lines)
         return "\n".join(line.get("words", "") for line in lines)
@@ -262,34 +284,47 @@ def _score_apple_result(res: dict, t_name: str, a_name: str, duration_s: int) ->
     return score
 
 
-async def _fetch_apple_async(track_name: str, artist_name: str, duration_s: int, timeout: int = 7) -> str:
-    query      = urllib.parse.quote(f"{track_name} {artist_name}")
+async def _fetch_apple_async(
+    track_name: str, artist_name: str, duration_s: int, timeout: int = 7
+) -> str:
+    query = urllib.parse.quote(f"{track_name} {artist_name}")
     search_url = f"{_PAXSENIX_APPLE}/search?q={query}"
     try:
         client = await NetworkManager.get_async_client_safe()
-        r = await client.get(search_url, headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=timeout)
+        r = await client.get(
+            search_url,
+            headers={"User-Agent": _UA, "Accept": "application/json"},
+            timeout=timeout,
+        )
         if not r.is_success:
             return ""
         results = r.json()
         if not results:
             return ""
-        best    = max(results, key=lambda x: _score_apple_result(x, track_name, artist_name, duration_s))
+        best = max(
+            results,
+            key=lambda x: _score_apple_result(x, track_name, artist_name, duration_s),
+        )
         song_id = best.get("id")
         if not song_id:
             return ""
         lyrics_url = f"{_PAXSENIX_APPLE}/lyrics?id={song_id}"
-        r_lyr = await client.get(lyrics_url, headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=timeout)
+        r_lyr = await client.get(
+            lyrics_url,
+            headers={"User-Agent": _UA, "Accept": "application/json"},
+            timeout=timeout,
+        )
         if not r_lyr.is_success:
             return ""
-        data       = r_lyr.json()
-        content    = data.get("content", []) if isinstance(data, dict) else data
-        lrc_lines  = []
+        data = r_lyr.json()
+        content = data.get("content", []) if isinstance(data, dict) else data
+        lrc_lines = []
         for line in content:
-            ts         = int(line.get("timestamp", 0))
-            m, s       = divmod(ts // 1000, 60)
-            cs         = (ts % 1000) // 10
+            ts = int(line.get("timestamp", 0))
+            m, s = divmod(ts // 1000, 60)
+            cs = (ts % 1000) // 10
             text_parts = line.get("text", [])
-            line_text  = ""
+            line_text = ""
             for part in text_parts:
                 line_text += part.get("text", "")
                 if not part.get("part", False):
@@ -303,8 +338,11 @@ async def _fetch_apple_async(track_name: str, artist_name: str, duration_s: int,
         return ""
 
 
-async def _fetch_musixmatch_async(track_name: str, artist_name: str, duration_s: int, timeout: int = 7) -> str:
+async def _fetch_musixmatch_async(
+    track_name: str, artist_name: str, duration_s: int, timeout: int = 7
+) -> str:
     import json as _json
+
     client = await NetworkManager.get_async_client_safe()
     for sync_type in ["word", "line"]:
         params = {"t": track_name, "a": artist_name, "type": sync_type, "format": "lrc"}
@@ -312,7 +350,11 @@ async def _fetch_musixmatch_async(track_name: str, artist_name: str, duration_s:
             params["d"] = str(duration_s)
         url = f"{_PAXSENIX_MXM}/lyrics?" + urllib.parse.urlencode(params)
         try:
-            r = await client.get(url, headers={"User-Agent": _UA, "Accept": "application/json"}, timeout=timeout)
+            r = await client.get(
+                url,
+                headers={"User-Agent": _UA, "Accept": "application/json"},
+                timeout=timeout,
+            )
             if r.is_success:
                 body = r.text.strip()
                 try:
@@ -344,17 +386,17 @@ async def _fetch_amazon_async(isrc: str, timeout: int = 7) -> str:
         )
         if not r.is_success:
             return ""
-        data  = r.json()
+        data = r.json()
         lines = data.get("lines") or data.get("lyrics", [])
         if not lines:
             return ""
         if isinstance(lines[0], dict):
             lrc = []
             for line in lines:
-                ts   = int(line.get("startTime", 0))
-                m    = ts // 60000
-                s    = (ts % 60000) // 1000
-                cs   = (ts % 1000) // 10
+                ts = int(line.get("startTime", 0))
+                m = ts // 60000
+                s = (ts % 60000) // 1000
+                cs = (ts % 1000) // 10
                 text = line.get("text", "")
                 lrc.append(f"[{m:02d}:{s:02d}.{cs:02d}]{text}")
             return "\n".join(lrc)
@@ -365,7 +407,11 @@ async def _fetch_amazon_async(isrc: str, timeout: int = 7) -> str:
 
 
 async def _fetch_lrclib_async(
-    track_name: str, artist_name: str, album_name: str = "", duration_s: int = 0, timeout: int = 7
+    track_name: str,
+    artist_name: str,
+    album_name: str = "",
+    duration_s: int = 0,
+    timeout: int = 7,
 ) -> str:
     client = await NetworkManager.get_async_client_safe()
 
@@ -374,7 +420,7 @@ async def _fetch_lrclib_async(
         if al:
             params["album_name"] = al
         if d:
-            params["duration"]   = d
+            params["duration"] = d
         try:
             r = await client.get(f"{_LRCLIB}/get", params=params, timeout=timeout)
             if r.status_code == 200:
@@ -428,7 +474,7 @@ async def _fetch_lrclib_async(
                         if item.get("syncedLyrics") and not best_synced:
                             best_synced = item["syncedLyrics"]
                         elif item.get("plainLyrics") and not best_plain:
-                            best_plain  = item["plainLyrics"]
+                            best_plain = item["plainLyrics"]
                 return best_synced or best_plain or ""
     except Exception:
         pass
@@ -483,11 +529,7 @@ async def fetch_lyrics_async(
         album_name=album_name,
         duration_s=duration_s,
         spotify_id=(
-            track_id
-            if track_id
-            and len(track_id) == 22
-            and "_" not in track_id
-            else ""
+            track_id if track_id and len(track_id) == 22 and "_" not in track_id else ""
         ),
         isrc=isrc,
     )
@@ -524,12 +566,7 @@ async def fetch_lyrics_async(
 
         return "", ""
 
-    tasks = [
-        asyncio.create_task(
-            run_provider(provider)
-        )
-        for provider in providers
-    ]
+    tasks = [asyncio.create_task(run_provider(provider)) for provider in providers]
 
     try:
         for task in asyncio.as_completed(tasks):

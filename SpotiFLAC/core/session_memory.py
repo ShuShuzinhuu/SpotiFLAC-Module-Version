@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 _io_lock = asyncio.Lock()
 _SESSION_FILE = Path.home() / ".cache" / "spotiflac" / "session.json"
-_MAX_HISTORY  = 20
+_MAX_HISTORY = 20
 
 
 def _read_file_sync() -> dict:
@@ -44,9 +44,11 @@ async def _save_async(data: dict) -> None:
         except Exception as exc:
             logger.debug("[session] Write error: %s", exc)
 
+
 # ---------------------------------------------------------------------------
 # Output folder
 # ---------------------------------------------------------------------------
+
 
 async def get_last_folder_async() -> str:
     """Returns l'ultima cartella di output usata, o stringa vuota."""
@@ -66,6 +68,7 @@ async def set_last_folder_async(folder: str) -> None:
 # ---------------------------------------------------------------------------
 # URL history
 # ---------------------------------------------------------------------------
+
 
 async def get_url_history_async() -> list[dict]:
     """
@@ -88,22 +91,29 @@ def _normalize_history_url(url: str) -> str:
         return ""
     s = str(url).strip()
     try:
-        if s.startswith('spotify:'):
-            parts = s.split(':')
+        if s.startswith("spotify:"):
+            parts = s.split(":")
             if len(parts) >= 3:
                 typ = parts[1]
-                id_part = ':'.join(parts[2:])
+                id_part = ":".join(parts[2:])
                 return f"https://open.spotify.com/{typ}/{id_part}"
-        if s.startswith('http://') or s.startswith('https://'):
+        if s.startswith("http://") or s.startswith("https://"):
             return s
-        if s.startswith('open.spotify.com') or s.startswith('play.spotify.com'):
+        if s.startswith("open.spotify.com") or s.startswith("play.spotify.com"):
             return f"https://{s}"
         return s
     except Exception:
         return s
 
 
-async def add_url_to_history_async(url: str, label: str = "", cover: str = "", track_count: int = 0, url_type: str = "", artist: str = "") -> None:
+async def add_url_to_history_async(
+    url: str,
+    label: str = "",
+    cover: str = "",
+    track_count: int = 0,
+    url_type: str = "",
+    artist: str = "",
+) -> None:
     """
     Aggiunge un URL alla cronologia (o lo sposta in cima se già presente).
     """
@@ -111,19 +121,22 @@ async def add_url_to_history_async(url: str, label: str = "", cover: str = "", t
         return
     nurl = _normalize_history_url(url)
     data = await _load_async()
-    
+
     # Rimuovi eventuali occorrenze della stessa URL normalizzata
     history = [h for h in data.get("url_history", []) if h.get("url") != nurl]
-    history.insert(0, {
-        "url":         nurl,
-        "label":       label or nurl[:65],
-        "cover":       cover or "",
-        "track_count": track_count,
-        "url_type":    url_type,
-        "artist":      artist,
-        "at":          int(time.time()),
-    })
-    
+    history.insert(
+        0,
+        {
+            "url": nurl,
+            "label": label or nurl[:65],
+            "cover": cover or "",
+            "track_count": track_count,
+            "url_type": url_type,
+            "artist": artist,
+            "at": int(time.time()),
+        },
+    )
+
     data["url_history"] = history[:_MAX_HISTORY]
     await _save_async(data)
 
@@ -141,7 +154,7 @@ async def remove_url_from_history_async(url: str) -> None:
         return
     nurl = _normalize_history_url(url)
     data = await _load_async()
-    
+
     history = [h for h in data.get("url_history", []) if h.get("url") != nurl]
     data["url_history"] = history
     await _save_async(data)

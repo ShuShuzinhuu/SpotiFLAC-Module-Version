@@ -11,6 +11,7 @@ Both formats share the same pipeline:
   4. MusicBrainz (passed as extra_tags)
   5. Writing tags to file
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,9 +23,29 @@ from typing import Any
 from mutagen.flac import FLAC
 from mutagen.flac import Picture as FlacPicture
 from mutagen.id3 import (
-    ID3, ID3NoHeaderError, TIT2, TPE1, TALB, TPE2, TDRC, TRCK, TPOS, APIC,
-    TPUB, TCOM, TCOP, TCON, TBPM, TSRC, TDOR,
-    TSOP, TSO2, WXXX, COMM, USLT, TXXX,
+    ID3,
+    ID3NoHeaderError,
+    TIT2,
+    TPE1,
+    TALB,
+    TPE2,
+    TDRC,
+    TRCK,
+    TPOS,
+    APIC,
+    TPUB,
+    TCOM,
+    TCOP,
+    TCON,
+    TBPM,
+    TSRC,
+    TDOR,
+    TSOP,
+    TSO2,
+    WXXX,
+    COMM,
+    USLT,
+    TXXX,
 )
 from mutagen.id3 import PictureType
 from mutagen.id3 import PictureType as ID3PictureType
@@ -43,27 +64,27 @@ SOURCE_TAG = "https://github.com/ShuShuzinhuu/SpotiFLAC-Module-Version"
 # Vorbis tag  →  (ID3FrameClass, kwargs_override | None)
 # Se il valore è None il tag viene scritto come TXXX con desc=chiave originale.
 _FLAC_TO_ID3: dict[str, tuple | None] = {
-    "TITLE":              (TIT2,  {}),
-    "ARTIST":             (TPE1,  {}),
-    "ALBUM":              (TALB,  {}),
-    "ALBUMARTIST":        (TPE2,  {}),
-    "DATE":               (TDRC,  {}),
-    "TRACKNUMBER":        None,                  # gestito a parte (TRCK)
-    "TRACKTOTAL":         None,                  # parte di TRCK
-    "DISCNUMBER":         None,                  # gestito a parte (TPOS)
-    "DISCTOTAL":          None,                  # parte di TPOS
-    "ISRC":               (TSRC,  {}),
-    "COPYRIGHT":          (TCOP,  {}),
-    "COMPOSER":           (TCOM,  {}),
-    "ORGANIZATION":       (TPUB,  {}),
-    "LABEL":              (TPUB,  {}),
-    "GENRE":              (TCON,  {}),
-    "BPM":                (TBPM,  {}),
-    "ORIGINALDATE":       (TDOR,  {}),
-    "ARTISTSORT":         (TSOP,  {}),
-    "ALBUMARTISTSORT":    (TSO2,  {}),
+    "TITLE": (TIT2, {}),
+    "ARTIST": (TPE1, {}),
+    "ALBUM": (TALB, {}),
+    "ALBUMARTIST": (TPE2, {}),
+    "DATE": (TDRC, {}),
+    "TRACKNUMBER": None,  # gestito a parte (TRCK)
+    "TRACKTOTAL": None,  # parte di TRCK
+    "DISCNUMBER": None,  # gestito a parte (TPOS)
+    "DISCTOTAL": None,  # parte di TPOS
+    "ISRC": (TSRC, {}),
+    "COPYRIGHT": (TCOP, {}),
+    "COMPOSER": (TCOM, {}),
+    "ORGANIZATION": (TPUB, {}),
+    "LABEL": (TPUB, {}),
+    "GENRE": (TCON, {}),
+    "BPM": (TBPM, {}),
+    "ORIGINALDATE": (TDOR, {}),
+    "ARTISTSORT": (TSOP, {}),
+    "ALBUMARTISTSORT": (TSO2, {}),
     # URL → WXXX con desc vuota
-    "URL":                None,
+    "URL": None,
     # Tutto il resto → TXXX
 }
 
@@ -94,33 +115,49 @@ _TXXX_TAGS = {
 # MusicBrainz summary helper
 # ---------------------------------------------------------------------------
 
+
 def _print_mb_summary(mb_tags: dict) -> None:
     if not mb_tags:
         return
 
     _TAG_LABELS = {
-        "GENRE": "genre", "genre": "genre",
-        "BPM": "BPM", "bpm": "BPM",
-        "LABEL": "label", "label": "label",
-        "CATALOGNUMBER": "catalog no.", "catalognumber": "catalog no.",
-        "BARCODE": "barcode", "barcode": "barcode",
-        "ORIGINALDATE": "date", "original_date": "date",
-        "RELEASECOUNTRY": "country", "country": "country",
-        "RELEASESTATUS": "release status", "status": "release status",
-        "MEDIA": "media", "media": "media",
-        "RELEASETYPE": "release type", "type": "release type",
-        "ARTISTSORT": "artist (sort)", "artist_sort": "artist (sort)",
-        "ALBUMARTISTSORT": "album artist (sort)", "albumartist_sort": "album artist (sort)",
-        "SCRIPT": "script", "script": "script",
+        "GENRE": "genre",
+        "genre": "genre",
+        "BPM": "BPM",
+        "bpm": "BPM",
+        "LABEL": "label",
+        "label": "label",
+        "CATALOGNUMBER": "catalog no.",
+        "catalognumber": "catalog no.",
+        "BARCODE": "barcode",
+        "barcode": "barcode",
+        "ORIGINALDATE": "date",
+        "original_date": "date",
+        "RELEASECOUNTRY": "country",
+        "country": "country",
+        "RELEASESTATUS": "release status",
+        "status": "release status",
+        "MEDIA": "media",
+        "media": "media",
+        "RELEASETYPE": "release type",
+        "type": "release type",
+        "ARTISTSORT": "artist (sort)",
+        "artist_sort": "artist (sort)",
+        "ALBUMARTISTSORT": "album artist (sort)",
+        "albumartist_sort": "album artist (sort)",
+        "SCRIPT": "script",
+        "script": "script",
     }
 
     mb_ids = {
-        k: v for k, v in mb_tags.items()
+        k: v
+        for k, v in mb_tags.items()
         if str(k).startswith("MUSICBRAINZ_") or str(k).startswith("mbid_")
     }
     skip_dupes = {"ORIGINALYEAR", "original_year", "DATE", "date"}
     important = {
-        k: v for k, v in mb_tags.items()
+        k: v
+        for k, v in mb_tags.items()
         if k not in mb_ids and k not in skip_dupes and v
     }
 
@@ -141,12 +178,13 @@ def _print_mb_summary(mb_tags: dict) -> None:
 # Internal: write ID3 tags to an MP3 file
 # ---------------------------------------------------------------------------
 
+
 def _embed_id3(
-        path:        Path,
-        tags:        dict[str, str],
-        cover_data:  bytes | None,
-        lyrics:      str | None,
-        lyrics_prov: str,
+    path: Path,
+    tags: dict[str, str],
+    cover_data: bytes | None,
+    lyrics: str | None,
+    lyrics_prov: str,
 ) -> None:
     """Scrive tutti i tag ID3 su un file MP3."""
     try:
@@ -156,36 +194,47 @@ def _embed_id3(
         audio = ID3()
 
     # ── numeri track e disco ──────────────────────────────────────────────
-    track_num   = tags.get("TRACKNUMBER", "0")
-    track_total = tags.get("TRACKTOTAL",  "0")
-    disc_num    = tags.get("DISCNUMBER",  "1")
-    disc_total  = tags.get("DISCTOTAL",   "1")
+    track_num = tags.get("TRACKNUMBER", "0")
+    track_total = tags.get("TRACKTOTAL", "0")
+    disc_num = tags.get("DISCNUMBER", "1")
+    disc_total = tags.get("DISCTOTAL", "1")
 
-    trck = f"{track_num}/{track_total}" if track_total and track_total != "0" else track_num
-    tpos = f"{disc_num}/{disc_total}"   if disc_total  and disc_total  != "1" else disc_num
+    trck = (
+        f"{track_num}/{track_total}"
+        if track_total and track_total != "0"
+        else track_num
+    )
+    tpos = f"{disc_num}/{disc_total}" if disc_total and disc_total != "1" else disc_num
 
     audio.add(TRCK(encoding=3, text=trck))
     audio.add(TPOS(encoding=3, text=tpos))
 
     # ── tag con frame dedicato ─────────────────────────────────────────────
     _FRAME_MAP: dict[str, type] = {
-        "TITLE":           TIT2,
-        "ARTIST":          TPE1,
-        "ALBUM":           TALB,
-        "ALBUMARTIST":     TPE2,
-        "DATE":            TDRC,
-        "ISRC":            TSRC,
-        "COPYRIGHT":       TCOP,
-        "COMPOSER":        TCOM,
-        "ORGANIZATION":    TPUB,
-        "LABEL":           TPUB,   # alias — uno sovrascrive l'altro (ok)
-        "GENRE":           TCON,
-        "BPM":             TBPM,
-        "ORIGINALDATE":    TDOR,
-        "ARTISTSORT":      TSOP,
+        "TITLE": TIT2,
+        "ARTIST": TPE1,
+        "ALBUM": TALB,
+        "ALBUMARTIST": TPE2,
+        "DATE": TDRC,
+        "ISRC": TSRC,
+        "COPYRIGHT": TCOP,
+        "COMPOSER": TCOM,
+        "ORGANIZATION": TPUB,
+        "LABEL": TPUB,  # alias — uno sovrascrive l'altro (ok)
+        "GENRE": TCON,
+        "BPM": TBPM,
+        "ORIGINALDATE": TDOR,
+        "ARTISTSORT": TSOP,
         "ALBUMARTISTSORT": TSO2,
     }
-    skip = {"TRACKNUMBER", "TRACKTOTAL", "DISCNUMBER", "DISCTOTAL", "URL", "DESCRIPTION"}
+    skip = {
+        "TRACKNUMBER",
+        "TRACKTOTAL",
+        "DISCNUMBER",
+        "DISCTOTAL",
+        "URL",
+        "DESCRIPTION",
+    }
 
     for key, val in tags.items():
         key_up = key.upper()
@@ -222,13 +271,15 @@ def _embed_id3(
 
     # ── copertina ──────────────────────────────────────────────────────────
     if cover_data:
-        audio.add(APIC(
-            encoding = 3,
-            mime     = "image/jpeg",
-            type     = ID3PictureType.COVER_FRONT,
-            desc     = "Cover",
-            data     = cover_data,
-        ))
+        audio.add(
+            APIC(
+                encoding=3,
+                mime="image/jpeg",
+                type=ID3PictureType.COVER_FRONT,
+                desc="Cover",
+                data=cover_data,
+            )
+        )
 
     audio.save(str(path), v2_version=3)
     logger.debug("[tagger/mp3] tags written: %s", path.name)
@@ -238,13 +289,14 @@ def _embed_id3(
 # Internal: write Vorbis Comment tags to a FLAC file
 # ---------------------------------------------------------------------------
 
+
 def _embed_flac(
-        path:        Path,
-        tags:        dict[str, str],
-        cover_data:  bytes | None,
-        lyrics:      str | None,
-        lyrics_prov: str,
-        multi_artist: bool,
+    path: Path,
+    tags: dict[str, str],
+    cover_data: bytes | None,
+    lyrics: str | None,
+    lyrics_prov: str,
+    multi_artist: bool,
 ) -> None:
     """Scrive tutti i tag Vorbis Comment su un file FLAC."""
     audio = FLAC(str(path))
@@ -265,10 +317,10 @@ def _embed_flac(
             audio[key] = val
 
     if cover_data:
-        pic          = FlacPicture()
-        pic.data     = cover_data
-        pic.type     = PictureType.COVER_FRONT
-        pic.mime     = "image/jpeg"
+        pic = FlacPicture()
+        pic.data = cover_data
+        pic.type = PictureType.COVER_FRONT
+        pic.mime = "image/jpeg"
         audio.add_picture(pic)
 
     audio.save()
@@ -276,18 +328,20 @@ def _embed_flac(
 
 
 async def _write_tags_async(
-        path:        Path,
-        tags:        dict[str, str],
-        cover_data:  bytes | None,
-        lyrics:      str | None,
-        lyrics_prov: str,
-        multi_artist: bool,
-        is_flac:     bool,
-        is_mp3:      bool,
-        is_m4a:      bool,
+    path: Path,
+    tags: dict[str, str],
+    cover_data: bytes | None,
+    lyrics: str | None,
+    lyrics_prov: str,
+    multi_artist: bool,
+    is_flac: bool,
+    is_mp3: bool,
+    is_m4a: bool,
 ) -> None:
     if is_flac:
-        await asyncio.to_thread(_embed_flac, path, tags, cover_data, lyrics, lyrics_prov, multi_artist)
+        await asyncio.to_thread(
+            _embed_flac, path, tags, cover_data, lyrics, lyrics_prov, multi_artist
+        )
     elif is_mp3:
         await asyncio.to_thread(_embed_id3, path, tags, cover_data, lyrics, lyrics_prov)
     elif is_m4a:
@@ -297,11 +351,11 @@ async def _write_tags_async(
 
 
 def _embed_m4a(
-        path:        Path,
-        tags:        dict[str, str],
-        cover_data:  bytes | None,
-        lyrics:      str | None,
-        lyrics_prov: str,
+    path: Path,
+    tags: dict[str, str],
+    cover_data: bytes | None,
+    lyrics: str | None,
+    lyrics_prov: str,
 ) -> None:
     """Scrive tag su file M4A/AAC tramite mutagen.mp4.MP4."""
     from mutagen.mp4 import MP4, MP4Cover
@@ -310,25 +364,25 @@ def _embed_m4a(
     audio.delete()
 
     _M4A_MAP = {
-        "TITLE":        "\xa9nam",
-        "ARTIST":       "\xa9ART",
-        "ALBUM":        "\xa9alb",
-        "ALBUMARTIST":  "aART",
-        "DATE":         "\xa9day",
-        "GENRE":        "\xa9gen",
-        "COMPOSER":     "\xa9wrt",
-        "COPYRIGHT":    "cprt",
-        "DESCRIPTION":  "\xa9cmt",
-        "ISRC":         "----:com.apple.iTunes:ISRC",
+        "TITLE": "\xa9nam",
+        "ARTIST": "\xa9ART",
+        "ALBUM": "\xa9alb",
+        "ALBUMARTIST": "aART",
+        "DATE": "\xa9day",
+        "GENRE": "\xa9gen",
+        "COMPOSER": "\xa9wrt",
+        "COPYRIGHT": "cprt",
+        "DESCRIPTION": "\xa9cmt",
+        "ISRC": "----:com.apple.iTunes:ISRC",
         "ORGANIZATION": "----:com.apple.iTunes:LABEL",
-        "LABEL":        "----:com.apple.iTunes:LABEL",
-        "BPM":          "tmpo",
+        "LABEL": "----:com.apple.iTunes:LABEL",
+        "BPM": "tmpo",
     }
 
-    track_num   = int(tags.get("TRACKNUMBER", "0") or 0)
-    track_total = int(tags.get("TRACKTOTAL",  "0") or 0)
-    disc_num    = int(tags.get("DISCNUMBER",  "1") or 1)
-    disc_total  = int(tags.get("DISCTOTAL",   "1") or 1)
+    track_num = int(tags.get("TRACKNUMBER", "0") or 0)
+    track_total = int(tags.get("TRACKTOTAL", "0") or 0)
+    disc_num = int(tags.get("DISCNUMBER", "1") or 1)
+    disc_total = int(tags.get("DISCTOTAL", "1") or 1)
 
     skip = {"TRACKNUMBER", "TRACKTOTAL", "DISCNUMBER", "DISCTOTAL"}
 
@@ -367,17 +421,19 @@ def _embed_m4a(
     audio.save()
     logger.debug("[tagger/m4a] tags written: %s", path.name)
 
+
 @dataclass
 class EmbedOptions:
-    first_artist_only:    bool            = False
-    cover_url:            str             = ""
-    embed_lyrics:         bool            = False
-    lyrics_providers:     list[str]       = field(default_factory=list)
-    enrich:               bool            = False
-    enrich_providers:     list[str] | None = None
-    enrich_qobuz_token:   str | None      = None
-    is_album:             bool            = False
-    extra_tags:           dict[str, str]  = field(default_factory=dict)
+    first_artist_only: bool = False
+    cover_url: str = ""
+    embed_lyrics: bool = False
+    lyrics_providers: list[str] = field(default_factory=list)
+    enrich: bool = False
+    enrich_providers: list[str] | None = None
+    enrich_qobuz_token: str | None = None
+    is_album: bool = False
+    extra_tags: dict[str, str] = field(default_factory=dict)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -386,23 +442,24 @@ class EmbedOptions:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 async def embed_metadata_async(
-        filepath:          str | Path,
-        metadata:          TrackMetadata,
-        opts:              EmbedOptions,
-        *,
-        cover_data:        bytes | None = None,
-        session:           Any | None = None,
-        multi_artist:      bool  = True,
+    filepath: str | Path,
+    metadata: TrackMetadata,
+    opts: EmbedOptions,
+    *,
+    cover_data: bytes | None = None,
+    session: Any | None = None,
+    multi_artist: bool = True,
 ) -> None:
     path = Path(filepath)
     if not path.exists():
         raise SpotiflacError(ErrorKind.FILE_IO, f"File not found: {path}")
 
-    is_mp3  = path.suffix.lower() == ".mp3"
+    is_mp3 = path.suffix.lower() == ".mp3"
     is_flac = path.suffix.lower() == ".flac"
-    is_m4a  = path.suffix.lower() in (".m4a", ".aac")
+    is_m4a = path.suffix.lower() in (".m4a", ".aac")
 
     if not is_mp3 and not is_flac and not is_m4a:
         logger.warning("[tagger] formato non supportato: %s — skip", path.suffix)
@@ -415,14 +472,15 @@ async def embed_metadata_async(
     if opts.enrich:
         try:
             from .metadata_enrichment import enrich_metadata_async as _enrich
+
             enriched = await _enrich(
-                track_name  = metadata.title,
-                artist_name = metadata.first_artist,
-                isrc        = metadata.isrc,
-                providers   = opts.enrich_providers,
-                qobuz_token = opts.enrich_qobuz_token,
+                track_name=metadata.title,
+                artist_name=metadata.first_artist,
+                isrc=metadata.isrc,
+                providers=opts.enrich_providers,
+                qobuz_token=opts.enrich_qobuz_token,
             )
-            enriched_tags      = enriched.as_tags()
+            enriched_tags = enriched.as_tags()
             enriched_cover_url = enriched.cover_url_hd
             if enriched._sources:
                 field_names = {"cover_url_hd": "cover", "explicit": "advisory"}
@@ -448,14 +506,15 @@ async def embed_metadata_async(
     if opts.embed_lyrics and metadata.title and metadata.first_artist:
         try:
             from .lyrics import fetch_lyrics_async
+
             res = await fetch_lyrics_async(
-                track_name       = metadata.title,
-                artist_name      = metadata.first_artist,
-                album_name       = metadata.album,
-                duration_s       = metadata.duration_ms // 1000,
-                track_id         = metadata.id,
-                isrc             = metadata.isrc,
-                providers        = opts.lyrics_providers,
+                track_name=metadata.title,
+                artist_name=metadata.first_artist,
+                album_name=metadata.album,
+                duration_s=metadata.duration_ms // 1000,
+                track_id=metadata.id,
+                isrc=metadata.isrc,
+                providers=opts.lyrics_providers,
             )
             if isinstance(res, tuple):
                 lyrics, lyrics_prov = res
@@ -496,8 +555,12 @@ async def embed_metadata_async(
         tags["ORIGINALYEAR"] = str(orig_date)[:4]
 
     _date_keys = {
-        "ORIGINAL_DATE", "ORIGINAL_YEAR", "ORIGINALDATE", "ORIGINALYEAR",
-        "original_date", "original_year",
+        "ORIGINAL_DATE",
+        "ORIGINAL_YEAR",
+        "ORIGINALDATE",
+        "ORIGINALYEAR",
+        "original_date",
+        "original_year",
     }
     for key, val in merged_extra.items():
         if key not in _date_keys and key.upper() not in _date_keys:
@@ -525,12 +588,12 @@ async def embed_metadata_async(
         )
 
 
-
 async def _fetch_cover_async(url: str, session: Any | None = None) -> bytes | None:
     if not url:
         return None
 
     from .http import AsyncHttpClient
+
     client = AsyncHttpClient(provider="tagger", timeout_s=10)
     headers = {}
 
@@ -539,7 +602,9 @@ async def _fetch_cover_async(url: str, session: Any | None = None) -> bytes | No
             resp = await client.get(url, headers=headers)
             if resp.status_code == 200:
                 return resp.content
-            logger.warning("[tagger] cover HTTP %s (attempt %d)", resp.status_code, attempt + 1)
+            logger.warning(
+                "[tagger] cover HTTP %s (attempt %d)", resp.status_code, attempt + 1
+            )
         except Exception as exc:
             logger.warning("[tagger] cover attempt %d failed: %s", attempt + 1, exc)
         if attempt < 2:
@@ -550,6 +615,7 @@ async def _fetch_cover_async(url: str, session: Any | None = None) -> bytes | No
 def max_resolution_spotify_cover(url: str) -> str:
     """Converte URL immagine Spotify alla variante massima risoluzione."""
     import re
+
     if "i.scdn.co/image/" in url:
         return re.sub(r"(ab67616d0000)[a-z0-9]+", r"\g<1>b273", url)
     return url

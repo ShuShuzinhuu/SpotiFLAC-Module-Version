@@ -16,7 +16,9 @@ def check_ffmpeg() -> dict:
     try:
         proc = subprocess.run(
             ["ffmpeg", "-version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if proc.returncode == 0:
             result["available"] = True
