@@ -4,6 +4,7 @@ Cache persistente per ISRC — port di isrc_cache.go.
 Evita chiamate ridondanti a Songlink/Soundplate per ISRC già risolti.
 Async version with aiofiles for non-blocking I/O.
 """
+
 from __future__ import annotations
 import asyncio
 import json
@@ -38,7 +39,7 @@ async def _load_async() -> dict[str, dict]:
         return _cache
     try:
         _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        
+
         if aiofiles:
             if _CACHE_FILE.exists():
                 async with aiofiles.open(_CACHE_FILE, "r", encoding="utf-8") as f:
@@ -87,7 +88,7 @@ async def get_cached_isrc_async(track_id: str) -> str:
 async def put_cached_isrc_async(track_id: str, isrc: str) -> None:
     """Async: Save ISRC to cache."""
     track_id = track_id.strip()
-    isrc     = isrc.upper().strip()
+    isrc = isrc.upper().strip()
     if not track_id or not isrc:
         return
     lock = await _get_lock()
@@ -105,10 +106,10 @@ def get_cached_isrc(track_id: str) -> str:
     except RuntimeError:
         # No running loop, fallback to thread pool
         import concurrent.futures
+
         with concurrent.futures.ThreadPoolExecutor() as executor:
             return executor.submit(
-                asyncio.run, 
-                get_cached_isrc_async(track_id)
+                asyncio.run, get_cached_isrc_async(track_id)
             ).result()
     else:
         # Inside async context, can't use asyncio.run()
@@ -125,11 +126,9 @@ def put_cached_isrc(track_id: str, isrc: str) -> None:
     except RuntimeError:
         # No running loop, fallback to thread pool
         import concurrent.futures
+
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            executor.submit(
-                asyncio.run,
-                put_cached_isrc_async(track_id, isrc)
-            ).result()
+            executor.submit(asyncio.run, put_cached_isrc_async(track_id, isrc)).result()
     else:
         # Inside async context, can't use asyncio.run()
         raise RuntimeError(

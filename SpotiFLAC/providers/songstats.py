@@ -7,6 +7,7 @@ from ..core.http import AsyncHttpClient
 
 logger = logging.getLogger(__name__)
 
+
 class SongstatsProvider:
     """Estrae ISRC e link alle piattaforme dalla page pubblica di Songstats tramite JSON-LD."""
 
@@ -20,10 +21,10 @@ class SongstatsProvider:
     async def get_data_async(self, track_id: str) -> Dict[str, Optional[str]]:
         url = f"https://songstats.com/track/{track_id}"
         results = {"isrc": None, "tidal": None, "amazon": None, "deezer": None}
-        
+
         try:
             resp = await self.http.get(url, follow_redirects=True)
-            
+
             # 1. Fallback rapido per l'ISRC
             isrc_match = re.search(r'isrc\\":\\"(.*?)\\"', resp.text)
             if isrc_match:
@@ -31,11 +32,11 @@ class SongstatsProvider:
 
             # 2. Parsing strutturato JSON-LD per i link (Allineamento al Go)
             script_matches = re.finditer(
-                r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', 
-                resp.text, 
-                re.DOTALL | re.IGNORECASE
+                r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+                resp.text,
+                re.DOTALL | re.IGNORECASE,
             )
-            
+
             for match in script_matches:
                 try:
                     payload = json.loads(match.group(1).strip())
@@ -70,7 +71,7 @@ class SongstatsProvider:
         link = link.strip()
         if not link:
             return
-            
+
         if "listen.tidal.com/track" in link and not results["tidal"]:
             results["tidal"] = link
             logger.debug("✓ Tidal URL found via Songstats")

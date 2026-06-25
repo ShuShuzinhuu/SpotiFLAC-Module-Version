@@ -5,6 +5,7 @@ HTTP client centralizzato con Connection Pooling globale.
 Rimosso tutto il codice sync (RateLimiter, HttpClient, NetworkManager.get_sync_client,
 NetworkManager.get_async_client legacy) ora che tutti i provider usano AsyncHttpClient.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,8 +21,11 @@ import httpx
 import re
 
 from .errors import (
-    AuthError, RateLimitedError, NetworkError,
-    ParseError, TrackNotFoundError,
+    AuthError,
+    RateLimitedError,
+    NetworkError,
+    ParseError,
+    TrackNotFoundError,
 )
 
 try:
@@ -31,12 +35,13 @@ except ImportError:
 
 
 class _RedactUrlFilter(logging.Filter):
-    _url_re = re.compile(r'https?://\S+')
+    _url_re = re.compile(r"https?://\S+")
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = self._url_re.sub('[endpoint]', record.getMessage())
+        record.msg = self._url_re.sub("[endpoint]", record.getMessage())
         record.args = ()
         return True
+
 
 logging.getLogger("httpx").addFilter(_RedactUrlFilter())
 
@@ -49,6 +54,7 @@ class NetworkManager:
     Mantiene vive le connessioni (Keep-Alive) per azzerare i tempi di handshake SSL.
     Ogni event loop ottiene la propria istanza di httpx.AsyncClient (loop-safe).
     """
+
     _async_clients: dict[int, httpx.AsyncClient] = {}
     _async_clients_lock = threading.Lock()
 
@@ -111,6 +117,7 @@ class AsyncRateLimiter:
     L'asyncio.Lock viene creato in modo lazy (alla prima wait_for_slot())
     perché non può essere istanziato fuori da un event loop attivo.
     """
+
     def __init__(self, max_requests: int, window_seconds: float):
         self.max_requests = max_requests
         self.window = window_seconds
@@ -142,15 +149,15 @@ class AsyncRateLimiter:
 
 
 # Rate limiters globali async
-async_zarz_rate_limiter     = AsyncRateLimiter(5, 10.0)
+async_zarz_rate_limiter = AsyncRateLimiter(5, 10.0)
 async_songlink_rate_limiter = AsyncRateLimiter(9, 60.0)
 
 
 @dataclass
 class RetryConfig:
-    max_attempts:   int   = 3
-    base_delay_s:   float = 1.0
-    max_delay_s:    float = 30.0
+    max_attempts: int = 3
+    base_delay_s: float = 1.0
+    max_delay_s: float = 30.0
     backoff_factor: float = 2.0
 
 
@@ -160,6 +167,7 @@ class AsyncHttpClient:
     Unico client HTTP usato da tutti i provider.
     Usa NetworkManager.get_async_client_safe() per sicurezza multi-loop.
     """
+
     def __init__(
         self,
         provider: str,
@@ -198,7 +206,8 @@ class AsyncHttpClient:
 
         client = await self._client()
         resp = await client.request(
-            method, url,
+            method,
+            url,
             headers=headers,
             timeout=req_timeout,
             **kwargs,
@@ -217,7 +226,9 @@ class AsyncHttpClient:
         if sc == 404:
             raise TrackNotFoundError(self._provider, str(resp.url))
         if sc == 429:
-            raise RateLimitedError(self._provider, int(resp.headers.get("Retry-After", 5)))
+            raise RateLimitedError(
+                self._provider, int(resp.headers.get("Retry-After", 5))
+            )
         if not resp.is_success:
             raise NetworkError(self._provider, f"HTTP {sc} from {resp.url}")
 
@@ -244,8 +255,9 @@ class AsyncHttpClient:
         client = await self._client()
 
         try:
-            async with client.stream("GET", url, headers=headers,
-                                      timeout=self._timeout) as resp:
+            async with client.stream(
+                "GET", url, headers=headers, timeout=self._timeout
+            ) as resp:
                 self._raise_for_status(resp)
                 total = int(resp.headers.get("Content-Length") or 0)
                 downloaded = 0
@@ -256,7 +268,9 @@ class AsyncHttpClient:
                 async with aiofiles.open(temp, "wb") as f:
                     async for chunk in resp.aiter_bytes(chunk_size):
                         if evt is not None and evt.is_set():
-                            raise NetworkError(self._provider, "Stream cancelled by stop_event")
+                            raise NetworkError(
+                                self._provider, "Stream cancelled by stop_event"
+                            )
                         if not chunk:
                             continue
                         await f.write(chunk)

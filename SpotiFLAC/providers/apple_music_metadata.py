@@ -2,6 +2,7 @@
 AppleMusicMetadataClient — retrieves metadati di tracks/album/artisti/playlist
 tramite la AMP API pubblica di Apple Music.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,7 +31,9 @@ _JWT_KNOWN_PREFIXES = (
     "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IldlYlBsYXlLaWQifQ.",
     "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiIsImtpZCI6IldlYlBsYXlLaWQifQ.",
 )
-_JWT_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-.")
+_JWT_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-."
+)
 
 
 def _extract_jwt_from_string(text: str) -> str | None:
@@ -56,6 +59,7 @@ def _extract_jwt_from_string(text: str) -> str | None:
 # URL parsing
 # ---------------------------------------------------------------------------
 
+
 def is_apple_music_url(url: str) -> bool:
     return "music.apple.com" in url.lower()
 
@@ -75,8 +79,8 @@ def parse_apple_music_url(url: str) -> dict[str, str]:
         raise InvalidUrlError(f"Apple Music URL not recognized: {url}")
 
     storefront = m.group(1).lower()
-    kind       = m.group(2).lower()
-    entity_id  = m.group(3)
+    kind = m.group(2).lower()
+    entity_id = m.group(3)
 
     song_m = re.search(r"[?&]i=(\d+)", url)
     if kind == "album" and song_m:
@@ -96,6 +100,7 @@ def parse_apple_music_url(url: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # Helper normalizzazione
 # ---------------------------------------------------------------------------
+
 
 def _normalize_artist(s: str) -> str:
     s = s.lower().strip()
@@ -117,6 +122,7 @@ def _artist_in_track(artist_name: str, track_artists: str) -> bool:
 # Client
 # ---------------------------------------------------------------------------
 
+
 class AppleMusicMetadataClient:
     def __init__(self, timeout_s: int = 15) -> None:
         self._timeout = timeout_s
@@ -125,13 +131,13 @@ class AppleMusicMetadataClient:
             timeout_s=timeout_s,
             headers={
                 "User-Agent": _APPLE_UA,
-                "Accept":     "application/json",
-                "Origin":     "https://music.apple.com",
-                "Referer":    "https://music.apple.com/",
+                "Accept": "application/json",
+                "Origin": "https://music.apple.com",
+                "Referer": "https://music.apple.com/",
             },
         )
-        self._auth_token:   str | None = None
-        self._token_expiry: float      = 0.0   # timestamp Unix; 0 = mai valido
+        self._auth_token: str | None = None
+        self._token_expiry: float = 0.0  # timestamp Unix; 0 = mai valido
 
     async def __aenter__(self) -> "AppleMusicMetadataClient":
         return self
@@ -147,7 +153,7 @@ class AppleMusicMetadataClient:
         """Legge il campo `exp` dal payload JWT e imposta la scadenza interna."""
         try:
             payload_b64 = token.split(".")[1]
-            padded  = payload_b64 + "=" * (-len(payload_b64) % 4)
+            padded = payload_b64 + "=" * (-len(payload_b64) % 4)
             payload = json.loads(base64.urlsafe_b64decode(padded))
             if "exp" in payload:
                 self._token_expiry = float(payload["exp"]) - 300.0
@@ -167,7 +173,9 @@ class AppleMusicMetadataClient:
             return self._auth_token
 
         try:
-            res  = await self._http.get("https://music.apple.com/us/browse", timeout=self._timeout)
+            res = await self._http.get(
+                "https://music.apple.com/us/browse", timeout=self._timeout
+            )
             html = res.text
             unquoted_html = urllib.parse.unquote(html)
 
@@ -200,9 +208,11 @@ class AppleMusicMetadataClient:
                 js_url = "https://music.apple.com" + src
                 try:
                     js_res = await self._http.get(js_url, timeout=self._timeout)
-                    token  = _extract_jwt_from_string(urllib.parse.unquote(js_res.text))
+                    token = _extract_jwt_from_string(urllib.parse.unquote(js_res.text))
                     if token:
-                        logger.debug("[apple_metadata] Token found in JS bundle: %s", src)
+                        logger.debug(
+                            "[apple_metadata] Token found in JS bundle: %s", src
+                        )
                         self._auth_token = token
                         self._parse_token_expiry(token)
                         return token
@@ -223,8 +233,10 @@ class AppleMusicMetadataClient:
                 f"Unable to retrieve Apple Music token: {e}",
             )
 
-    async def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        token   = await self._get_token()
+    async def _get(
+        self, path: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        token = await self._get_token()
         headers = {"Authorization": f"Bearer {token}"}
 
         url = (
@@ -234,15 +246,19 @@ class AppleMusicMetadataClient:
         )
 
         try:
-            resp = await self._http.get(url, params=params, headers=headers, timeout=self._timeout)
+            resp = await self._http.get(
+                url, params=params, headers=headers, timeout=self._timeout
+            )
             return resp.json()
         except AuthError:
             # Token scaduto: forza rinnovo e riprova una volta
-            self._auth_token  = None
+            self._auth_token = None
             self._token_expiry = 0.0
-            token   = await self._get_token()
+            token = await self._get_token()
             headers = {"Authorization": f"Bearer {token}"}
-            resp    = await self._http.get(url, params=params, headers=headers, timeout=self._timeout)
+            resp = await self._http.get(
+                url, params=params, headers=headers, timeout=self._timeout
+            )
             return resp.json()
 
     # ------------------------------------------------------------------
@@ -256,12 +272,12 @@ class AppleMusicMetadataClient:
         label: str = "resource",
     ) -> list[dict[str, Any]]:
         """Completa la lista delle tracks seguendo i link `next` successivi."""
-        items     = list(initial_items)
+        items = list(initial_items)
         next_path = first_next
 
         while next_path:
             try:
-                page       = await self._get(f"https://amp-api.music.apple.com{next_path}")
+                page = await self._get(f"https://amp-api.music.apple.com{next_path}")
                 page_items = page.get("data", [])
                 if not page_items:
                     break
@@ -269,15 +285,17 @@ class AppleMusicMetadataClient:
                 next_path = page.get("next")
                 await asyncio.sleep(0.3)
             except Exception as exc:
-                logger.warning("[apple_metadata] Track pagination %s interrupted: %s", label, exc)
+                logger.warning(
+                    "[apple_metadata] Track pagination %s interrupted: %s", label, exc
+                )
                 break
 
         return items
 
     async def _pagete_relationship(self, initial_path: str) -> list[dict[str, Any]]:
         """Itera una relazione standalone (es. /artists/{id}/albums) seguendo `next`."""
-        results:  list[dict[str, Any]] = []
-        next_url: str | None           = initial_path
+        results: list[dict[str, Any]] = []
+        next_url: str | None = initial_path
 
         while next_url:
             try:
@@ -303,13 +321,15 @@ class AppleMusicMetadataClient:
     # ------------------------------------------------------------------
 
     async def get_track(self, track_id: str, storefront: str = "us") -> TrackMetadata:
-        data    = await self._get(
+        data = await self._get(
             f"/{storefront}/songs/{track_id}",
             {"include": "albums", "extend": "editorialArtwork"},
         )
         results = data.get("data", [])
         if not results:
-            raise SpotiflacError(ErrorKind.TRACK_NOT_FOUND, f"Track {track_id} not found.")
+            raise SpotiflacError(
+                ErrorKind.TRACK_NOT_FOUND, f"Track {track_id} not found."
+            )
         return self._parse_item(results[0])
 
     async def get_album_tracks(
@@ -317,13 +337,15 @@ class AppleMusicMetadataClient:
         album_id: str,
         storefront: str = "us",
     ) -> tuple[dict[str, Any], list[TrackMetadata]]:
-        data    = await self._get(
+        data = await self._get(
             f"/{storefront}/albums/{album_id}",
             {"include": "tracks,artists", "extend": "editorialArtwork"},
         )
         results = data.get("data", [])
         if not results:
-            raise SpotiflacError(ErrorKind.TRACK_NOT_FOUND, f"Album {album_id} not found.")
+            raise SpotiflacError(
+                ErrorKind.TRACK_NOT_FOUND, f"Album {album_id} not found."
+            )
 
         album_data = results[0]
         tracks_rel = album_data.get("relationships", {}).get("tracks", {})
@@ -336,16 +358,18 @@ class AppleMusicMetadataClient:
 
         tracks = [self._parse_item(item, album_data) for item in tracks_items]
 
-        album_attr   = album_data.get("attributes", {})
-        artwork_url  = album_attr.get("artwork", {}).get("url", "").replace("{w}x{h}", "3000x3000")
+        album_attr = album_data.get("attributes", {})
+        artwork_url = (
+            album_attr.get("artwork", {}).get("url", "").replace("{w}x{h}", "3000x3000")
+        )
         release_date = album_attr.get("releaseDate", "").split("T")[0]
 
         formatted_album = {
             "attributes": {
-                "name":        album_attr.get("name", "Unknown"),
+                "name": album_attr.get("name", "Unknown"),
                 "releaseDate": release_date,
-                "artwork":     {"url": artwork_url},
-                "trackCount":  len(tracks),
+                "artwork": {"url": artwork_url},
+                "trackCount": len(tracks),
             }
         }
         return formatted_album, tracks
@@ -355,16 +379,18 @@ class AppleMusicMetadataClient:
         playlist_id: str,
         storefront: str = "us",
     ) -> tuple[dict[str, Any], list[TrackMetadata]]:
-        data    = await self._get(
+        data = await self._get(
             f"/{storefront}/playlists/{playlist_id}",
             {"include": "tracks", "extend": "editorialArtwork"},
         )
         results = data.get("data", [])
         if not results:
-            raise SpotiflacError(ErrorKind.TRACK_NOT_FOUND, f"Playlist {playlist_id} not found.")
+            raise SpotiflacError(
+                ErrorKind.TRACK_NOT_FOUND, f"Playlist {playlist_id} not found."
+            )
 
         playlist_data = results[0]
-        tracks_rel    = playlist_data.get("relationships", {}).get("tracks", {})
+        tracks_rel = playlist_data.get("relationships", {}).get("tracks", {})
 
         tracks_items = await self._pagete_tracks(
             initial_items=tracks_rel.get("data", []),
@@ -372,7 +398,11 @@ class AppleMusicMetadataClient:
             label=f"playlist {playlist_id}",
         )
 
-        tracks = [self._parse_item(item) for item in tracks_items if item.get("type") == "songs"]
+        tracks = [
+            self._parse_item(item)
+            for item in tracks_items
+            if item.get("type") == "songs"
+        ]
         return playlist_data, tracks
 
     async def get_artist_albums(
@@ -381,18 +411,22 @@ class AppleMusicMetadataClient:
         include_featuring: bool = False,
         storefront: str = "us",
     ) -> tuple[dict[str, Any], list[TrackMetadata]]:
-        artist_data    = await self._get(f"/{storefront}/artists/{artist_id}")
+        artist_data = await self._get(f"/{storefront}/artists/{artist_id}")
         artist_results = artist_data.get("data", [])
         if not artist_results:
-            raise SpotiflacError(ErrorKind.TRACK_NOT_FOUND, f"Artist {artist_id} not found.")
+            raise SpotiflacError(
+                ErrorKind.TRACK_NOT_FOUND, f"Artist {artist_id} not found."
+            )
 
-        artist_obj  = artist_results[0]
+        artist_obj = artist_results[0]
         artist_name = artist_obj.get("attributes", {}).get("name", "Unknown")
 
         album_ids: list[str] = []
-        seen_ids:  set[str]  = set()
+        seen_ids: set[str] = set()
 
-        for album_data in await self._pagete_relationship(f"/{storefront}/artists/{artist_id}/albums"):
+        for album_data in await self._pagete_relationship(
+            f"/{storefront}/artists/{artist_id}/albums"
+        ):
             aid = str(album_data.get("id", ""))
             if aid and aid not in seen_ids:
                 seen_ids.add(aid)
@@ -409,14 +443,20 @@ class AppleMusicMetadataClient:
                     seen_ids.add(aid)
                     album_ids.append(aid)
 
-        logger.info("[apple_metadata] %s: %d album totali da scaricare", artist_name, len(album_ids))
+        logger.info(
+            "[apple_metadata] %s: %d album totali da scaricare",
+            artist_name,
+            len(album_ids),
+        )
 
         # Fetch parallelo con asyncio.gather
         async def _fetch_one(
             aid: str,
         ) -> tuple[str, list[TrackMetadata] | None]:
             try:
-                _, album_tracks = await self.get_album_tracks(aid, storefront=storefront)
+                _, album_tracks = await self.get_album_tracks(
+                    aid, storefront=storefront
+                )
                 return aid, album_tracks
             except Exception as exc:
                 logger.warning("[apple_metadata] Album %s skipped: %s", aid, exc)
@@ -425,13 +465,11 @@ class AppleMusicMetadataClient:
         raw_results = await asyncio.gather(*[_fetch_one(aid) for aid in album_ids])
 
         results_dict: dict[str, list[TrackMetadata]] = {
-            aid: tracks
-            for aid, tracks in raw_results
-            if tracks is not None
+            aid: tracks for aid, tracks in raw_results if tracks is not None
         }
 
-        tracks:    list[TrackMetadata] = []
-        seen_isrc: set[str]            = set()
+        tracks: list[TrackMetadata] = []
+        seen_isrc: set[str] = set()
 
         for aid in album_ids:
             if aid not in results_dict:
@@ -457,8 +495,8 @@ class AppleMusicMetadataClient:
         url: str,
         include_featuring: bool = False,
     ) -> tuple[str, list[TrackMetadata], str, dict[str, Any]]:
-        info       = parse_apple_music_url(url)
-        t          = info["type"]
+        info = parse_apple_music_url(url)
+        t = info["type"]
         storefront = info.get("storefront", "us")
 
         if t == "track":
@@ -466,26 +504,30 @@ class AppleMusicMetadataClient:
             return meta.title, [meta], meta.cover_url, {}
 
         if t == "album":
-            album, tracks = await self.get_album_tracks(info["id"], storefront=storefront)
-            name         = album.get("attributes", {}).get("name", "Unknown Album")
+            album, tracks = await self.get_album_tracks(
+                info["id"], storefront=storefront
+            )
+            name = album.get("attributes", {}).get("name", "Unknown Album")
             release_date = album.get("attributes", {}).get("releaseDate", "")
-            artwork_url  = (
+            artwork_url = (
                 album.get("attributes", {})
-                     .get("artwork", {})
-                     .get("url", "")
-                     .replace("{w}x{h}", "3000x3000")
+                .get("artwork", {})
+                .get("url", "")
+                .replace("{w}x{h}", "3000x3000")
             )
             album_meta = {"release_date": release_date, "track_count": len(tracks)}
             return name, tracks, artwork_url, album_meta
 
         if t == "playlist":
-            playlist, tracks = await self.get_playlist_tracks(info["id"], storefront=storefront)
-            name        = playlist.get("attributes", {}).get("name", "Unknown Playlist")
+            playlist, tracks = await self.get_playlist_tracks(
+                info["id"], storefront=storefront
+            )
+            name = playlist.get("attributes", {}).get("name", "Unknown Playlist")
             artwork_url = (
                 playlist.get("attributes", {})
-                        .get("artwork", {})
-                        .get("url", "")
-                        .replace("{w}x{h}", "3000x3000")
+                .get("artwork", {})
+                .get("url", "")
+                .replace("{w}x{h}", "3000x3000")
             )
             return name, tracks, artwork_url, {}
 
@@ -495,12 +537,12 @@ class AppleMusicMetadataClient:
                 include_featuring=include_featuring,
                 storefront=storefront,
             )
-            name        = artist.get("attributes", {}).get("name", "Unknown Artist")
+            name = artist.get("attributes", {}).get("name", "Unknown Artist")
             artwork_url = (
                 artist.get("attributes", {})
-                      .get("artwork", {})
-                      .get("url", "")
-                      .replace("{w}x{h}", "3000x3000")
+                .get("artwork", {})
+                .get("url", "")
+                .replace("{w}x{h}", "3000x3000")
             )
             return name, tracks, artwork_url, {}
 
@@ -518,13 +560,17 @@ class AppleMusicMetadataClient:
         item: dict[str, Any],
         parent_album: dict[str, Any] | None = None,
     ) -> TrackMetadata:
-        attr       = item.get("attributes", {})
+        attr = item.get("attributes", {})
         album_attr = parent_album.get("attributes", {}) if parent_album else {}
 
         artwork_dict = attr.get("artwork", {})
-        cover_url    = artwork_dict.get("url", "").replace("{w}x{h}", "3000x3000")
+        cover_url = artwork_dict.get("url", "").replace("{w}x{h}", "3000x3000")
         if not cover_url and parent_album:
-            cover_url = album_attr.get("artwork", {}).get("url", "").replace("{w}x{h}", "3000x3000")
+            cover_url = (
+                album_attr.get("artwork", {})
+                .get("url", "")
+                .replace("{w}x{h}", "3000x3000")
+            )
 
         release_date = attr.get("releaseDate", "").split("T")[0]
 
@@ -532,20 +578,22 @@ class AppleMusicMetadataClient:
         genre = ", ".join(g for g in genre_names if g != "Music")
 
         return TrackMetadata(
-            id           = f"apple_{item.get('id', '')}",
-            title        = attr.get("name", "Unknown"),
-            artists      = attr.get("artistName", "Unknown"),
-            album        = attr.get("albumName", album_attr.get("name", "Unknown")),
-            album_artist = album_attr.get("artistName", attr.get("artistName", "Unknown")),
-            isrc         = attr.get("isrc", ""),
-            track_number = attr.get("trackNumber", 1),
-            disc_number  = attr.get("discNumber", 1),
-            duration_ms  = attr.get("durationInMillis", 0),
-            release_date = release_date,
-            cover_url    = cover_url,
-            external_url = attr.get("url", ""),
-            genre        = genre,
-            label        = album_attr.get("recordLabel", ""),
-            copyright    = album_attr.get("copyright", ""),
-            composer     = attr.get("composerName", ""),
+            id=f"apple_{item.get('id', '')}",
+            title=attr.get("name", "Unknown"),
+            artists=attr.get("artistName", "Unknown"),
+            album=attr.get("albumName", album_attr.get("name", "Unknown")),
+            album_artist=album_attr.get(
+                "artistName", attr.get("artistName", "Unknown")
+            ),
+            isrc=attr.get("isrc", ""),
+            track_number=attr.get("trackNumber", 1),
+            disc_number=attr.get("discNumber", 1),
+            duration_ms=attr.get("durationInMillis", 0),
+            release_date=release_date,
+            cover_url=cover_url,
+            external_url=attr.get("url", ""),
+            genre=genre,
+            label=album_attr.get("recordLabel", ""),
+            copyright=album_attr.get("copyright", ""),
+            composer=attr.get("composerName", ""),
         )

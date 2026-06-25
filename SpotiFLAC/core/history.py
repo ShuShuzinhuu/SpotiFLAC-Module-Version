@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List
 from .models import TrackMetadata
 
+
 class HistoryManager:
     """Gestisce la cronologia delle ricerche (recent-fetches)."""
 
@@ -13,10 +14,10 @@ class HistoryManager:
 
     def add(self, metadata: TrackMetadata):
         history = self.get_all()
-        history = [h for h in history if h['id'] != metadata.id]
+        history = [h for h in history if h["id"] != metadata.id]
 
         entry = metadata.model_dump()
-        entry['fetched_at'] = int(time.time())
+        entry["fetched_at"] = int(time.time())
         history.insert(0, entry)
 
         with open(self.path, "w", encoding="utf-8") as f:

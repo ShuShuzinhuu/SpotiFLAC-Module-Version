@@ -24,16 +24,24 @@ def _make_handler(sequence: Iterable[tuple[str, int, dict]]):
                     pass
                 if isinstance(payload, (dict, list)):
                     content = json.dumps(payload).encode()
-                    return httpx.Response(status_code=status, content=content, headers={"Content-Type": "application/json"})
+                    return httpx.Response(
+                        status_code=status,
+                        content=content,
+                        headers={"Content-Type": "application/json"},
+                    )
                 else:
-                    return httpx.Response(status_code=status, content=str(payload).encode())
+                    return httpx.Response(
+                        status_code=status, content=str(payload).encode()
+                    )
         return httpx.Response(status_code=404, content=b"Not Found")
 
     return handler
 
 
 @pytest.fixture
-def mock_network_client(monkeypatch: pytest.MonkeyPatch) -> Callable[[Iterable[tuple[str, int, dict]]], None]:
+def mock_network_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[[Iterable[tuple[str, int, dict]]], None]:
     """Fixture that lets tests install a mock httpx.AsyncClient into NetworkManager.
 
     Usage:
@@ -48,6 +56,10 @@ def mock_network_client(monkeypatch: pytest.MonkeyPatch) -> Callable[[Iterable[t
         async def _fake_get_async_client_safe() -> httpx.AsyncClient:
             return client
 
-        monkeypatch.setattr(NetworkManager, "get_async_client_safe", staticmethod(_fake_get_async_client_safe))
+        monkeypatch.setattr(
+            NetworkManager,
+            "get_async_client_safe",
+            staticmethod(_fake_get_async_client_safe),
+        )
 
     return _installer

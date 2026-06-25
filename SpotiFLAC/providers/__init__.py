@@ -29,16 +29,16 @@ __all__ = [
 ]
 
 PROVIDER_REGISTRY: dict[str, type] = {
-        "tidal":      TidalProvider,
-        "joox":       JooxProvider,
-        "netease":    NeteaseProvider,
-    "amazon":     AmazonProvider,
-    "apple":      AppleMusicProvider,
-    "deezer":     DeezerProvider,
-    "kuwo":       KuwoProvider,
-    "migu":       MiguProvider,
-    "pandora":    PandoraProvider,
-    "qobuz":      QobuzProvider,
+    "tidal": TidalProvider,
+    "joox": JooxProvider,
+    "netease": NeteaseProvider,
+    "amazon": AmazonProvider,
+    "apple": AppleMusicProvider,
+    "deezer": DeezerProvider,
+    "kuwo": KuwoProvider,
+    "migu": MiguProvider,
+    "pandora": PandoraProvider,
+    "qobuz": QobuzProvider,
     "soundcloud": SoundCloudProvider,
-    "youtube":    YouTubeProvider,
+    "youtube": YouTubeProvider,
 }

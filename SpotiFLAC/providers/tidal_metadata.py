@@ -2,6 +2,7 @@
 TidalMetadataClient — retrieves metadata for tracks/albums/playlists/artists
 from the public Tidal API when the input URL is a Tidal link (not Spotify).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -11,18 +12,24 @@ import unicodedata
 from typing import Any
 from urllib.parse import urlparse
 
-from ..core.errors import (AuthError, ErrorKind, InvalidUrlError, NetworkError,
-                           RateLimitedError, SpotiflacError,
-                           TrackNotFoundError)
+from ..core.errors import (
+    AuthError,
+    ErrorKind,
+    InvalidUrlError,
+    NetworkError,
+    RateLimitedError,
+    SpotiflacError,
+    TrackNotFoundError,
+)
 from ..core.http import AsyncHttpClient
 from ..core.models import TrackMetadata
 
 logger = logging.getLogger(__name__)
 
-_TIDAL_CLIENT_ID   = "49YxDN9a2aFV6RTG"
-_TIDAL_API_BASE    = "https://api.tidal.com/v1"
-_TIDAL_COUNTRY     = "US"
-_TIDAL_LOCALE      = "en_US"
+_TIDAL_CLIENT_ID = "49YxDN9a2aFV6RTG"
+_TIDAL_API_BASE = "https://api.tidal.com/v1"
+_TIDAL_COUNTRY = "US"
+_TIDAL_LOCALE = "en_US"
 _TIDAL_DEVICE_TYPE = "BROWSER"
 _TIDAL_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -33,14 +40,15 @@ _TIDAL_UA = (
 _TIDAL_DOMAINS = {"listen.tidal.com", "tidal.com", "www.tidal.com"}
 _PAGE_SIZE = 50
 
-_TIDAL_FILTER_ALBUMS        = "ALBUMS"
+_TIDAL_FILTER_ALBUMS = "ALBUMS"
 _TIDAL_FILTER_EPSANDSINGLES = "EPSANDSINGLES"
-_TIDAL_FILTER_COMPILATIONS  = "COMPILATIONS"
+_TIDAL_FILTER_COMPILATIONS = "COMPILATIONS"
 
 
 # ---------------------------------------------------------------------------
 # URL parsing
 # ---------------------------------------------------------------------------
+
 
 def is_tidal_url(url: str) -> bool:
     """Returns True if the URL belongs to Tidal, including deep links."""
@@ -61,7 +69,9 @@ def parse_tidal_url(url: str) -> dict[str, str]:
     text = url.strip()
 
     # 1. Prefisso puro (es. tidal:track:12345)
-    prefix_match = re.match(r"^tidal:(track|album|artist|playlist):([^?#/]+)", text, re.IGNORECASE)
+    prefix_match = re.match(
+        r"^tidal:(track|album|artist|playlist):([^?#/]+)", text, re.IGNORECASE
+    )
     if prefix_match:
         return {"type": prefix_match.group(1).lower(), "id": prefix_match.group(2)}
 
@@ -70,7 +80,10 @@ def parse_tidal_url(url: str) -> dict[str, str]:
         r"^tidal:\/\/\/?(track|album|artist|playlist)\/([^?#/]+)", text, re.IGNORECASE
     )
     if deep_link_match:
-        return {"type": deep_link_match.group(1).lower(), "id": deep_link_match.group(2)}
+        return {
+            "type": deep_link_match.group(1).lower(),
+            "id": deep_link_match.group(2),
+        }
 
     # 3. HTTPS URL
     normalized = text
@@ -81,7 +94,7 @@ def parse_tidal_url(url: str) -> dict[str, str]:
     if u.netloc.lower() not in _TIDAL_DOMAINS:
         raise InvalidUrlError(url)
 
-    path  = u.path.strip("/")
+    path = u.path.strip("/")
     parts = path.split("/")
 
     if len(parts) > 0 and parts[0] == "browse":
@@ -89,7 +102,7 @@ def parse_tidal_url(url: str) -> dict[str, str]:
 
     if len(parts) >= 2 and parts[0] in ("track", "album", "playlist", "artist"):
         entity_type = parts[0]
-        entity_id   = parts[1]
+        entity_id = parts[1]
 
         if entity_type == "artist" and len(parts) >= 3 and parts[2] == "discography":
             group = parts[3] if len(parts) >= 4 else "all"
@@ -103,6 +116,7 @@ def parse_tidal_url(url: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _remove_diacritics(s: str) -> str:
     try:
@@ -136,6 +150,7 @@ def _artist_in_track(artist_name: str, track_artists: str) -> bool:
 # Client
 # ---------------------------------------------------------------------------
 
+
 class TidalMetadataClient:
     """Retrieves metadati dall'API pubblica di Tidal v1."""
 
@@ -146,8 +161,8 @@ class TidalMetadataClient:
             timeout_s=timeout_s,
             headers={
                 "X-Tidal-Token": _TIDAL_CLIENT_ID,
-                "Accept":        "application/json",
-                "User-Agent":    _TIDAL_UA,
+                "Accept": "application/json",
+                "User-Agent": _TIDAL_UA,
             },
         )
 
@@ -158,8 +173,8 @@ class TidalMetadataClient:
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "countryCode": _TIDAL_COUNTRY,
-            "locale":      _TIDAL_LOCALE,
-            "deviceType":  _TIDAL_DEVICE_TYPE,
+            "locale": _TIDAL_LOCALE,
+            "deviceType": _TIDAL_DEVICE_TYPE,
         }
         if extra_params:
             params.update(extra_params)
@@ -191,7 +206,9 @@ class TidalMetadataClient:
                 wait = int(getattr(exc, "retry_after", 5)) + 1
                 logger.warning(
                     "[tidal_metadata] Rate limited (attempt %d/%d) — waiting %ds",
-                    attempt + 1, _MAX_RETRIES, wait,
+                    attempt + 1,
+                    _MAX_RETRIES,
+                    wait,
                 )
                 await asyncio.sleep(wait)
 
@@ -207,7 +224,7 @@ class TidalMetadataClient:
         path: str,
         extra_params: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        items:  list[dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         offset: int = 0
 
         while True:
@@ -215,8 +232,8 @@ class TidalMetadataClient:
             if extra_params:
                 params.update(extra_params)
 
-            data  = await self._get(path, params)
-            page  = data.get("items", [])
+            data = await self._get(path, params)
+            page = data.get("items", [])
             total = data.get("totalNumberOfItems", len(page))
 
             items.extend(page)
@@ -240,13 +257,17 @@ class TidalMetadataClient:
         album_id: str,
         preloaded_album: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], list[TrackMetadata]]:
-        album = preloaded_album if preloaded_album else await self._get(f"/albums/{album_id}")
+        album = (
+            preloaded_album
+            if preloaded_album
+            else await self._get(f"/albums/{album_id}")
+        )
         items = await self._pagete(f"/albums/{album_id}/tracks")
         tracks = [self._track_from_album_item(item, album) for item in items]
 
         formatted_album = {
-            "title":       album.get("title", "Unknown"),
-            "cover_url":   self._cover_url(album),
+            "title": album.get("title", "Unknown"),
+            "cover_url": self._cover_url(album),
             "releaseDate": album.get("releaseDate", ""),
         }
         return formatted_album, tracks
@@ -255,7 +276,7 @@ class TidalMetadataClient:
         self,
         playlist_uuid: str,
     ) -> tuple[dict[str, Any], list[TrackMetadata]]:
-        playlist  = await self._get(f"/playlists/{playlist_uuid}")
+        playlist = await self._get(f"/playlists/{playlist_uuid}")
         raw_items = await self._pagete(f"/playlists/{playlist_uuid}/tracks")
 
         tracks: list[TrackMetadata] = []
@@ -269,7 +290,9 @@ class TidalMetadataClient:
                     track_data.get("title", "?"),
                 )
                 continue
-            tracks.append(await self._track_from_raw(track_data, fetch_album_details=False))
+            tracks.append(
+                await self._track_from_raw(track_data, fetch_album_details=False)
+            )
 
         return playlist, tracks
 
@@ -279,9 +302,9 @@ class TidalMetadataClient:
         include_groups: str = f"{_TIDAL_FILTER_ALBUMS},{_TIDAL_FILTER_EPSANDSINGLES}",
         include_featuring: bool = False,
     ) -> tuple[dict[str, Any], list[TrackMetadata]]:
-        artist      = await self._get(f"/artists/{artist_id}")
+        artist = await self._get(f"/artists/{artist_id}")
         artist_name = artist.get("name", "")
-        seen_isrc:     set[str] = set()
+        seen_isrc: set[str] = set()
         seen_album_ids: set[str] = set()
 
         if include_featuring:
@@ -305,7 +328,7 @@ class TidalMetadataClient:
                 logger.warning("[tidal_metadata] gruppo %s fallito: %s", group, exc)
                 continue
 
-            is_compilation = (group == _TIDAL_FILTER_COMPILATIONS)
+            is_compilation = group == _TIDAL_FILTER_COMPILATIONS
 
             for album_data in albums:
                 album_id = str(album_data.get("id", ""))
@@ -327,10 +350,12 @@ class TidalMetadataClient:
                 logger.warning("[tidal_metadata] album %s skipped: %s", aid, exc)
                 return aid, is_comp, None
 
-        raw_results = await asyncio.gather(*[
-            _fetch_one(aid, preloaded, is_comp)
-            for aid, preloaded, is_comp in albums_to_fetch
-        ])
+        raw_results = await asyncio.gather(
+            *[
+                _fetch_one(aid, preloaded, is_comp)
+                for aid, preloaded, is_comp in albums_to_fetch
+            ]
+        )
 
         fetched: dict[str, tuple[list[TrackMetadata], bool]] = {}
         for aid, is_comp, result in raw_results:
@@ -360,7 +385,7 @@ class TidalMetadataClient:
         include_featuring: bool = False,
     ) -> tuple[str, list[TrackMetadata], str, dict[str, Any]]:
         info = parse_tidal_url(tidal_url)
-        t    = info["type"]
+        t = info["type"]
 
         if t == "track":
             meta = await self.get_track(info["id"])
@@ -370,9 +395,14 @@ class TidalMetadataClient:
             album, tracks = await self.get_album_tracks(info["id"])
             album_meta = {
                 "release_date": album.get("releaseDate", ""),
-                "track_count":  len(tracks),
+                "track_count": len(tracks),
             }
-            return album.get("title", "Unknown Album"), tracks, album.get("cover_url", ""), album_meta
+            return (
+                album.get("title", "Unknown Album"),
+                tracks,
+                album.get("cover_url", ""),
+                album_meta,
+            )
 
         if t == "playlist":
             playlist, tracks = await self.get_playlist_tracks(info["id"])
@@ -385,13 +415,13 @@ class TidalMetadataClient:
 
         if t in ("artist", "artist_discography"):
             group_map = {
-                "albums":       _TIDAL_FILTER_ALBUMS,
-                "eps":          _TIDAL_FILTER_EPSANDSINGLES,
-                "singles":      _TIDAL_FILTER_EPSANDSINGLES,
+                "albums": _TIDAL_FILTER_ALBUMS,
+                "eps": _TIDAL_FILTER_EPSANDSINGLES,
+                "singles": _TIDAL_FILTER_EPSANDSINGLES,
                 "compilations": _TIDAL_FILTER_COMPILATIONS,
                 "all": f"{_TIDAL_FILTER_ALBUMS},{_TIDAL_FILTER_EPSANDSINGLES},{_TIDAL_FILTER_COMPILATIONS}",
             }
-            raw_group      = info.get("group", "all")
+            raw_group = info.get("group", "all")
             include_groups = group_map.get(
                 raw_group,
                 f"{_TIDAL_FILTER_ALBUMS},{_TIDAL_FILTER_EPSANDSINGLES}",
@@ -401,7 +431,12 @@ class TidalMetadataClient:
                 include_groups,
                 include_featuring=include_featuring,
             )
-            return artist.get("name", "Unknown Artist"), tracks, artist.get("avatar", ""), {}
+            return (
+                artist.get("name", "Unknown Artist"),
+                tracks,
+                artist.get("avatar", ""),
+                {},
+            )
 
         raise SpotiflacError(
             ErrorKind.INVALID_URL,
@@ -437,38 +472,40 @@ class TidalMetadataClient:
         data: dict[str, Any],
         fetch_album_details: bool = True,
     ) -> TrackMetadata:
-        album   = data.get("album", {})
-        artists = data.get("artists") or ([data["artist"]] if data.get("artist") else [])
+        album = data.get("album", {})
+        artists = data.get("artists") or (
+            [data["artist"]] if data.get("artist") else []
+        )
 
-        cover_url         = self._cover_url(album)
-        release_date      = album.get("releaseDate", "")
-        total_tracks      = album.get("numberOfTracks", 0)
+        cover_url = self._cover_url(album)
+        release_date = album.get("releaseDate", "")
+        total_tracks = album.get("numberOfTracks", 0)
         album_artists_raw = album.get("artists") or artists
 
         if fetch_album_details and album.get("id"):
             album_details = await self._fetch_album_details(album["id"])
             if album_details:
-                cover_url         = self._cover_url(album_details) or cover_url
-                release_date      = album_details.get("releaseDate", release_date)
-                total_tracks      = album_details.get("numberOfTracks", total_tracks)
+                cover_url = self._cover_url(album_details) or cover_url
+                release_date = album_details.get("releaseDate", release_date)
+                total_tracks = album_details.get("numberOfTracks", total_tracks)
                 album_artists_raw = album_details.get("artists") or album_artists_raw
 
         duration_ms = int(data.get("duration", 0)) * 1000
 
         return TrackMetadata(
-            id           = f"tidal_{data.get('id', '')}",
-            title        = data.get("title", "Unknown"),
-            artists      = self._format_artists(artists),
-            album        = album.get("title", "Unknown"),
-            album_artist = self._format_artists(album_artists_raw),
-            isrc         = data.get("isrc", ""),
-            track_number = data.get("trackNumber", 0),
-            disc_number  = data.get("volumeNumber", 1),
-            total_tracks = total_tracks,
-            duration_ms  = duration_ms,
-            release_date = release_date,
-            cover_url    = cover_url,
-            external_url = data.get("url", ""),
+            id=f"tidal_{data.get('id', '')}",
+            title=data.get("title", "Unknown"),
+            artists=self._format_artists(artists),
+            album=album.get("title", "Unknown"),
+            album_artist=self._format_artists(album_artists_raw),
+            isrc=data.get("isrc", ""),
+            track_number=data.get("trackNumber", 0),
+            disc_number=data.get("volumeNumber", 1),
+            total_tracks=total_tracks,
+            duration_ms=duration_ms,
+            release_date=release_date,
+            cover_url=cover_url,
+            external_url=data.get("url", ""),
         )
 
     def _track_from_album_item(
@@ -476,20 +513,22 @@ class TidalMetadataClient:
         data: dict[str, Any],
         album: dict[str, Any],
     ) -> TrackMetadata:
-        artists = data.get("artists") or ([data["artist"]] if data.get("artist") else [])
+        artists = data.get("artists") or (
+            [data["artist"]] if data.get("artist") else []
+        )
 
         return TrackMetadata(
-            id           = f"tidal_{data.get('id', '')}",
-            title        = data.get("title", "Unknown"),
-            artists      = self._format_artists(artists),
-            album        = album.get("title", "Unknown"),
-            album_artist = self._format_artists(album.get("artists") or artists),
-            isrc         = data.get("isrc", ""),
-            track_number = data.get("trackNumber", 0),
-            disc_number  = data.get("volumeNumber", 1),
-            total_tracks = album.get("numberOfTracks", 0),
-            duration_ms  = int(data.get("duration", 0)) * 1000,
-            release_date = album.get("releaseDate", ""),
-            cover_url    = self._cover_url(album),
-            external_url = data.get("url", ""),
+            id=f"tidal_{data.get('id', '')}",
+            title=data.get("title", "Unknown"),
+            artists=self._format_artists(artists),
+            album=album.get("title", "Unknown"),
+            album_artist=self._format_artists(album.get("artists") or artists),
+            isrc=data.get("isrc", ""),
+            track_number=data.get("trackNumber", 0),
+            disc_number=data.get("volumeNumber", 1),
+            total_tracks=album.get("numberOfTracks", 0),
+            duration_ms=int(data.get("duration", 0)) * 1000,
+            release_date=album.get("releaseDate", ""),
+            cover_url=self._cover_url(album),
+            external_url=data.get("url", ""),
         )

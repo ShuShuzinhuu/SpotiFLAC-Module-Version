@@ -2,6 +2,7 @@ import re
 
 _ISRC_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{3}\d{7}$")
 
+
 def normalize_isrc(value: str) -> str:
     if not value:
         return ""
@@ -14,11 +15,18 @@ def normalize_isrc(value: str) -> str:
         return s
     return ""
 
+
 def is_valid_isrc(value: str) -> bool:
     return bool(value and _ISRC_RE.match(value))
 
 
-async def confirm_isrc_with_qobuz_async(isrc: str, title: str = "", artist: str = "", duration_ms: int = 0, qobuz_token: str | None = None) -> tuple[bool, dict | None]:
+async def confirm_isrc_with_qobuz_async(
+    isrc: str,
+    title: str = "",
+    artist: str = "",
+    duration_ms: int = 0,
+    qobuz_token: str | None = None,
+) -> tuple[bool, dict | None]:
     """
     Conferma un ISRC interrogando Qobuz: cerca la traccia per ISRC e confronta
     la durata (se disponibile). Restituisce (True, track_dict) se la traccia
@@ -60,11 +68,18 @@ async def confirm_isrc_with_qobuz_async(isrc: str, title: str = "", artist: str 
             # se titolo/artista coerenti, accettiamo anche 10s
             tnorm = re.sub(r"\s+", " ", (title or "").strip().lower())
             pname = str((track.get("title") or track.get("name") or "")).strip().lower()
-            performer = str((track.get("performer") or {}).get("name", "") or "").strip().lower()
-            if tnorm and (tnorm in pname or tnorm in performer or (artist and artist.lower() in performer)):
+            performer = (
+                str((track.get("performer") or {}).get("name", "") or "")
+                .strip()
+                .lower()
+            )
+            if tnorm and (
+                tnorm in pname
+                or tnorm in performer
+                or (artist and artist.lower() in performer)
+            ):
                 return True, track
             return False, None
 
     # if no duration available, accept match based on presence of isrc
     return True, track
-

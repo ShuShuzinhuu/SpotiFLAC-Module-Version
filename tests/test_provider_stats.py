@@ -11,7 +11,9 @@ from SpotiFLAC.core.provider_stats import ProviderScorer
 class ProviderStatsTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
-        self.environ_patcher = patch.dict(os.environ, {"XDG_CACHE_HOME": self.tempdir.name})
+        self.environ_patcher = patch.dict(
+            os.environ, {"XDG_CACHE_HOME": self.tempdir.name}
+        )
         self.environ_patcher.start()
         ProviderScorer._instance = None
 
@@ -32,7 +34,16 @@ class ProviderStatsTests(unittest.TestCase):
         asyncio.run(scorer.record_failure_async("test", "http://api.example.com/bad"))
         asyncio.run(scorer.record_success_async("test", "http://api.example.com/good"))
 
-        ordering = asyncio.run(scorer.prioritize_async("test", ["http://api.example.com/bad", "http://api.example.com/good", "http://api.example.com/new"]))
+        ordering = asyncio.run(
+            scorer.prioritize_async(
+                "test",
+                [
+                    "http://api.example.com/bad",
+                    "http://api.example.com/good",
+                    "http://api.example.com/new",
+                ],
+            )
+        )
         self.assertEqual(ordering[0], "http://api.example.com/good")
         self.assertIn("http://api.example.com/new", ordering)
 
@@ -43,7 +54,11 @@ class ProviderStatsTests(unittest.TestCase):
 
         ProviderScorer._instance = None
         new_scorer = ProviderScorer()
-        ordering = asyncio.run(new_scorer.prioritize_async("test", ["http://api.example.com/good", "http://api.example.com/bad"]))
+        ordering = asyncio.run(
+            new_scorer.prioritize_async(
+                "test", ["http://api.example.com/good", "http://api.example.com/bad"]
+            )
+        )
         self.assertEqual(ordering[0], "http://api.example.com/good")
 
 

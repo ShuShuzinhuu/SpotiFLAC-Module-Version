@@ -2,29 +2,30 @@
 Gerarchia di errori tipati per SpotiFLAC.
 Ispirato al pattern Go: sentinel errors + errors.As/Is.
 """
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
 
 class ErrorKind(Enum):
-    AUTH_FAILED      = auto()
-    TRACK_NOT_FOUND  = auto()
-    RATE_LIMITED     = auto()
-    NETWORK_ERROR    = auto()
-    PARSE_ERROR      = auto()
-    UNAVAILABLE      = auto()
-    FILE_IO          = auto()
-    INVALID_URL      = auto()
-    METADATA_ERROR   = auto()
+    AUTH_FAILED = auto()
+    TRACK_NOT_FOUND = auto()
+    RATE_LIMITED = auto()
+    NETWORK_ERROR = auto()
+    PARSE_ERROR = auto()
+    UNAVAILABLE = auto()
+    FILE_IO = auto()
+    INVALID_URL = auto()
+    METADATA_ERROR = auto()
 
 
 @dataclass
 class SpotiflacError(Exception):
-    kind:     ErrorKind
-    message:  str
+    kind: ErrorKind
+    message: str
     provider: str = ""
-    cause:    BaseException | None = field(default=None, repr=False)
+    cause: BaseException | None = field(default=None, repr=False)
 
     def __str__(self) -> str:
         prefix = f"[{self.provider}] " if self.provider else ""

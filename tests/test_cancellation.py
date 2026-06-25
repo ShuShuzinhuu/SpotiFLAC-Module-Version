@@ -29,8 +29,13 @@ class DummyProvider:
 
 def test_download_one_timeout_triggers_cancellation():
     opts = DownloadOptions(output_dir="/tmp", track_max_retries=0, timeout_s=1)
-    meta = TrackMetadata(id="t1", title="T1", artists="A", album="Album", album_artist="A")
+    meta = TrackMetadata(
+        id="t1", title="T1", artists="A", album="Album", album_artist="A"
+    )
     provider = DummyProvider()
     result = asyncio.run(download_one_async(meta, "/tmp", [provider], opts))
     assert not result.success
-    assert "timed out" in (result.error or "").lower() or "cancel" in (result.error or "").lower()
+    assert (
+        "timed out" in (result.error or "").lower()
+        or "cancel" in (result.error or "").lower()
+    )
