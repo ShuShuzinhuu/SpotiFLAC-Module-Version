@@ -83,26 +83,25 @@ class SpotiFLAC_API:
     def get_version(self):
         return self.app_version
 
-    async def get_latest_version(self) -> dict:
-        try:
-            client = AsyncHttpClient("github", timeout_s=10)
-            resp = await client.get(
-                "https://api.github.com/repos/ShuShuzinhuu/SpotiFLAC-Module-Version/releases/latest",
-                headers={
-                    "Accept": "application/vnd.github.v3+json",
-                    "User-Agent": "SpotiFLAC-Desktop",
-                },
-                timeout=10,
-            )
-            if resp.status_code != 200:
+    def get_latest_version(self) -> dict:
+        async def _inner():
+            try:
+                client = AsyncHttpClient("github", timeout_s=10)
+                resp = await client.get(
+                    "https://api.github.com/repos/ShuShuzinhuu/SpotiFLAC-Module-Version/releases/latest",
+                    headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "SpotiFLAC-Desktop"},
+                    timeout=10,
+                )
+                if resp.status_code != 200:
+                    return {"latest_version": "", "published_at": ""}
+                data = resp.json() or {}
+                return {
+                    "latest_version": str(data.get("tag_name", "") or "").lstrip("v").strip(),
+                    "published_at": str(data.get("published_at", "") or ""),
+                }
+            except Exception:
                 return {"latest_version": "", "published_at": ""}
-
-            data = resp.json() or {}
-            latest_version = str(data.get("tag_name", "") or "").lstrip("v").strip()
-            published_at = str(data.get("published_at", "") or "")
-            return {"latest_version": latest_version, "published_at": published_at}
-        except Exception:
-            return {"latest_version": "", "published_at": ""}
+        return asyncio.run(_inner())
 
     def _check_ffmpeg_startup(self) -> None:
         try:
@@ -498,22 +497,20 @@ class SpotiFLAC_API:
         except Exception:
             pass
 
-    async def get_network_status(self):
-        try:
-            client = AsyncHttpClient("network", timeout_s=10)
-            resp = await client.get("https://ipapi.co/json/", timeout=10)
-            data = resp.json() if resp.status_code == 200 else {}
-            return {
-                "ip": data.get("ip", "Unavailable"),
-                "country_name": data.get("country_name", "Unknown"),
-                "country_code": data.get("country_code", ""),
-            }
-        except Exception:
-            return {
-                "ip": "Unavailable",
-                "country_name": "Unknown",
-                "country_code": "",
-            }
+    def get_network_status(self):
+        async def _inner():
+            try:
+                client = AsyncHttpClient("network", timeout_s=10)
+                resp = await client.get("https://ipapi.co/json/", timeout=10)
+                data = resp.json() if resp.status_code == 200 else {}
+                return {
+                    "ip": data.get("ip", "Unavailable"),
+                    "country_name": data.get("country_name", "Unknown"),
+                    "country_code": data.get("country_code", ""),
+                }
+            except Exception:
+                return {"ip": "Unavailable", "country_name": "Unknown", "country_code": ""}
+        return asyncio.run(_inner())
 
     def save_profile_data(self, name, cfg):
         try:
@@ -535,28 +532,26 @@ class SpotiFLAC_API:
             self.log(f"Failed to delete profile: {e}", "error")
             return False
 
-    async def check_qobuz_api(self, url):
-        return await self._check_api_endpoint(url)
+    def check_qobuz_api(self, url):
+        return self._check_api_endpoint_sync(url)
 
-    async def check_tidal_api(self, url):
-        return await self._check_api_endpoint(url)
+    def check_tidal_api(self, url):
+        return self._check_api_endpoint_sync(url)
 
-    async def _check_api_endpoint(self, url):
-        try:
-            if not url or not isinstance(url, str) or not url.strip():
-                raise ValueError('URL must be a non-empty string')
-            normalized = url.strip()
-            if not normalized.lower().startswith('http'):
-                raise ValueError('URL must start with http or https')
-            client = AsyncHttpClient("api-check", timeout_s=10)
-            resp = await client.get(normalized, follow_redirects=True, timeout=10.0)
-            return {
-                'ok': 200 <= resp.status_code < 400,
-                'status_code': resp.status_code,
-                'url': str(resp.url),
-            }
-        except Exception as e:
-            return {'ok': False, 'error': str(e)}
+    def _check_api_endpoint_sync(self, url):
+        async def _inner():
+            try:
+                if not url or not isinstance(url, str) or not url.strip():
+                    raise ValueError('URL must be a non-empty string')
+                normalized = url.strip()
+                if not normalized.lower().startswith('http'):
+                    raise ValueError('URL must start with http or https')
+                client = AsyncHttpClient("api-check", timeout_s=10)
+                resp = await client.get(normalized, follow_redirects=True, timeout=10.0)
+                return {'ok': 200 <= resp.status_code < 400, 'status_code': resp.status_code, 'url': str(resp.url)}
+            except Exception as e:
+                return {'ok': False, 'error': str(e)}
+        return asyncio.run(_inner())
 
     # ── Window controls ───────────────────────────────────────────────────────
 
@@ -1020,8 +1015,7 @@ class SpotiFLAC_API:
     def fetch_metadata(self, url):
         self.current_url = url
         threading.Thread(
-            target=self._fetch_metadata_task,
-            args=(url,),
+            target=lambda: asyncio.run(self._fetch_metadata_task(url)),
             daemon=True,
         ).start()
 
