@@ -795,8 +795,10 @@ class AmazonProvider(BaseProvider):
                             "-y",
                             "-i",
                             final_file,
-                            "-c",
-                            "copy",
+                            "-map",
+                            "0:a:0",
+                            "-c:a",
+                            "flac",
                             flac_out,
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE,
@@ -806,7 +808,7 @@ class AmazonProvider(BaseProvider):
                             os.remove(final_file)
                             final_file = flac_out
                             logger.info(
-                                "[amazon] s: demuxed FLAC stream from M4A container"
+                                "[amazon] s: remuxed/converted FLAC stream from M4A container"
                             )
                         else:
                             logger.warning("[amazon] s: FLAC demux failed, keeping M4A")
