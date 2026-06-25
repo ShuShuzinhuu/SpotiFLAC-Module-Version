@@ -11,6 +11,7 @@ import re
 import threading
 import time
 from pathlib import Path
+import concurrent.futures
 from typing import Awaitable, Callable
 from urllib.parse import urlparse
 
@@ -27,7 +28,7 @@ from ..core.errors import ErrorKind, SpotiflacError
 from ..core.flac_validation import validate_and_repair_if_needed
 from ..core.isrc_utils import normalize_isrc
 from ..core.models import DownloadResult, TrackMetadata
-from ..core.musicbrainz import mb_result_to_tags
+from ..core.musicbrainz import mb_result_to_tags, AsyncMBFetch
 from ..core.quality import to_zarz_codec
 from ..core.tagger import EmbedOptions, embed_metadata_async
 from .base import BaseProvider
@@ -1448,8 +1449,7 @@ class AmazonProvider(BaseProvider):
                     logger.debug("[amazon] Failed to normalize Qobuz ISRC: %s", qobuz_isrc)
             elif api_metadata and api_metadata.get("isrc") and api_metadata["isrc"] != metadata.isrc:
                 try:
-                    from ..core.isrc_utils import (
-                        confirm_isrc_with_qobuz_async, normalize_isrc)
+                    from ..core.isrc_utils import confirm_isrc_with_qobuz_async
                     isrc_val = normalize_isrc(api_metadata["isrc"])
                     if isrc_val:
                         # Recupera la durata reale dai metadati anziché passare 0
@@ -1471,8 +1471,12 @@ class AmazonProvider(BaseProvider):
                 except Exception as e:
                     logger.error("[amazon] Error during Qobuz ISRC validation: %s", e)
 
-            from ..core.musicbrainz import AsyncMBFetch
-            mb_fetcher = AsyncMBFetch(metadata.isrc) if getattr(metadata, "isrc", None) else None
+            _isrc_for_mb = normalize_isrc(getattr(metadata, "isrc", None) or "")
+            logger.debug("[amazon] ISRC at MB lookup: %r", _isrc_for_mb)
+            mb_fetcher = AsyncMBFetch(_isrc_for_mb) if _isrc_for_mb else None
+
+            if not mb_fetcher:
+                logger.warning("[amazon] MusicBrainz skipped: no valid ISRC available")
 
             
 
@@ -1488,7 +1492,14 @@ class AmazonProvider(BaseProvider):
             mb_tags: dict[str, str] = {}
             res: dict = {}
             if mb_fetcher:
-                res = await asyncio.to_thread(mb_fetcher.future.result)
+                try:
+                    res = await asyncio.to_thread(lambda: mb_fetcher.future.result(timeout=12))
+                except concurrent.futures.TimeoutError:
+                    logger.warning("[amazon] MusicBrainz timed out after 12s, skipping MB tags")
+                    res = {}
+                except Exception as exc:
+                    logger.warning("[amazon] MusicBrainz error: %s", exc)
+                    res = {}
 
             mb_tags = mb_result_to_tags(res)
 
