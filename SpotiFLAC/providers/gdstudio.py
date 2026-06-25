@@ -188,7 +188,13 @@ class GDStudioProvider(BaseProvider):
             if self._file_exists(dest):
                 return DownloadResult.skipped_result(self.name, str(dest), fmt="flac")
 
-            mb_fetcher = AsyncMBFetch(metadata.isrc) if metadata.isrc else None
+            import concurrent.futures
+            from ..core.isrc_utils import normalize_isrc
+            _isrc_for_mb = normalize_isrc(getattr(metadata, "isrc", None) or "")
+            logger.debug("[%s] ISRC at MB lookup: %r", self._source, _isrc_for_mb)
+            mb_fetcher = AsyncMBFetch(_isrc_for_mb) if _isrc_for_mb else None
+            if not mb_fetcher:
+                logger.warning("[%s] MusicBrainz skipped: no valid ISRC available", self._source)
             print_source_banner(self._source, "", "FLAC")
             await self._async_http.stream_to_file(dl_url, str(dest), self._progress_cb, extra_headers={"User-Agent": _DEFAULT_UA})
 
@@ -205,8 +211,17 @@ class GDStudioProvider(BaseProvider):
 
             mb_tags = {}
             if mb_fetcher:
-                res = await asyncio.to_thread(mb_fetcher.future.result)
-                mb_tags = mb_result_to_tags(res)
+                try:
+                    res = await asyncio.to_thread(lambda: mb_fetcher.future.result(timeout=12))
+                    mb_tags = mb_result_to_tags(res)
+                    if mb_tags:
+                        logger.info("[%s] MusicBrainz tags found: %s", self._source, list(mb_tags.keys()))
+                    else:
+                        logger.warning("[%s] MusicBrainz returned no tags (ISRC: %r)", self._source, _isrc_for_mb)
+                except concurrent.futures.TimeoutError:
+                    logger.warning("[%s] MusicBrainz timed out after 12s, skipping MB tags", self._source)
+                except Exception as exc:
+                    logger.warning("[%s] MusicBrainz error: %s", self._source, exc)
 
             if extra.get("pic_id") and not metadata.cover_url:
                 cover_url = await self._get_pic_url_async(extra.get("pic_id"))

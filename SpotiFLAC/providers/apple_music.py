@@ -280,9 +280,13 @@ class AppleMusicProvider(BaseProvider):
                 codecs_to_try = list(dict.fromkeys(codecs_to_try))
 
             # Trigger Asincrono MusicBrainz
-            mb_fetcher = None
-            if metadata.isrc:
-                mb_fetcher = AsyncMBFetch(metadata.isrc)
+            import concurrent.futures
+            from ..core.isrc_utils import normalize_isrc
+            _isrc_for_mb = normalize_isrc(getattr(metadata, "isrc", None) or "")
+            logger.debug("[apple-music] ISRC at MB lookup: %r", _isrc_for_mb)
+            mb_fetcher = AsyncMBFetch(_isrc_for_mb) if _isrc_for_mb else None
+            if not mb_fetcher:
+                logger.warning("[apple-music] MusicBrainz skipped: no valid ISRC available")
 
             dest = self._build_output_path(
                 metadata,
@@ -355,12 +359,17 @@ class AppleMusicProvider(BaseProvider):
             res: dict[str, Any] = {}
             if mb_fetcher:
                 try:
-                    res = await asyncio.wrap_future(mb_fetcher.future) if hasattr(mb_fetcher.future, 'add_done_callback') else mb_fetcher.future.result()
-                except Exception as e:
-                    logger.debug("[apple-music] MusicBrainz fetch failed: %s", e)
-
-            mb_tags = mb_result_to_tags(res)
-            _print_mb_summary(mb_tags)
+                    res = await asyncio.to_thread(lambda: mb_fetcher.future.result(timeout=12))
+                    mb_tags = mb_result_to_tags(res)
+                    if mb_tags:
+                        logger.info("[apple-music] MusicBrainz tags found: %s", list(mb_tags.keys()))
+                        _print_mb_summary(mb_tags)
+                    else:
+                        logger.warning("[apple-music] MusicBrainz returned no tags (ISRC: %r)", _isrc_for_mb)
+                except concurrent.futures.TimeoutError:
+                    logger.warning("[apple-music] MusicBrainz timed out after 12s, skipping MB tags")
+                except Exception as exc:
+                    logger.warning("[apple-music] MusicBrainz error: %s", exc)
 
             opts = EmbedOptions(
                 first_artist_only    = first_artist_only,

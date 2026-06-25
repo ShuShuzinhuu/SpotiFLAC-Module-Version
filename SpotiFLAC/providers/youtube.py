@@ -400,7 +400,13 @@ class YouTubeProvider(BaseProvider):
 
             if not video_id: return DownloadResult.fail(self.name, "Could not extract video ID")
 
-            mb_fetcher = AsyncMBFetch(metadata.isrc) if metadata.isrc else None
+            import concurrent.futures
+            from ..core.isrc_utils import normalize_isrc
+            _isrc_for_mb = normalize_isrc(getattr(metadata, "isrc", None) or "")
+            logger.debug("[youtube] ISRC at MB lookup: %r", _isrc_for_mb)
+            mb_fetcher = AsyncMBFetch(_isrc_for_mb) if _isrc_for_mb else None
+            if not mb_fetcher:
+                logger.warning("[youtube] MusicBrainz skipped: no valid ISRC available")
 
             try:
                 from ..core.console import print_source_banner
@@ -448,8 +454,12 @@ class YouTubeProvider(BaseProvider):
             mb_tags = {}
             if mb_fetcher:
                 try:
-                    res = await asyncio.to_thread(mb_fetcher.future.result)
+                    res = await asyncio.to_thread(lambda: mb_fetcher.future.result(timeout=12))
                     mb_tags = mb_result_to_tags(res)
+                    if mb_tags:
+                        logger.info("[youtube] MusicBrainz tags found: %s", list(mb_tags.keys()))
+                    else:
+                        logger.warning("[youtube] MusicBrainz returned no tags (ISRC: %r)", _isrc_for_mb)
                     if res:
                         mapping = {
                             "mbid_track":       "MUSICBRAINZ_TRACKID",
@@ -478,8 +488,10 @@ class YouTubeProvider(BaseProvider):
                             mb_tags["ORIGINALYEAR"] = res["original_date"][:4]
                         if res.get("catalognumber"):
                             mb_tags["CATALOGNUMBER"] = res["catalognumber"]
-                except Exception as e:
-                    logger.debug(f"[youtube] Fallimento MusicBrainz in background: {e}")
+                except concurrent.futures.TimeoutError:
+                    logger.warning("[youtube] MusicBrainz timed out after 12s, skipping MB tags")
+                except Exception as exc:
+                    logger.warning("[youtube] MusicBrainz error: %s", exc)
 
             opts = EmbedOptions(
                 first_artist_only=first_artist_only,

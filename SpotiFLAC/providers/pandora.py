@@ -891,7 +891,14 @@ class PandoraProvider(BaseProvider):
                     fmt = "mp3" if candidate.suffix == ".mp3" else "m4a"
                     return DownloadResult.skipped_result(self.name, str(candidate), fmt=fmt)
 
-            mb_fetcher = AsyncMBFetch(metadata.isrc) if metadata.isrc else None
+            import concurrent.futures
+            from ..core.isrc_utils import normalize_isrc
+            _isrc_for_mb = normalize_isrc(getattr(metadata, "isrc", None) or "")
+            logger.debug("[pandora] ISRC at MB lookup: %r", _isrc_for_mb)
+            mb_fetcher = AsyncMBFetch(_isrc_for_mb) if _isrc_for_mb else None
+            if not mb_fetcher:
+                logger.warning("[pandora] MusicBrainz skipped: no valid ISRC available")
+
 
             pan_base, pan_path = get_pandora_base_and_path()
             pan_full_url = f"{pan_base}{pan_path}"
@@ -956,9 +963,18 @@ class PandoraProvider(BaseProvider):
 
             mb_tags: dict[str, str] = {}
             if mb_fetcher:
-                mb_result = mb_fetcher.future.result()
-                mb_tags = mb_result_to_tags(mb_result)
-                _print_mb_summary(mb_tags)
+                try:
+                    mb_result = await asyncio.to_thread(lambda: mb_fetcher.future.result(timeout=12))
+                    mb_tags = mb_result_to_tags(mb_result)
+                    if mb_tags:
+                        logger.info("[pandora] MusicBrainz tags found: %s", list(mb_tags.keys()))
+                        _print_mb_summary(mb_tags)
+                    else:
+                        logger.warning("[pandora] MusicBrainz returned no tags (ISRC: %r)", _isrc_for_mb)
+                except concurrent.futures.TimeoutError:
+                    logger.warning("[pandora] MusicBrainz timed out after 12s, skipping MB tags")
+                except Exception as exc:
+                    logger.warning("[pandora] MusicBrainz error: %s", exc)
 
             opts = EmbedOptions(
                 first_artist_only  = first_artist_only,
