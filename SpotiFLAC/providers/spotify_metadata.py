@@ -316,6 +316,10 @@ class SpotifyMetadataClient:
         self.web_client.initialize()
         self._async_http = AsyncHttpClient(provider="spotify", timeout_s=timeout_s)
 
+    def search(self, query: str, limit: int = 50) -> dict[str, list]:
+        """Synchronous wrapper used by the GUI search backend."""
+        return asyncio.run(self.search_async(query, limit=limit))
+
     # ------------------------------------------------------------------
     # Track singola
     # ------------------------------------------------------------------
