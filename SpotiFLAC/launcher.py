@@ -47,12 +47,12 @@ def load_config() -> dict:
     return {}
 
 
-def _load_profile_into_defaults(profile_name: str) -> dict:
+async def _load_profile_into_defaults(profile_name: str) -> dict:
     """Return profile data dict, or empty dict on failure."""
     try:
-        from .core.profiles import get_profile
+        from .core.profiles import get_profile_async
 
-        data = get_profile(profile_name)
+        data = await get_profile_async(profile_name)
         if data:
             print(f"[profile] Loaded: {profile_name}")
             return data
@@ -153,6 +153,13 @@ def parse_args(profile_defaults: dict | None = None) -> argparse.Namespace:
         action="store_true",
         dest="first_artist_only",
         default=pd.get("first_artist_only", False),
+    )
+    parser.add_argument(
+        "--include-featuring",
+        action="store_true",
+        dest="include_featuring",
+        default=pd.get("include_featuring", False),
+        help="Include featured artist tracks when downloading artist discographies.",
     )
     parser.add_argument(
         "--qobuz-local-api",
@@ -295,6 +302,7 @@ async def _run_download_async(
     loop: int | None,
     quality: str,
     first_artist_only: bool,
+    include_featuring: bool,
     log_level: int,
     output_path: str | None,
     allow_fallback: bool,
@@ -396,6 +404,7 @@ async def amain() -> None:
             loop=cfg.get("loop"),
             quality=cfg["quality"],
             first_artist_only=cfg["first_artist_only"],
+            include_featuring=cfg.get("include_featuring", False),
             log_level=log_level,
             output_path=cfg.get("output_path"),
             allow_fallback=cfg.get("allow_fallback", True),
@@ -435,7 +444,7 @@ async def amain() -> None:
     if "--profile" in sys.argv:
         idx = sys.argv.index("--profile")
         if idx + 1 < len(sys.argv):
-            profile_defaults = _load_profile_into_defaults(sys.argv[idx + 1])
+            profile_defaults = await _load_profile_into_defaults(sys.argv[idx + 1])
 
     file_cfg = load_config()
     merged_defaults = {**file_cfg, **profile_defaults}
@@ -496,6 +505,7 @@ async def amain() -> None:
         loop=args.loop,
         quality=quality,
         first_artist_only=args.first_artist_only,
+        include_featuring=args.include_featuring,
         log_level=log_level,
         output_path=args.output_path,
         allow_fallback=True,
@@ -513,7 +523,7 @@ async def amain() -> None:
 
     if args.save_profile:
         try:
-            from .core.profiles import save_profile
+            from .core.profiles import save_profile_async
 
             profile_cfg = {
                 "services": args.service,
@@ -524,6 +534,7 @@ async def amain() -> None:
                 "use_artist_subfolders": args.use_artist_subfolders,
                 "use_album_subfolders": args.use_album_subfolders,
                 "first_artist_only": args.first_artist_only,
+                "include_featuring": args.include_featuring,
                 "allow_fallback": True,
                 "embed_lyrics": args.embed_lyrics,
                 "lyrics_providers": args.lyrics_providers,
@@ -537,7 +548,7 @@ async def amain() -> None:
                 "timeout_s": timeout_s,
                 "loop": args.loop,
             }
-            save_profile(args.save_profile, profile_cfg)
+            await save_profile_async(args.save_profile, profile_cfg)
             print(f"[profile] Saved as: {args.save_profile}")
         except Exception as exc:
             print(f"[profile] Save error: {exc}")

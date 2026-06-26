@@ -105,7 +105,7 @@ docker run --rm -v "$(pwd)/downloads:/app/downloads" ghcr.io/ShuShuzinhuu/SpotiF
 ---
 
 ```python
-from backend import SpotiFLAC
+from SpotiFLAC import SpotiFLAC
 
 # Simple Download
 SpotiFLAC(
@@ -149,7 +149,7 @@ SpotiFLAC supports the following URL formats for **Spotify**, **Tidal**, **Apple
 You can customize the download behavior, prioritize specific streaming services, and organize your files automatically into folders.
 
 ```python
-from backend import SpotiFLAC
+from SpotiFLAC import SpotiFLAC
 
 SpotiFLAC(
     url="https://open.spotify.com/album/41MnTivkwTO3UUJ8DrqEJJ",
@@ -173,7 +173,7 @@ SpotiFLAC can probe all provider endpoints before downloading to verify which on
 In **Interactive Mode** this runs automatically at startup. In code or scripts you can call it directly:
 
 ```python
-from backend.core.health_check import (
+from SpotiFLAC.core.health_check import (
     run_health_check,
     print_health_report,
     get_working_providers,
@@ -221,19 +221,25 @@ spotiflac https://... ./out --profile hires-tidal
 ### In Python
 
 ```python
-from backend.core.profiles import save_profile, get_profile, list_profiles
+import asyncio
+from SpotiFLAC.core.profiles import (
+    save_profile_async,
+    get_profile_async,
+    list_profiles_async,
+)
 
-# Save
-save_profile("hires-tidal", {
-    "services":             ["tidal"],
-    "quality":              "HI_RES_LOSSLESS",
-    "use_album_subfolders": True,
-    "filename_format":      "{year} - {album}/{track}. {title}",
-})
+async def main():
+    await save_profile_async("hires-tidal", {
+        "services":             ["tidal"],
+        "quality":              "HI_RES_LOSSLESS",
+        "use_album_subfolders": True,
+        "filename_format":      "{year} - {album}/{track}. {title}",
+    })
 
-# Load and use
-cfg = get_profile("hires-tidal")
-print(list_profiles())  # ['hires-tidal']
+    cfg = await get_profile_async("hires-tidal")
+    print(await list_profiles_async())  # ['hires-tidal']
+
+asyncio.run(main())
 ```
 
 Profiles are stored at `~/.cache/spotiflac/profiles.json`. In the Interactive Wizard, you are prompted to load a profile at startup and optionally save one at the end.
@@ -245,7 +251,7 @@ Profiles are stored at `~/.cache/spotiflac/profiles.json`. In the Interactive Wi
 Pass a list of URLs to download them all in sequence. Failed tracks per URL are collected and can be retried with `loop`.
 
 ```python
-from backend import SpotiFLAC
+from SpotiFLAC import SpotiFLAC
 
 SpotiFLAC(
     url=[
@@ -267,7 +273,7 @@ Set `track_max_retries` (Python) or `--retries` (CLI) to automatically retry fai
 Each retry cycles through **all configured providers** from the beginning, waiting exponentially longer between attempts (2 s → 4 s → 8 s …, capped at 30 s).
 
 ```python
-from backend import SpotiFLAC
+from SpotiFLAC import SpotiFLAC
 
 SpotiFLAC(
     url="https://open.spotify.com/album/...",
@@ -296,7 +302,7 @@ Set `timeout_s` (Python) or `--timeout` (CLI) to cap the time SpotiFLAC will spe
 spotiflac https://open.spotify.com/album/... ./out --service tidal --timeout 180
  
 # Python API
-from backend import SpotiFLAC
+from SpotiFLAC import SpotiFLAC
 SpotiFLAC(
     url="https://open.spotify.com/album/...",
     output_dir="./downloads",
@@ -338,7 +344,7 @@ spotiflac https://... ./out --post-action command --post-command "rsync -av {fol
 Download the complete discography of an artist. Duplicate tracks (same ISRC across different releases) are automatically skipped.
 
 ```python
-from backend import SpotiFLAC
+from SpotiFLAC import SpotiFLAC
 
 # Spotify — albums + singles
 SpotiFLAC(url="https://open.spotify.com/artist/1Xyo4u8uXC1ZmMpatF05PJ", output_dir="./MusicLibrary",
@@ -364,7 +370,7 @@ spotiflac https://open.spotify.com/artist/... ./MusicLibrary \
 For single track downloads you can specify the **exact file path** instead of relying on `output_dir` + `filename_format`.
 
 ```python
-from backend import SpotiFLAC
+from SpotiFLAC import SpotiFLAC
 
 SpotiFLAC(
     url="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT",
@@ -395,7 +401,7 @@ export QOBUZ_LOCAL_API_URL="https://localhost:8000"
 
 **Python:**
 ```python
-from backend import SpotiFLAC
+from SpotiFLAC import SpotiFLAC
 
 SpotiFLAC(
     url="URL",
@@ -426,7 +432,7 @@ and point SpotiFLAC to it — it will always be tried first, before any public m
 ### Python
 
 ```python
-from backend import SpotiFLAC
+from SpotiFLAC import SpotiFLAC
 
 SpotiFLAC(
     url="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT",
