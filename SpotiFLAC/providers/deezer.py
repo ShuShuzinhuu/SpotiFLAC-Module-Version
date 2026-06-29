@@ -735,11 +735,6 @@ class DeezerProvider(BaseProvider):
                 except Exception:
                     pass
 
-            try:
-                from ..core.tagger import _print_mb_summary
-            except ImportError:
-                pass
-
             opts = EmbedOptions(
                 first_artist_only=first_artist_only,
                 cover_url=metadata.cover_url,
