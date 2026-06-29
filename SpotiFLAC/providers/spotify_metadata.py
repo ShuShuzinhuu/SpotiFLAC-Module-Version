@@ -15,8 +15,26 @@ from ..core.spotfetch import SpotifyWebClient
 
 logger = logging.getLogger(__name__)
 
+
+def _run_async_sync(func, *args, **kwargs):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(func(*args, **kwargs))
+    if loop.is_running():
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _worker():
+            return asyncio.run(func(*args, **kwargs))
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(_worker).result()
+    return loop.run_until_complete(func(*args, **kwargs))
+
 _FEATURING_GROUPS = frozenset({"appears_on", "compilation"})
-_DISCOGRAPHY_SUBTYPES = frozenset({"all", "album", "single", "compilation"})
+_DISCOGRAPHY_SUBTYPES = frozenset(
+    {"all", "album", "single", "compilation", "appears_on"}
+)
 
 
 @dataclass(frozen=True)
@@ -239,7 +257,7 @@ def parse_spotify_url(uri: str) -> dict[str, str]:
     if len(parts) >= 4 and parts[1] == "artist":
         artist_id = parts[2].split("?")[0]
         if parts[3] == "discography":
-            # Supporto sub-type: all / album / single / compilation
+            # Supporto sub-type: all / album / single / compilation / appears_on
             sub = parts[4].split("?")[0] if len(parts) >= 5 else "all"
             if sub not in _DISCOGRAPHY_SUBTYPES:
                 sub = "all"
@@ -313,6 +331,14 @@ class SpotifyMetadataClient:
         self.web_client = SpotifyWebClient()
         self.web_client.initialize()
         self._async_http = AsyncHttpClient(provider="spotify", timeout_s=timeout_s)
+
+    def search(self, query: str, limit: int = 50) -> dict[str, list]:
+        """Synchronous wrapper used by the GUI search backend."""
+        return _run_async_sync(self.search_async, query, limit=limit)
+
+    def get_url(self, url: str, include_featuring: bool = False) -> tuple[str, list[TrackMetadata], str, dict]:
+        """Synchronous wrapper used by GUI metadata fetch and downloader."""
+        return _run_async_sync(self.get_url_async, url, include_featuring=include_featuring)
 
     # ------------------------------------------------------------------
     # Track singola
@@ -927,6 +953,7 @@ class SpotifyMetadataClient:
         self,
         artist_id: str,
         include_groups: str = "album,single",
+        include_featuring: bool = False,
     ) -> tuple[dict, list[TrackMetadata]]:
         artist_info = await self.get_artist_profile_async(artist_id)
 
@@ -938,6 +965,8 @@ class SpotifyMetadataClient:
             if include_groups == "all"
             else set(include_groups.split(","))
         )
+        if include_featuring and include_groups != "all":
+            allowed_groups |= {"appears_on", "compilation"}
 
         albums_to_fetch: list[str] = []
         seen: set[str] = set()
@@ -1115,7 +1144,7 @@ class SpotifyMetadataClient:
             # Respect the discography sub-type if present in the URL
             group = info.get("group", "album,single")
             artist, tracks = await self.get_artist_albums_async(
-                info["id"], include_groups=group
+                info["id"], include_groups=group, include_featuring=include_featuring
             )
             artist_meta = {
                 "name": artist.get("profile", {}).get("name", "Unknown Artist"),

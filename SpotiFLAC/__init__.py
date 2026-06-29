@@ -2,7 +2,7 @@
 SpotiFLAC — Python module for downloading high quality music
 
 Minimum use:
-    from backend import SpotiFLAC
+    from SpotiFLAC import SpotiFLAC
     SpotiFLAC("URL_SPOTIFY", "./downloads")
 
 Advanced use:
@@ -93,6 +93,7 @@ def SpotiFLAC(
     allow_fallback: bool = True,
     quality: str = "LOSSLESS",
     first_artist_only: bool = False,
+    include_featuring: bool = False,
     log_level: int = logging.WARNING,
     output_path: str | None = None,
     embed_lyrics: bool = True,
@@ -131,6 +132,7 @@ def SpotiFLAC(
         use_album_subfolders=use_album_subfolders,
         quality=quality,
         first_artist_only=first_artist_only,
+        include_featuring=include_featuring,
         output_path=output_path,
         embed_lyrics=embed_lyrics,
         lyrics_providers=lyrics_providers

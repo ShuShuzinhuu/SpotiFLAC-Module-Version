@@ -50,6 +50,7 @@ class DownloadOptions:
     use_artist_subfolders: bool = False
     use_album_subfolders: bool = False
     first_artist_only: bool = False
+    include_featuring: bool = False
     quality: str = "LOSSLESS"
     allow_fallback: bool = True
     inter_track_delay_s: float = 1.0
@@ -331,7 +332,7 @@ class DownloadWorker:
         base_out: str,
         start: float,
     ) -> list[tuple[str, str, str]]:
-        MAX_CONCURRENT_DOWNLOADS = 4
+        MAX_CONCURRENT_DOWNLOADS = 2
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
         async def worker_task(i: int, track: TrackMetadata):
@@ -571,11 +572,17 @@ class SpotiflacDownloader:
                 client = AppleMusicMetadataClient()
                 if hasattr(client, "get_url_async"):
                     collection_name, tracks, *collection_cover = (
-                        await client.get_url_async(url)
+                        await client.get_url_async(
+                            url, include_featuring=self._opts.include_featuring
+                        )
                     )
                 else:
                     collection_name, tracks, *collection_cover = (
-                        await asyncio.to_thread(client.get_url, url)
+                        await asyncio.to_thread(
+                            client.get_url,
+                            url,
+                            include_featuring=self._opts.include_featuring,
+                        )
                     )
             elif is_soundcloud:
                 from .providers.soundcloud import SoundCloudProvider
@@ -616,11 +623,17 @@ class SpotiflacDownloader:
             else:
                 if hasattr(self._client, "get_url_async"):
                     collection_name, tracks, *collection_cover = (
-                        await self._client.get_url_async(url)
+                        await self._client.get_url_async(
+                            url, include_featuring=self._opts.include_featuring
+                        )
                     )
                 else:
                     collection_name, tracks, *collection_cover = (
-                        await asyncio.to_thread(self._client.get_url, url)
+                        await asyncio.to_thread(
+                            self._client.get_url,
+                            url,
+                            include_featuring=self._opts.include_featuring,
+                        )
                     )
         except SpotiflacError:
             raise

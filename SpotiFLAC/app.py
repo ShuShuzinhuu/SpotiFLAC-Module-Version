@@ -273,17 +273,17 @@ class SpotiFLAC_API:
 
     def get_profiles(self):
         try:
-            from .core.profiles import list_profiles
+            from .core.profiles import list_profiles_async
 
-            return list_profiles()
+            return asyncio.run(list_profiles_async())
         except Exception:
             return []
 
     def load_profile_data(self, name):
         try:
-            from .core.profiles import get_profile
+            from .core.profiles import get_profile_async
 
-            return get_profile(name) or {}
+            return asyncio.run(get_profile_async(name)) or {}
         except Exception:
             return {}
 
@@ -555,9 +555,9 @@ class SpotiFLAC_API:
 
     def save_profile_data(self, name, cfg):
         try:
-            from .core.profiles import save_profile
+            from .core.profiles import save_profile_async
 
-            save_profile(name, cfg)
+            asyncio.run(save_profile_async(name, cfg))
             self.log(f"Profile '{name}' saved successfully.", "ok")
             return True
         except Exception as e:
@@ -566,9 +566,9 @@ class SpotiFLAC_API:
 
     def delete_profile_data(self, name):
         try:
-            from .core.profiles import delete_profile
+            from .core.profiles import delete_profile_async
 
-            deleted = delete_profile(name)
+            deleted = asyncio.run(delete_profile_async(name))
             self.log(
                 f"Profile '{name}' deleted: {deleted}.", "ok" if deleted else "warn"
             )
